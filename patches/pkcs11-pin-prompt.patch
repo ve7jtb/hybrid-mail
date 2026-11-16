@@ -1,0 +1,15 @@
+diff --git a/src/session.c b/src/session.c
+index b3221b0..c031609 100644
+--- a/src/session.c
++++ b/src/session.c
+@@ -567,7 +567,9 @@ static CK_RV token_login(P11PROV_SESSION *session, P11PROV_URI *uri,
+         if (pin) {
+             pinlen = strlen((const char *)pin);
+         } else {
+-            if (pw_cb) {
++            /* Hybrid Mail: use the native hidden PIN UI, not the generic
++             * OpenSSL passphrase callback, for token authentication. */
++            if (pw_cb && false) {
+                 const char *login_info = p11prov_slot_get_login_info(slot);
+                 OSSL_PARAM params[2] = {
+                     OSSL_PARAM_DEFN(OSSL_PASSPHRASE_PARAM_INFO,

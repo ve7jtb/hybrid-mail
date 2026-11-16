@@ -15,10 +15,19 @@ checkout() {
     git -C "$destination" checkout --detach FETCH_HEAD
   fi
   [[ "$(git -C "$destination" rev-parse HEAD)" == "$revision" ]] || { echo "Wrong revision in $destination; choose a fresh HYBRID_PKCS11_DEPS_DIR." >&2; exit 1; }
+  if [[ "$name" == pkcs11-provider-818 ]] && git -C "$destination" apply --reverse --check "$ROOT/patches/pkcs11-pin-prompt.patch" 2>/dev/null; then
+    git -C "$destination" diff -- src/session.c > "$DEPS/provider-local.diff"
+    cmp -s "$DEPS/provider-local.diff" "$ROOT/patches/pkcs11-pin-prompt.patch" || { echo "Unexpected provider modifications" >&2; exit 1; }
+    [[ -z "$(git -C "$destination" diff --name-only -- . ":(exclude)src/session.c")" && -z "$(git -C "$destination" diff --cached --name-only)" ]] || { echo "Unexpected provider modifications" >&2; exit 1; }
+    return
+  fi
   [[ -z "$(git -C "$destination" status --porcelain --untracked-files=no)" ]] || { echo "Tracked changes in $destination; refusing to build." >&2; exit 1; }
 }
 checkout pkcs11-provider-818 https://github.com/joostd/pkcs11-provider.git 8e01f28b98bb0543a9d5600ebd9e061edb21de53
 checkout yubico-pkcs11 https://github.com/Yubico/yubico-pkcs11.git c28419969d0ac2ead2e94065b77ebbd281cc52de
+if git -C "$DEPS/pkcs11-provider-818" apply --check "$ROOT/patches/pkcs11-pin-prompt.patch" 2>/dev/null; then
+  git -C "$DEPS/pkcs11-provider-818" apply "$ROOT/patches/pkcs11-pin-prompt.patch"
+fi
 if [[ ! -d "$DEPS/pkcs11-provider-818/build/meson-private" ]]; then
   meson setup "$DEPS/pkcs11-provider-818/build" "$DEPS/pkcs11-provider-818" -Dbuild_info=PR818-8e01f28
 fi

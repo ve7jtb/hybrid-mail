@@ -9,4 +9,6 @@ javac -encoding UTF-8 -cp 'lib/*' -d build/classes src/dev/hybridmail/*.java
 jar --create --file build/hybrid-mail.jar --main-class dev.hybridmail.MailApp -C build/classes .
 if [[ "${1:-}" == test ]]; then
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.SelfTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.TokenIdentityTest
+  python3 -m unittest discover -s tests -v
 fi

@@ -78,10 +78,17 @@ public final class ExternalMu {
                     out.write(("ML-DSA-65\n" + Base64.getEncoder().encodeToString(publicKey.getEncoded()) + "\n"
                         + Base64.getEncoder().encodeToString(mu) + "\n").getBytes(StandardCharsets.US_ASCII));
                 }
-                if (!p.waitFor(60, TimeUnit.SECONDS)) throw new IOException("Token adapter timed out");
+                if (!p.waitFor(150, TimeUnit.SECONDS)) throw new IOException("Token adapter timed out");
                 if (p.exitValue() != 0) throw new IOException("Token adapter failed (exit " + p.exitValue() + ")");
                 return Base64.getDecoder().decode(new String(output.get(1, TimeUnit.SECONDS), StandardCharsets.US_ASCII).trim());
-            } finally { p.destroyForcibly(); pool.shutdownNow(); }
+            } finally {
+                pool.shutdownNow();
+                if (p.isAlive()) {
+                    try { p.descendants().forEach(child -> child.destroyForcibly()); }
+                    catch (RuntimeException ignored) { /* Process enumeration may be sandboxed. */ }
+                    p.destroyForcibly();
+                }
+            }
         };
     }
 }

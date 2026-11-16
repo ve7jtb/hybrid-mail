@@ -1,3 +1,7 @@
+UPDATE: The locally installed ykman 6.0.0-beta.0 exposes `piv keys sign --mu`.
+The app now includes a terminal-based adapter using that command. The inspection
+below describes the older public Python source revision, not the beta executable.
+
 YUBIKEY MANAGER SOURCE INSPECTION — 2026-11-16
 
 Repository: https://github.com/Yubico/yubikey-manager

@@ -57,10 +57,10 @@ Scope and trust
 
 YubiKey / external mu
   See docs/EXTERNAL-MU.txt. Both signature profiles have a tested external-mu backend.
-  The included executable fixture is SOFTWARE ONLY, not a token driver.
+  TestMuAdapter is SOFTWARE ONLY. adapters/ykman-mu.py is the Beta0 CLI bridge.
   The public Yubico PIV SDK documentation supplied by the user was reviewed on
-  2026-11-16; it does not document ML-DSA or an external-mu operation. A vendor
-  extension/APDU specification is still needed to finish the physical token bridge.
+  2026-11-16; it does not document ML-DSA or an external-mu operation. The installed
+  ykman 6.0.0-beta.0 provides --mu; the new adapter uses that interface.
 
 Build and test
   See README.md for JDK/Maven prerequisites and dependency setup.
@@ -90,3 +90,10 @@ Local stack provenance
   Library jars built/downloaded by the earlier local stack setup; copied into lib/.
   Third-party license notices are retained inside their jars.
   Source repository: https://github.com/ve7jtb/hybrid-mail
+
+Beta0 hardware signing
+  Launch from Terminal with YKMAN_SERIAL set and load a token identity. Choose
+  adapters/ykman-mu.py under Keys & token. PIN/touch prompts appear in Terminal.
+  scripts/test-beta0.sh creates local test certificates and verifies pure/hybrid
+  signed .eml messages, then opens the UI with the pure token identity loaded.
+  No token provisioning and no mail sending occur. See README.md for commands.

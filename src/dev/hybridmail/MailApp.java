@@ -72,10 +72,10 @@ public final class MailApp extends JFrame {
         })); token.add(button("Use software signer",()->{adapter=null;tokenLabel.setText("Signing: software");})); p.add(token);
         p.add(new JLabel("Adapter receives public key + 64-byte μ. Returned signatures are verified before use."));
         p.add(Box.createVerticalStrut(12));
-        p.add(new JLabel("YubiKey transport is an extension point; no YubiKey firmware or APDU support is assumed."));
+        p.add(new JLabel("Beta0 ykman adapter: launch from Terminal for local PIN and touch prompts."));
         p.add(Box.createVerticalStrut(24));
         p.add(new JLabel("Generated identities are local test identities. Exchange certificate fingerprints out of band."));
-        p.add(new JLabel("Certificates, keys and account passwords stay local. Passwords are not saved by this app."));
+        p.add(new JLabel("Private keys stay local. Account passwords are not saved by this app."));
         return outer;
     }
     private void generate() {
@@ -154,5 +154,19 @@ public final class MailApp extends JFrame {
     private static JPanel left(JComponent c){JPanel p=new JPanel(new FlowLayout(FlowLayout.LEFT));p.add(c);return p;}
     private static JPanel section(String name,JLabel detail){JPanel p=new JPanel(new GridLayout(0,1,0,6));p.setBorder(new EmptyBorder(20,6,4,0));JLabel h=new JLabel(name);h.setFont(h.getFont().deriveFont(Font.BOLD,16f));p.add(h);p.add(detail);return p;}
     private static JButton button(String label,Runnable action){JButton b=new JButton(label);b.addActionListener(e->action.run());return b;}
+    public static void openTokenSession(Identity id, String executable, MimeMessage verifiedMail) {
+        SwingUtilities.invokeLater(() -> {
+            try {
+                UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                MailApp app = new MailApp();
+                app.setIdentity(id); app.adapter = executable;
+                app.tokenLabel.setText("Beta0 ykman adapter · slot 9c · PIN/touch in Terminal");
+                app.pinnedSigner = id.signingCert(); app.pinLabel.setText("Pinned local Beta0 test signing certificate");
+                app.from.setText("beta0@example.test"); app.to.setText("recipient@example.test"); app.encrypt.setSelected(false);
+                app.showMessage(app.display(verifiedMail, id, id.signingCert()));
+                app.setVisible(true);
+            } catch (Exception error) { throw new RuntimeException(error); }
+        });
+    }
     public static void main(String[]args){MailEngine.init();SwingUtilities.invokeLater(()->{try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}new MailApp().setVisible(true);});}
 }

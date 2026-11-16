@@ -25,10 +25,11 @@ Executable integration (available in Keys & token)
     <base64 DER SubjectPublicKeyInfo for the ML-DSA component>
     <base64 64-byte mu>
   stdout: one base64 raw signature, optionally followed by a newline. No logging.
-  Exit 0 for success; nonzero for failure. 60-second operation timeout.
+  Exit 0 for success; nonzero for failure. 150-second overall operation timeout (the ykman signing step has a 100-second timeout).
   stdout capped at 16 KiB; stderr is discarded to avoid exposing SDK/PIN diagnostics.
   Select only your own trusted adapter; selecting it authorizes local execution.
-  PIN/touch UI belongs in the adapter, not stdin (stdin carries the protocol).
+  PIN/touch UI belongs in the adapter, not protocol stdin. The ykman adapter
+  attaches the child CLI directly to /dev/tty for native hidden PIN prompts.
   Do not pass a PIN through arguments or environment variables. Cancel rather than
   automatically retrying a bad PIN. Validate the device key matches the supplied SPKI.
   A malicious host can request arbitrary signatures through mu; token touch/PIN
@@ -69,3 +70,24 @@ Testing
   SelfTest exercises pure and composite external mu in-process and the exact
   executable protocol with TestMuAdapter. All signatures are verified using BC's
   ordinary verifier. TestMuAdapter is a software fixture, not a YubiKey adapter.
+
+IMPLEMENTED BETA0 YKMAN ADAPTER
+  adapters/ykman-mu.py uses the installed 6.0.0-beta.0 CLI's documented --mu flag.
+  It requires YKMAN_SERIAL, fixes the signing slot to 9c, exports its public key in
+  DER form, and compares it to the supplied ML-DSA-65 SPKI before signing.
+  It passes the 64-byte mu in a private temporary file and receives the signature
+  in that same owner-only temporary directory. Files are cleaned on normal success,
+  failure or subprocess timeout. No PIN is passed through arguments or environment.
+  ykman prompts on /dev/tty; launch the app from Terminal, not Finder. Cancellation
+  or any error aborts the operation without fallback or automatic retry.
+  Python's standard library is sufficient; no Python cryptography package is used.
+  YKMAN_BIN may select a different absolute path to the tested beta CLI.
+  The older public API investigation above remains historical; the installed beta
+  CLI now provides an integration route without constructing raw APDUs.
+  See scripts/test-beta0.sh and Beta0Test.java for the four-signature hardware test.
+
+Hardware validation, 2026-11-16: pure and composite certificate signing and S/MIME
+signing succeeded with an existing Beta0 slot 9c ML-DSA-65 key through ykman --mu.
+Both saved messages were independently verified by BC after the interactive run.
+No token key generation, certificate import, credential change, or email sending
+was performed. Hardware-specific identity files and reports remain local.

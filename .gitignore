@@ -15,3 +15,7 @@ lib/
 .DS_Store
 .idea/
 .vscode/
+hardware-results/
+Run Beta0 Test.command
+__pycache__/
+*.pyc

@@ -35,6 +35,9 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         return new Identity(sc, s.getPrivate(), kc, k.getPrivate(), null);
     }
     private static X509Certificate cert(String email, PublicKey key, PrivateKey signer, String alg, boolean signing) throws Exception {
+        return cert(email, key, new JcaContentSignerBuilder(alg).setProvider("BC").build(signer), signing);
+    }
+    private static X509Certificate cert(String email, PublicKey key, ContentSigner signer, boolean signing) throws Exception {
         X500Name name = new X500NameBuilder(BCStyle.INSTANCE).addRDN(BCStyle.CN, email).build();
         Instant now = Instant.now();
         var b = new JcaX509v3CertificateBuilder(name, new BigInteger(159, new SecureRandom()).add(BigInteger.ONE),
@@ -43,7 +46,25 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         b.addExtension(Extension.keyUsage, true, new KeyUsage(signing ? KeyUsage.digitalSignature : KeyUsage.keyEncipherment));
         b.addExtension(Extension.extendedKeyUsage, false, new ExtendedKeyUsage(KeyPurposeId.id_kp_emailProtection));
         b.addExtension(Extension.subjectAlternativeName, false, new GeneralNames(new GeneralName(GeneralName.rfc822Name, email)));
-        return new JcaX509CertificateConverter().setProvider("BC").getCertificate(b.build(new JcaContentSignerBuilder(alg).setProvider("BC").build(signer)));
+        return new JcaX509CertificateConverter().setProvider("BC").getCertificate(b.build(signer));
+    }
+    /** Create a local test certificate for an EXISTING token key; never generates token keys. */
+    public static Identity forToken(String email, PublicKey tokenPublic, boolean hybrid, ExternalMu.Backend backend) throws Exception {
+        new jakarta.mail.internet.InternetAddress(email, true).validate();
+        if (!PURE_SIGN.equalsIgnoreCase(tokenPublic.getAlgorithm())) throw new GeneralSecurityException("Expected ML-DSA-65 public key");
+        PublicKey publicKey = tokenPublic;
+        PrivateKey conventional = null;
+        if (hybrid) {
+            KeyPairGenerator generator = KeyPairGenerator.getInstance("EC", "BC");
+            generator.initialize(new java.security.spec.ECGenParameterSpec("secp256r1"));
+            KeyPair ec = generator.generateKeyPair();
+            publicKey = new CompositePublicKey(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLDSA65_ECDSA_P256_SHA512,
+                tokenPublic, ec.getPublic());
+            conventional = ec.getPrivate();
+        }
+        X509Certificate certificate = cert(email, publicKey, externalSigner(publicKey, conventional, backend), true);
+        certificate.verify(publicKey, "BC");
+        return new Identity(certificate, null, null, null, conventional);
     }
     public ContentSigner signer(ExternalMu.Backend backend) throws Exception {
         signingCert.checkValidity();
@@ -51,15 +72,17 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
             if (signingKey == null) throw new GeneralSecurityException("No software signing key; configure external adapter");
             return new JcaContentSignerBuilder(signatureAlgorithm()).setProvider("BC").build(signingKey);
         }
-        PublicKey pub = signingCert.getPublicKey();
+        PrivateKey traditional = traditionalKey;
+        if (traditional == null && signingKey instanceof CompositePrivateKey s) traditional = s.getPrivateKeys().get(1);
+        return externalSigner(signingCert.getPublicKey(), traditional, backend);
+    }
+    private static ContentSigner externalSigner(PublicKey pub, PrivateKey traditional, ExternalMu.Backend backend) throws Exception {
         if (pub instanceof CompositePublicKey c) {
-            PrivateKey traditional = traditionalKey;
-            if (traditional == null && signingKey instanceof CompositePrivateKey s) traditional = s.getPrivateKeys().get(1);
             if (traditional == null) throw new GeneralSecurityException("Composite token identity needs traditional private key alias 'traditional'");
             var key = CompositePrivateKey.builder(c.getAlgorithmIdentifier().getAlgorithm())
                 .addPrivateKey(new ExternalMu.TokenKey(c.getPublicKeys().get(0), backend), ExternalMu.PROVIDER)
                 .addPrivateKey(traditional, Security.getProvider("BC")).build();
-            return new JcaContentSignerBuilder(signatureAlgorithm()).setProvider("BC").build(key);
+            return new JcaContentSignerBuilder(HYBRID_SIGN).setProvider("BC").build(key);
         }
         return new JcaContentSignerBuilder(PURE_SIGN).setProvider(ExternalMu.PROVIDER)
             .build(new ExternalMu.TokenKey(pub, backend));
@@ -67,8 +90,14 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
     public void save(Path file, char[] password) throws Exception {
         if (password.length < 12) throw new IllegalArgumentException("Use at least 12 characters for the identity password");
         KeyStore ks = KeyStore.getInstance("PKCS12", "BC"); ks.load(null, password);
-        ks.setKeyEntry("sign", signingKey, password, new java.security.cert.Certificate[]{signingCert});
-        ks.setKeyEntry("encrypt", encryptionKey, password, new java.security.cert.Certificate[]{encryptionCert});
+        if (signingKey != null) ks.setKeyEntry("sign", signingKey, password, new java.security.cert.Certificate[]{signingCert});
+        else ks.setCertificateEntry("sign", signingCert);
+        if (encryptionKey != null) ks.setKeyEntry("encrypt", encryptionKey, password, new java.security.cert.Certificate[]{encryptionCert});
+        if (traditionalKey != null) {
+            PublicKey ec = ((CompositePublicKey)signingCert.getPublicKey()).getPublicKeys().get(1);
+            X509Certificate storageCert = cert("conventional-component@example.test", ec, traditionalKey, "SHA256withECDSA", true);
+            ks.setKeyEntry("traditional", traditionalKey, password, new java.security.cert.Certificate[]{storageCert});
+        }
         Files.createFile(file, java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
             java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")));
         try (OutputStream out = Files.newOutputStream(file)) { ks.store(out, password); }

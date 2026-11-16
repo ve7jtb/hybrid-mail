@@ -2,7 +2,7 @@
 
 A native Java desktop development app for post-quantum S/MIME, built with Jakarta Mail, Eclipse Angus Mail and Bouncy Castle. Compose text messages, save/open `.eml`, sign and verify, encrypt and decrypt, send with SMTP, and fetch the latest message over IMAP.
 
-This is an experimental interoperability app, not a production mail client. Real YubiKey ML-DSA signing is **not yet implemented**; the external-μ integration boundary is implemented and tested with a software simulator.
+This is an experimental interoperability app, not a production mail client. A Beta0 ykman external-μ adapter is included. It uses an existing ML-DSA-65 key in PIV slot `9c`, with PIN entry handled directly by ykman in Terminal. Both pure and composite S/MIME signing have been verified with a physical Beta0 key; see the validation section below.
 
 ## Cryptographic profiles
 
@@ -17,7 +17,7 @@ Both signing profiles can send the ML-DSA component through an external-μ adapt
 
 ## Build from source
 
-Prerequisites: **JDK 25**, **Maven 3.9.9**, Git and Bash on macOS or Linux. Set `JAVA_HOME` to your JDK and put Maven on `PATH`. The Bouncy Castle Gradle wrapper downloads its pinned Gradle distribution. Initial dependency builds require internet access and several GB of disk space. macOS is the tested desktop platform; Windows is not supported by these scripts or the POSIX identity-file permissions.
+Prerequisites: **JDK 25**, **Maven 3.9.9**, Python 3 (standard library only), Git and Bash on macOS or Linux. Set `JAVA_HOME` to your JDK and put Maven on `PATH`. The Bouncy Castle Gradle wrapper downloads its pinned Gradle distribution. Initial dependency builds require internet access and several GB of disk space. macOS is the tested desktop platform; Windows is not supported by these scripts or the POSIX identity-file permissions.
 
 ```sh
 git clone https://github.com/ve7jtb/hybrid-mail.git
@@ -69,17 +69,42 @@ You can also send to yourself with one identity and its own encryption certifica
 
 See [user guide](docs/USER-GUIDE.txt) for transport and scope details, and [external-μ integration](docs/EXTERNAL-MU.txt) for the executable protocol and certificate-only token identity setup.
 
-## YubiKey integration status
+## Beta0 YubiKey signing
 
-The external signer receives an ML-DSA-65 public key and a 64-byte μ, and returns a raw signature. It must sign μ directly, without hashing it again. A token's PIN/touch interaction belongs in the adapter. The included `TestMuAdapter` is **software-only** and is not a hardware driver.
+Use **ykman 6.0.0-beta.0** with its `piv keys sign --mu` command and an **existing ML-DSA-65 key in slot 9c**. The adapter never generates or replaces a token key, changes PIN policy, or writes a certificate to the token. It explicitly selects `YKMAN_SERIAL` and verifies the exported slot public key against the mail identity before requesting a signature.
 
-The supplied Yubico .NET PIV documentation does not expose ML-DSA external-μ signing. The public `Yubico/yubikey-manager` PIV implementation was also inspected at commit `4ca60f706af930459138d8dc0f0f953480e1c7a4`: its key-type enum has no ML-DSA entry, and conventional `Prehashed` support is not external-μ ML-DSA. It provides useful smart-card transport, but connecting the assumed ML-DSA-capable device still requires its algorithm identifier, APDU format and signing semantics. See [source inspection notes](docs/YUBIKEY-MANAGER.txt).
+Launch from Terminal: the adapter attaches ykman's PIN/touch prompts to `/dev/tty`. Neither Java nor Python receives the PIN, and it is not put in arguments, environment variables or files. This adapter does not work when the app is launched from Finder without a controlling terminal. Set `YKMAN_BIN` if ykman is installed somewhere other than `/usr/local/bin/ykman`.
+
+```sh
+export YKMAN_SERIAL=YOUR_DEVICE_SERIAL
+# Read-only public-key export; no --verify challenge is requested.
+/usr/local/bin/ykman --device "$YKMAN_SERIAL" piv keys export 9c /absolute/path/token-public.pem
+./scripts/test-beta0.sh /absolute/path/token-public.pem /absolute/path/new-test-output
+```
+
+The test prompts for a new local identity-file password, then makes **four token signatures**: a pure signing certificate, a pure S/MIME message, a composite signing certificate, and a composite S/MIME message. With `always` PIN/touch policies, expect four PIN entries/touches. The conventional P-256 component is generated in software. No email is sent. Each certificate and message is verified with Bouncy Castle, and each identity is reloaded from PKCS#12 to verify that the ML-DSA private key is absent. Artifacts are saved under the new output directory. The mail UI then opens with the verified pure message and its token identity loaded. Append `--no-ui` to run just the test.
+
+For later sessions:
+
+```sh
+export YKMAN_SERIAL=YOUR_DEVICE_SERIAL
+./run.sh
+```
+
+Load `pure.p12` or `hybrid.p12`, choose `adapters/ykman-mu.py` under **Keys & token**, and use the certificate's From address (`beta0@example.test` for test identities). The generated token identities are signing-only; they have no decryption key. They can encrypt outgoing messages for imported recipient certificates.
+
+The adapter uses pure ML-DSA external μ, **not** `--prehashed` or `--compute-mu`: Java/BC has already computed the correct 64-byte μ, including composite domain separation when applicable. Invalid responses fail closed; no software fallback or automatic PIN retry. See [adapter details](docs/EXTERNAL-MU.txt).
+
+The earlier public SDK/source inspection did not include the installed Beta0 CLI. Its `--mu` interface supplies the missing integration route without guessing APDUs. The [historical source notes](docs/YUBIKEY-MANAGER.txt) are retained with that scope clarified.
 
 ## Validation and limits
 
-50 local checks passed on macOS/Java 25: all four signing/encryption combinations; Unicode MIME bodies; AES-GCM tampering and wrong-recipient rejection; pure and composite external-μ signing; corruption of each composite signature component; PKCS#12 reload and wrong-password rejection; address mismatch handling; and an executable-adapter round trip. [Recorded results](docs/TEST-RESULTS.txt).
+**Hardware test completed on 2026-11-16:** an existing ML-DSA-65 key in a physical Beta0 YubiKey's slot 9c signed both pure ML-DSA-65 and composite MLDSA65-ECDSA-P256-SHA512 S/MIME messages via `ykman 6.0.0-beta.0 --mu`. Both local test certificates and both serialized `.eml` messages verified with Bouncy Castle. Certificate-only PKCS#12 identities were reloaded successfully with no ML-DSA private key present. The saved messages were independently re-opened and verified after the interactive run. No email was sent or token keys changed. Device identifiers, certificates, identity files, and hardware test artifacts are not included in the repository.
 
-No mail was sent and no hardware signing was performed. Live SMTP/IMAP, third-party mail client interoperability and a production security audit remain outstanding. SMTP requires STARTTLS (default 587); IMAP uses TLS (default 993). No OAuth account setup. The reader supports signed text/plain messages, optionally inside AuthEnvelopedData; it does not display ordinary unsigned mail, legacy EnvelopedData, HTML or attachments.
+
+50 local checks passed on macOS/Java 25: all four signing/encryption combinations; Unicode MIME bodies; AES-GCM tampering and wrong-recipient rejection; pure and composite external-μ signing; corruption of each composite signature component; PKCS#12 reload and wrong-password rejection; address mismatch handling; and an executable-adapter round trip. [Recorded core results](docs/TEST-RESULTS.txt). Additional tests cover two certificate-only token identity scenarios (pure/composite) and 13 adapter protocol, command, key-match, failure and cleanup cases.
+
+The automated software tests do not use a YubiKey or send mail. The interactive hardware test produces a separate local `result.txt`; do not infer hardware success from a software test run. Live SMTP/IMAP, third-party mail client interoperability and a production security audit remain outstanding. SMTP requires STARTTLS (default 587); IMAP uses TLS (default 993). No OAuth account setup. The reader supports signed text/plain messages, optionally inside AuthEnvelopedData; it does not display ordinary unsigned mail, legacy EnvelopedData, HTML or attachments.
 
 Generated certificates are local test identities, not publicly trusted credentials. Trust uses exact certificate pinning, validity and key-usage checks; no CA chain building or revocation checking. Outer From/To/Subject headers are not signed or encrypted. The UI distinguishes signature validity from pin trust and flags a From/certificate mismatch. Passwords are not persisted; loaded keys remain in process memory until exit.
 
@@ -90,6 +115,8 @@ Generated certificates are local test identities, not publicly trusted credentia
 - `Identity.java`: identity generation, PKCS#12 and signer selection
 - `ExternalMu.java`: provider SPI and executable adapter
 - `TokenSetup.java`: certificate-only token identity utility
-- `SelfTest.java`, `TestMuAdapter.java`: tests and software fixture
+- `Beta0Test.java`: interactive hardware-backed S/MIME test and mail UI launch
+- `adapters/ykman-mu.py`: terminal-based ykman external-μ adapter
+- `SelfTest.java`, `TokenIdentityTest.java`, `TestMuAdapter.java`, `tests/`: tests and software fixtures
 
 All Java sources are under `src/dev/hybridmail/`. Third-party source and binaries are not vendored; their own licenses apply. No project license has been selected yet.

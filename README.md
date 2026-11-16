@@ -97,12 +97,16 @@ The adapter uses pure ML-DSA external μ, **not** `--prehashed` or `--compute-mu
 
 The earlier public SDK/source inspection did not include the installed Beta0 CLI. Its `--mu` interface supplies the missing integration route without guessing APDUs. The [historical source notes](docs/YUBIKEY-MANAGER.txt) are retained with that scope clarified.
 
+## Optional PKCS#11 backend
+
+`adapters/pkcs11-mu.py` provides a second external-μ backend using OpenSSL pkcs11-provider [PR #818](https://github.com/openssl-projects/pkcs11-provider/pull/818) and the Rust Yubico PKCS#11 module. It selects `CKM_ML_DSA_EXTERNAL_MU` through `mu:1`, reuses the same host-side composite handling, and verifies signatures in Bouncy Castle. [Build, configuration and hardware-test instructions](docs/PKCS11.md).
+
 ## Validation and limits
 
 **Hardware test completed on 2026-11-16:** an existing ML-DSA-65 key in a physical Beta0 YubiKey's slot 9c signed both pure ML-DSA-65 and composite MLDSA65-ECDSA-P256-SHA512 S/MIME messages via `ykman 6.0.0-beta.0 --mu`. Both local test certificates and both serialized `.eml` messages verified with Bouncy Castle. Certificate-only PKCS#12 identities were reloaded successfully with no ML-DSA private key present. The saved messages were independently re-opened and verified after the interactive run. No email was sent or token keys changed. Device identifiers, certificates, identity files, and hardware test artifacts are not included in the repository.
 
 
-50 local checks passed on macOS/Java 25: all four signing/encryption combinations; Unicode MIME bodies; AES-GCM tampering and wrong-recipient rejection; pure and composite external-μ signing; corruption of each composite signature component; PKCS#12 reload and wrong-password rejection; address mismatch handling; and an executable-adapter round trip. [Recorded core results](docs/TEST-RESULTS.txt). Additional tests cover two certificate-only token identity scenarios (pure/composite) and 13 adapter protocol, command, key-match, failure and cleanup cases.
+50 local checks passed on macOS/Java 25: all four signing/encryption combinations; Unicode MIME bodies; AES-GCM tampering and wrong-recipient rejection; pure and composite external-μ signing; corruption of each composite signature component; PKCS#12 reload and wrong-password rejection; address mismatch handling; and an executable-adapter round trip. [Recorded core results](docs/TEST-RESULTS.txt). Additional tests cover two certificate-only token identity scenarios (pure/composite) and 22 adapter protocol, command, key-match, failure and cleanup cases across the ykman and PKCS#11 backends.
 
 The automated software tests do not use a YubiKey or send mail. The interactive hardware test produces a separate local `result.txt`; do not infer hardware success from a software test run. Live SMTP/IMAP, third-party mail client interoperability and a production security audit remain outstanding. SMTP requires STARTTLS (default 587); IMAP uses TLS (default 993). No OAuth account setup. The reader supports signed text/plain messages, optionally inside AuthEnvelopedData; it does not display ordinary unsigned mail, legacy EnvelopedData, HTML or attachments.
 
@@ -117,6 +121,7 @@ Generated certificates are local test identities, not publicly trusted credentia
 - `TokenSetup.java`: certificate-only token identity utility
 - `Beta0Test.java`: interactive hardware-backed S/MIME test and mail UI launch
 - `adapters/ykman-mu.py`: terminal-based ykman external-μ adapter
+- `adapters/pkcs11-mu.py`, `Pkcs11Test.java`: OpenSSL/PKCS#11 backend and hardware test
 - `SelfTest.java`, `TokenIdentityTest.java`, `TestMuAdapter.java`, `tests/`: tests and software fixtures
 
 All Java sources are under `src/dev/hybridmail/`. Third-party source and binaries are not vendored; their own licenses apply. No project license has been selected yet.

@@ -160,7 +160,7 @@ public final class MailApp extends JFrame {
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
                 MailApp app = new MailApp();
                 app.setIdentity(id); app.adapter = executable;
-                app.tokenLabel.setText("Beta0 ykman adapter · slot 9c · PIN/touch in Terminal");
+                app.tokenLabel.setText((executable.contains("pkcs11") ? "PKCS#11" : "ykman") + " adapter · slot 9c · PIN/touch in Terminal");
                 app.pinnedSigner = id.signingCert(); app.pinLabel.setText("Pinned local Beta0 test signing certificate");
                 app.from.setText("beta0@example.test"); app.to.setText("recipient@example.test"); app.encrypt.setSelected(false);
                 app.showMessage(app.display(verifiedMail, id, id.signingCert()));

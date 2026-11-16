@@ -19,3 +19,5 @@ hardware-results/
 Run Beta0 Test.command
 __pycache__/
 *.pyc
+native/
+Run PKCS11 Test.command

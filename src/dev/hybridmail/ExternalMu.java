@@ -173,7 +173,10 @@ public final class ExternalMu {
         public byte[] signEcdsa(PublicKey pub,byte[] digest)throws Exception{return call("ECDSA-P256-SHA256",pub,digest);}
         public byte[] signRsa(PublicKey pub,byte[] digest)throws Exception{return call("RSA3072-PSS-SHA256",pub,digest);}
     }
-    private static byte[] invoke(String executable,String algorithm,PublicKey publicKey,byte[] mu,char[] pin) throws Exception {
+    private static byte[] invoke(String executable,String algorithm,PublicKey publicKey,byte[] mu,char[] pin)throws Exception{
+        return invoke(executable,algorithm,publicKey,mu,pin,false);
+    }
+    static byte[] invoke(String executable,String algorithm,PublicKey publicKey,byte[] mu,char[] pin,boolean rawOutput) throws Exception {
             boolean pinDialog=pin!=null;
             ProcessBuilder builder=new ProcessBuilder(executable).redirectError(pinDialog?ProcessBuilder.Redirect.PIPE:ProcessBuilder.Redirect.DISCARD);
             if(pinDialog)builder.environment().put("HYBRID_MAIL_PIN_STDIN","1");
@@ -198,7 +201,8 @@ public final class ExternalMu {
                     String reason=pinDialog?new String(errors.get(1,TimeUnit.SECONDS),StandardCharsets.US_ASCII).trim():"";
                     throw new IOException("Token adapter failed (exit " + p.exitValue() + ")"+(reason.isEmpty()?"":": "+reason));
                 }
-                return Base64.getDecoder().decode(new String(output.get(1, TimeUnit.SECONDS), StandardCharsets.US_ASCII).trim());
+                byte[] response=output.get(1,TimeUnit.SECONDS);
+                return rawOutput?response:Base64.getDecoder().decode(new String(response,StandardCharsets.US_ASCII).trim());
             } finally {
                 if(pin!=null)Arrays.fill(pin,'\0');
                 progress.close();

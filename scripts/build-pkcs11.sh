@@ -7,7 +7,7 @@ mkdir -p "$DEPS"
 DEPS="$(cd "$DEPS" && pwd)"
 for tool in git cargo rustc meson ninja pkg-config python3; do command -v "$tool" >/dev/null || { echo "Missing $tool; see docs/PKCS11.md" >&2; exit 1; }; done
 checkout() {
-  local name="$1" remote="$2" revision="$3" destination="$DEPS/$1"
+  local name="$1" remote="$2" revision="$3" destination="$DEPS/$1" patch="$ROOT/patches/$4"
   if [[ ! -d "$destination/.git" ]]; then
     git init "$destination"
     git -C "$destination" remote add origin "$remote"
@@ -15,19 +15,18 @@ checkout() {
     git -C "$destination" checkout --detach FETCH_HEAD
   fi
   [[ "$(git -C "$destination" rev-parse HEAD)" == "$revision" ]] || { echo "Wrong revision in $destination; choose a fresh HYBRID_PKCS11_DEPS_DIR." >&2; exit 1; }
-  if [[ "$name" == pkcs11-provider-818 ]] && git -C "$destination" apply --reverse --check "$ROOT/patches/pkcs11-pin-prompt.patch" 2>/dev/null; then
-    git -C "$destination" diff -- src/session.c > "$DEPS/provider-local.diff"
-    cmp -s "$DEPS/provider-local.diff" "$ROOT/patches/pkcs11-pin-prompt.patch" || { echo "Unexpected provider modifications" >&2; exit 1; }
-    [[ -z "$(git -C "$destination" diff --name-only -- . ":(exclude)src/session.c")" && -z "$(git -C "$destination" diff --cached --name-only)" ]] || { echo "Unexpected provider modifications" >&2; exit 1; }
-    return
+  if [[ -n "$(git -C "$destination" status --porcelain --untracked-files=no)" ]]; then
+    git -C "$destination" apply --reverse --check "$patch" 2>/dev/null || { echo "Unexpected changes in $destination" >&2; exit 1; }
+    git -C "$destination" diff --binary > "$DEPS/$name-local.diff"
+    cmp -s "$DEPS/$name-local.diff" "$patch" || { echo "Unexpected patch in $destination" >&2; exit 1; }
+    [[ -z "$(git -C "$destination" diff --cached --name-only)" ]] || { echo 'Unexpected staged changes' >&2; exit 1; }
+  else
+    git -C "$destination" apply --check "$patch"
+    git -C "$destination" apply "$patch"
   fi
-  [[ -z "$(git -C "$destination" status --porcelain --untracked-files=no)" ]] || { echo "Tracked changes in $destination; refusing to build." >&2; exit 1; }
 }
-checkout pkcs11-provider-818 https://github.com/joostd/pkcs11-provider.git 8e01f28b98bb0543a9d5600ebd9e061edb21de53
-checkout yubico-pkcs11 https://github.com/Yubico/yubico-pkcs11.git c28419969d0ac2ead2e94065b77ebbd281cc52de
-if git -C "$DEPS/pkcs11-provider-818" apply --check "$ROOT/patches/pkcs11-pin-prompt.patch" 2>/dev/null; then
-  git -C "$DEPS/pkcs11-provider-818" apply "$ROOT/patches/pkcs11-pin-prompt.patch"
-fi
+checkout pkcs11-provider-818 https://github.com/joostd/pkcs11-provider.git 8e01f28b98bb0543a9d5600ebd9e061edb21de53 pkcs11-pin-prompt.patch
+checkout yubico-pkcs11 https://github.com/Yubico/yubico-pkcs11.git c28419969d0ac2ead2e94065b77ebbd281cc52de ykcs11-ec-metadata.patch
 if [[ ! -d "$DEPS/pkcs11-provider-818/build/meson-private" ]]; then
   meson setup "$DEPS/pkcs11-provider-818/build" "$DEPS/pkcs11-provider-818" -Dbuild_info=PR818-8e01f28
 fi

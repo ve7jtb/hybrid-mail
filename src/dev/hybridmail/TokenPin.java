@@ -17,7 +17,7 @@ public final class TokenPin {
                 JPasswordField field=new JPasswordField(16);
                 JPanel panel=new JPanel(new GridLayout(0,1,0,8));
                 panel.add(new JLabel("YubiKey PIN — "+algorithm));panel.add(field);
-                panel.add(new JLabel("PIN is reused for this signature’s components, then cleared."));
+                panel.add(new JLabel("PIN is reused for this operation’s components, then cleared."));
                 JLabel validation=new JLabel("Enter your 6–8 character PIV PIN (not the identity-file password).");
                 panel.add(validation);
                 field.addAncestorListener(new javax.swing.event.AncestorListener(){
@@ -50,9 +50,9 @@ public final class TokenPin {
         if(GraphicsEnvironment.isHeadless())return ()->{};
         JDialog[] dialog={null};
         SwingUtilities.invokeLater(()->{
-            JDialog d=new JDialog((Frame)null,"YubiKey signing",false);dialog[0]=d;
+            JDialog d=new JDialog((Frame)null,"YubiKey operation",false);dialog[0]=d;
             d.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-            JLabel label=new JLabel("Signing… touch only if the key’s policy requires it.");
+            JLabel label=new JLabel("Working… touch only if the key’s policy requires it.");
             label.setBorder(BorderFactory.createEmptyBorder(20,25,20,25));d.add(label);d.pack();d.setLocationRelativeTo(null);d.setVisible(true);
         });
         return ()->SwingUtilities.invokeLater(()->{if(dialog[0]!=null)dialog[0].dispose();});

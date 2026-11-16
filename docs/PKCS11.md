@@ -29,7 +29,7 @@ export PKG_CONFIG_PATH=/opt/homebrew/opt/openssl@3/lib/pkgconfig
 ./scripts/build-pkcs11.sh
 ```
 
-The script builds under `.deps/pkcs11`, then copies `pkcs11.dylib` and `libykcs11.dylib` into `native/` (`.so` on Linux). It does not install globally. On macOS it disables Rust post-link stripping (`CARGO_PROFILE_RELEASE_STRIP=none`) to avoid the macOS 27 LINKEDIT alignment issue tracked by [rust-lang/rust#157750](https://github.com/rust-lang/rust/issues/157750). A dynamic-load check catches unusable module binaries before hardware testing. Existing checkouts must match the pinned revisions, with no tracked changes apart from the exact supplied PIN-prompt patch. Set `HYBRID_PKCS11_DEPS_DIR` to an absolute alternate dependency directory if desired. Set Cargo/Rust cache environment variables yourself when isolating those caches.
+The script applies the PIN-prompt and EC-metadata patches recorded under `patches/`, builds under `.deps/pkcs11`, then copies `pkcs11.dylib` and `libykcs11.dylib` into `native/` (`.so` on Linux). It does not install globally. On macOS it disables Rust post-link stripping (`CARGO_PROFILE_RELEASE_STRIP=none`) to avoid the macOS 27 LINKEDIT alignment issue tracked by [rust-lang/rust#157750](https://github.com/rust-lang/rust/issues/157750). A dynamic-load check catches unusable module binaries before hardware testing. Existing checkouts must match the pinned revisions, with no tracked changes apart from the exact supplied patches. Set `HYBRID_PKCS11_DEPS_DIR` to an absolute alternate dependency directory if desired. Set Cargo/Rust cache environment variables yourself when isolating those caches.
 
 Do not enable upstream `YKCS11_HW_TESTS`: those tests can reset PIV and erase its keys. Our test script only signs using existing keys and reads public metadata.
 
@@ -91,3 +91,5 @@ Generate fresh certificates with the dual-key demo afterward. Touch policy canno
 ### Current validation
 
 Software tests pass for ECDSA and RSA composite external signing, certificate-only identity save/load, invalid component rejection, exact RSA-PSS parameters, anonymous PIN-pipe transport, per-signature PIN reuse/cleanup, and provisioning guards. Hardware validation passed on 2026-11-16 for the RSA/no-touch/app-PIN flow. Both keys reported PIN policy Always and touch policy Never. Fresh pure and RSA composite certificates and S/MIME messages verified through Bouncy Castle; both saved messages and signer certificates were independently reopened and verified afterward. The RSA composite used PKCS#11 for both components. Each composite signer scopes one app PIN cache to its two component operations, then clears it. The signing run sent no email and changed no token keys; the separately authorized provisioning step created/replaced the two keys beforehand. Device identifiers, public certificates, identity files and messages remain local.
+
+For token-backed pure/hybrid encryption and decryption, see [PKCS11-KEM.md](PKCS11-KEM.md).

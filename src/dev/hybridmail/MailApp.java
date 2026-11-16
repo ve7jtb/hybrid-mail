@@ -13,7 +13,8 @@ import jakarta.mail.internet.MimeMessage;
 public final class MailApp extends JFrame {
     private Identity identity;
     private X509Certificate recipient, pinnedSigner;
-    private String adapter;
+    private String adapter,kemAdapter;
+    private final JLabel kemLabel=new JLabel("Decryption: software");
     private final JTextField from = new JTextField("alice@example.test"), to = new JTextField("bob@example.test"), subject = new JTextField("A private conversation");
     private final JTextArea body = new JTextArea("Hello,\n\nThis message is signed using post-quantum cryptography.\n"), reader = new JTextArea();
     private final JCheckBox encrypt = new JCheckBox("Encrypt for recipient", true);
@@ -55,7 +56,7 @@ public final class MailApp extends JFrame {
         p.add(actions,BorderLayout.NORTH); return p;
     }
     private JPanel keysPanel() {
-        JPanel outer = panel(); JPanel p = new JPanel(); p.setLayout(new BoxLayout(p,BoxLayout.Y_AXIS)); outer.add(p,BorderLayout.NORTH);
+        JPanel outer = panel(); JPanel p = new JPanel(); p.setLayout(new BoxLayout(p,BoxLayout.Y_AXIS)); outer.add(new JScrollPane(p),BorderLayout.CENTER);
         p.add(section("1  Your identity",identityLabel));
         JPanel keys = new JPanel(new FlowLayout(FlowLayout.LEFT));
         keys.add(button("Create identity…",this::generate)); keys.add(button("Load PKCS#12…",this::load));
@@ -73,6 +74,15 @@ public final class MailApp extends JFrame {
         p.add(new JLabel("Adapter receives public key + 64-byte μ. Returned signatures are verified before use."));
         p.add(Box.createVerticalStrut(12));
         p.add(new JLabel("PKCS#11: PIN dialog in app. ykman: launch from Terminal for PIN prompts."));
+        p.add(section("5  Token decryption",kemLabel));
+        JPanel kem=new JPanel(new FlowLayout(FlowLayout.LEFT));
+        kem.add(button("Choose PKCS#11 KEM adapter…",()->{
+            Path path=choose(false,"Choose trusted PKCS#11 KEM adapter executable");if(path==null)return;
+            if(!Files.isExecutable(path)){error(new IOException("Select an executable adapter"));return;}
+            kemAdapter=path.toAbsolutePath().toString();kemLabel.setText("Token decryption: "+path.getFileName());
+        }));
+        kem.add(button("Use software decryption",()->{kemAdapter=null;kemLabel.setText("Decryption: software");}));p.add(kem);
+        p.add(new JLabel("ML-KEM and hybrid decryption use the token; one PIN prompt per message."));
         p.add(Box.createVerticalStrut(24));
         p.add(new JLabel("Generated identities are local test identities. Exchange certificate fingerprints out of band."));
         p.add(new JLabel("Private keys stay local. Account passwords are not saved by this app."));
@@ -129,7 +139,7 @@ public final class MailApp extends JFrame {
         },status::setText);
     }
     private String display(MimeMessage m,Identity id,X509Certificate pin)throws Exception {
-        var o=MailEngine.open(m,id,pin);
+        var o=MailEngine.open(m,id,pin,kemAdapter==null?null:ExternalKem.executable(kemAdapter));
         return "SIGNATURE VALID · "+o.signatureAlgorithm()+"\n"+(o.encrypted()?"AES-256-GCM authenticated decryption succeeded":"Not encrypted")+"\n"+
             (o.pinned()?"Signer matches the certificate you pinned":"SIGNER NOT TRUSTED: no matching pinned certificate")+"\n"+
             (o.fromMatches()?"Outer From matches certificate email (header itself is unsigned)":"WARNING: outer From does not match signing certificate")+
@@ -166,6 +176,20 @@ public final class MailApp extends JFrame {
                 app.showMessage(app.display(verifiedMail, id, id.signingCert()));
                 app.setVisible(true);
             } catch (Exception error) { throw new RuntimeException(error); }
+        });
+    }
+    public static void openKemSession(Identity id,String signAdapter,String decryptAdapter,MimeMessage mail,MailEngine.Opened checked){
+        SwingUtilities.invokeLater(()->{
+            try{
+                UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                MailApp app=new MailApp();app.setIdentity(id);app.adapter=signAdapter;app.kemAdapter=decryptAdapter;
+                app.tokenLabel.setText("PKCS#11 signing · PIN dialog");app.kemLabel.setText("PKCS#11 ML-KEM + ECDH decryption · one PIN per message");
+                app.recipient=id.encryptionCert();app.recipientLabel.setText(id.encryptionCert().getPublicKey().getAlgorithm());
+                app.pinnedSigner=id.signingCert();app.pinLabel.setText("Pinned local test signer");
+                app.from.setText("beta0@example.test");app.to.setText("beta0@example.test");app.encrypt.setSelected(true);
+                app.showMessage("SIGNATURE VALID · "+checked.signatureAlgorithm()+"\nToken-backed authenticated decryption succeeded\n\n"+checked.text());
+                app.setVisible(true);
+            }catch(Exception e){throw new RuntimeException(e);}
         });
     }
     public static void main(String[]args){MailEngine.init();SwingUtilities.invokeLater(()->{try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}new MailApp().setVisible(true);});}

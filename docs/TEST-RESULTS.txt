@@ -63,3 +63,19 @@ PASS both saved messages and certificates independently reopened and verified by
 PASS token metadata: 9c ML-DSA-65 and 9a RSA-3072, PIN always / touch never
 No email sent. Provisioning was a separate explicitly authorized operation.
 Private/local hardware artifacts and device identifiers are excluded from the repository.
+
+PKCS#11 KEM extension, validated 2026-11-16
+PASS pure ML-KEM-768 and hybrid MLKEM768-ECDH-P256-SHA3-256 CMS software round trips via external-recovery interface
+PASS encryption-certificate-only identity persistence and transient shared-secret cleanup
+PASS wrong recipient / malformed ciphertext / KDF substitution rejected before token operations
+PASS modified ML-KEM ciphertext and AES-GCM tag rejected without plaintext release
+PASS failed ECDH aborts hybrid recovery and clears operation PIN scope
+PASS 38 Python adapter/provisioning tests; no shared-secret temporary files
+PASS focused Rust EC metadata-without-certificate and private-derive-attribute regression
+PASS native dependencies rebuilt reproducibly with recorded patches and dynamic-load check
+PASS physical Beta0 pure ML-KEM-768 decapsulation through PKCS#11
+PASS physical Beta0 hybrid ML-KEM-768 decapsulation plus ECDH P-256 derivation through PKCS#11
+PASS both saved encrypted messages reopened, authenticated and signature-verified
+PASS separate inspection of saved certificates, KEMRecipientInfo profiles, AES-256-GCM, and expected recovered test bodies
+Encryption keys: 9d ML-KEM-768, 82 ECDH P-256; PIN always / touch never.
+Signing keys in 9a/9c unchanged. No email sent. Hardware artifacts stay local.

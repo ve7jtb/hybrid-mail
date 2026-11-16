@@ -70,17 +70,21 @@ public final class MailEngine {
         return new MimeMessage(session(), new ByteArrayInputStream(bytes));
     }
     public record Opened(String text, boolean encrypted, String signatureAlgorithm, String fingerprint, boolean pinned, boolean fromMatches) { }
-    @SuppressWarnings("unchecked")
     public static Opened open(MimeMessage message, Identity id, X509Certificate pinned) throws Exception {
+        return open(message,id,pinned,null);
+    }
+    @SuppressWarnings("unchecked")
+    public static Opened open(MimeMessage message,Identity id,X509Certificate pinned,ExternalKem.Backend token)throws Exception {
         Part part = message;
         boolean encrypted = new ContentType(part.getContentType()).getParameter("smime-type") != null &&
             "authEnveloped-data".equalsIgnoreCase(new ContentType(part.getContentType()).getParameter("smime-type"));
         if (encrypted) {
-            if (id == null || id.encryptionKey() == null) throw new GeneralSecurityException("Load recipient identity to decrypt");
+            if (id == null || id.encryptionCert()==null || (id.encryptionKey() == null && token==null)) throw new GeneralSecurityException("Load recipient identity to decrypt");
             SMIMEAuthEnveloped env = new SMIMEAuthEnveloped(message);
             RecipientInformation r = env.getRecipientInfos().get(new JceKEMRecipientId(id.encryptionCert()));
             if (r == null) throw new GeneralSecurityException("This identity is not a recipient");
-            byte[] recovered = r.getContent(new JceKEMAuthEnvelopedRecipient(id.encryptionKey()).setProvider("BC"));
+            id.encryptionCert().checkValidity();
+            byte[] recovered = r.getContent(token!=null?ExternalKem.recipient(id.encryptionCert(),token):new JceKEMAuthEnvelopedRecipient(id.encryptionKey()).setProvider("BC"));
             part = SMIMEUtil.toMimeBodyPart(recovered);
         }
         SMIMESigned signed;

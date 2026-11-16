@@ -114,12 +114,19 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
             public byte[] getSignature(){try{return signer.getSignature();}finally{backend.clearSecrets();}}
         };
     }
+    public Identity withTokenEncryption(String email,PublicKey key,ExternalMu.Backend signingBackend)throws Exception{
+        ExternalKem.validatePublicKey(key);
+        X509Certificate certificate=cert(email,key,signer(signingBackend),false);
+        certificate.verify(signingCert.getPublicKey(),"BC");
+        return new Identity(signingCert,signingKey,certificate,null,traditionalKey);
+    }
     public void save(Path file, char[] password) throws Exception {
         if (password.length < 12) throw new IllegalArgumentException("Use at least 12 characters for the identity password");
         KeyStore ks = KeyStore.getInstance("PKCS12", "BC"); ks.load(null, password);
         if (signingKey != null) ks.setKeyEntry("sign", signingKey, password, new java.security.cert.Certificate[]{signingCert});
         else ks.setCertificateEntry("sign", signingCert);
         if (encryptionKey != null) ks.setKeyEntry("encrypt", encryptionKey, password, new java.security.cert.Certificate[]{encryptionCert});
+        if(encryptionKey==null&&encryptionCert!=null)ks.setCertificateEntry("encrypt",encryptionCert);
         if (traditionalKey != null) {
             PublicKey ec = ((CompositePublicKey)signingCert.getPublicKey()).getPublicKeys().get(1);
             X509Certificate storageCert = cert("conventional-component@example.test", ec, traditionalKey, "SHA256withECDSA", true);

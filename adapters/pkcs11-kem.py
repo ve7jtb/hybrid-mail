@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""PKCS#11 ML-KEM decapsulation/ECDH. Shared secrets go only through stdout pipe."""
+import base64
+import hmac
+import importlib.util
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+_spec=importlib.util.spec_from_file_location('pkcs11_sign',Path(__file__).with_name('pkcs11-mu.py'))
+_common=importlib.util.module_from_spec(_spec);_spec.loader.exec_module(_common)
+AdapterError=_common.AdapterError
+
+
+def object_id(slot):
+    slots={'9d':3}
+    slots.update({format(n,'02x'):n-0x82+5 for n in range(0x82,0x96)})
+    if slot.lower() not in slots:raise AdapterError('Use a separate encryption slot: 9d or 82–95; signing slots are excluded')
+    return '%'+format(slots[slot.lower()],'02X')
+
+
+def read_request(stream):
+    lines=[stream.readline(8193) for _ in range(3)]
+    if any(len(line)>8192 or not line.endswith(b'\n') for line in lines):raise AdapterError('Malformed KEM request')
+    if lines[0] not in (b'ML-KEM-768\n',b'ECDH-P256\n'):raise AdapterError('Unsupported private operation')
+    try:public,data=[base64.b64decode(line.strip(),validate=True) for line in lines[1:]]
+    except ValueError as error:raise AdapterError('Invalid request encoding') from error
+    algorithm=lines[0].decode().strip()
+    if algorithm=='ML-KEM-768':
+        if not 1190<=len(public)<=1250 or len(data)!=1088:raise AdapterError('Expected ML-KEM-768 key and 1088-byte ciphertext')
+    elif not 80<=len(public)<=150 or not 80<=len(data)<=150:raise AdapterError('Expected P-256 recipient and peer SPKIs')
+    return algorithm,public,data
+
+
+def export_public(executable,provider,module,serial,slot,algorithm,run=subprocess.run):
+    check_config(executable,serial)
+    uri='pkcs11:serial='+serial+';id='+object_id(slot)+';type=public'
+    with tempfile.TemporaryDirectory(prefix='hybrid-mail-kem-public-') as directory:
+        folder=Path(directory);config=folder/'openssl.cnf';public=folder/'public.der'
+        config.write_text(_common.configuration(provider,module,public=True),encoding='utf-8')
+        result=run([executable,'pkey','-provider','default','-provider','pkcs11','-pubin','-in',uri,'-pubout','-outform','DER','-out',str(public)],
+                   stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,env=_common.child_environment(config),timeout=30)
+        if result.returncode or not public.exists():raise AdapterError('Cannot export encryption slot public key'+_common.safe_openssl_error(result))
+        size=public.stat().st_size
+        if not (1190<=size<=1250 if algorithm=='ML-KEM-768' else 80<=size<=150):raise AdapterError('Unexpected encryption public key type')
+        return public.read_bytes()
+
+
+def check_config(executable,serial):
+    if not Path(executable).is_absolute() or not serial.isdecimal():raise AdapterError('Set absolute OPENSSL_BIN and explicit PKCS11_SERIAL')
+
+
+def recover(algorithm,public,data,executable,provider,module,serial,slot,pin,run=subprocess.run):
+    check_config(executable,serial)
+    if algorithm not in ('ML-KEM-768','ECDH-P256'):raise AdapterError('Unsupported private operation')
+    if not 6<=len(pin)<=8 or any(c<32 or c>126 for c in pin):raise AdapterError('Invalid PIN input format')
+    try:
+        actual=export_public(executable,provider,module,serial,slot,algorithm,run)
+        if not hmac.compare_digest(public,actual):raise AdapterError('Encryption slot public key does not match the recipient identity')
+        uri='pkcs11:serial='+serial+';id='+object_id(slot)+';type=private'
+        with tempfile.TemporaryDirectory(prefix='hybrid-mail-kem-') as directory:
+            folder=Path(directory);config=folder/'openssl.cnf';input_file=folder/'public-input.der'
+            config.write_text(_common.configuration(provider,module),encoding='utf-8');input_file.write_bytes(data)
+            env=_common.child_environment(config);env['HYBRID_MAIL_PIN_STDIN']='1'
+            command=[executable,'pkeyutl','-provider','default','-provider','pkcs11','-inkey',uri]
+            command+=['-decap','-in',str(input_file)] if algorithm=='ML-KEM-768' else ['-derive','-peerkey',str(input_file),'-peerform','DER']
+            read_fd,write_fd=os.pipe()
+            try:
+                os.write(write_fd,pin);os.write(write_fd,b'\n');os.close(write_fd);write_fd=-1
+                result=run(command+['-passin','fd:'+str(read_fd)],pass_fds=(read_fd,),stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=100)
+            finally:
+                os.close(read_fd)
+                if write_fd!=-1:os.close(write_fd)
+            if result.returncode:raise AdapterError('PKCS#11 '+algorithm+' failed; no retry'+_common.safe_openssl_error(result))
+            if len(result.stdout)!=32:raise AdapterError('Expected 32-byte token shared secret')
+            return result.stdout
+    finally:pin[:]=b'\0'*len(pin)
+
+
+def main():
+    pin=None
+    try:
+        values=[os.environ.get(n,'') for n in ('OPENSSL_BIN','PKCS11_PROVIDER','PKCS11_MODULE','PKCS11_SERIAL')]
+        if not all(values):raise AdapterError('Set OpenSSL, provider, module and token serial configuration')
+        if sys.argv[1:] in (['--export-mlkem'],['--export-ecdh']):
+            algorithm='ML-KEM-768' if sys.argv[1]=='--export-mlkem' else 'ECDH-P256'
+            slot=os.environ.get('PKCS11_KEM_SLOT' if algorithm=='ML-KEM-768' else 'PKCS11_ECDH_SLOT','')
+            sys.stdout.buffer.write(export_public(*values,slot,algorithm));return 0
+        if len(sys.argv)!=1 or os.environ.get('HYBRID_MAIL_PIN_STDIN')!='1':raise AdapterError('Use the app PIN dialog for token decryption')
+        algorithm,public,data=read_request(sys.stdin.buffer)
+        pin=bytearray(sys.stdin.buffer.readline(10))
+        if not pin.endswith(b'\n'):raise AdapterError('Missing app PIN input')
+        del pin[-1:]
+        slot=os.environ.get('PKCS11_KEM_SLOT' if algorithm=='ML-KEM-768' else 'PKCS11_ECDH_SLOT','')
+        secret=recover(algorithm,public,data,*values,slot,pin)
+        sys.stdout.buffer.write(secret);sys.stdout.buffer.flush();return 0
+    except (AdapterError,OSError,subprocess.SubprocessError) as error:
+        message=str(error) if isinstance(error,AdapterError) else 'PKCS#11 KEM I/O failure or timeout'
+        print('Hybrid Mail: '+message,file=sys.stderr);return 1
+    finally:
+        if pin is not None:pin[:]=b'\0'*len(pin)
+
+if __name__=='__main__':sys.exit(main())

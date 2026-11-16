@@ -10,5 +10,6 @@ jar --create --file build/hybrid-mail.jar --main-class dev.hybridmail.MailApp -C
 if [[ "${1:-}" == test ]]; then
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.SelfTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.TokenIdentityTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.TokenKemTest
   python3 -m unittest discover -s tests -v
 fi

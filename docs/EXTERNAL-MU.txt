@@ -28,7 +28,7 @@ Executable integration (available in Keys & token)
   Exit 0 for success; nonzero for failure. 150-second overall operation timeout (the ykman signing step has a 100-second timeout).
   stdout capped at 16 KiB; stderr is discarded to avoid exposing SDK/PIN diagnostics.
   Select only your own trusted adapter; selecting it authorizes local execution.
-  PIN/touch UI belongs in the adapter, not protocol stdin. The ykman adapter
+  For ykman, PIN/touch UI belongs in the adapter, not protocol stdin. The ykman adapter
   attaches the child CLI directly to /dev/tty for native hidden PIN prompts.
   Do not pass a PIN through arguments or environment variables. Cancel rather than
   automatically retrying a bad PIN. Validate the device key matches the supplied SPKI.
@@ -91,3 +91,15 @@ signing succeeded with an existing Beta0 slot 9c ML-DSA-65 key through ykman --m
 Both saved messages were independently verified by BC after the interactive run.
 No token key generation, certificate import, credential change, or email sending
 was performed. Hardware-specific identity files and reports remain local.
+
+PKCS#11 APP PIN AND CONVENTIONAL COMPONENT EXTENSION
+  The trusted pkcs11-mu.py adapter additionally supports ECDSA-P256-SHA256 and
+  RSA3072-PSS-SHA256 as first-line algorithms, with component SPKI and a 32-byte
+  SHA-256 digest on lines two and three. RSA-PSS uses MGF1-SHA256 and salt length 32.
+  With HYBRID_MAIL_PIN_STDIN=1, a fourth line carries the PIN over the anonymous
+  stdin pipe. This mode flag contains no secret. The adapter passes the PIN via
+  a second anonymous descriptor to OpenSSL, never via argv, environment or files.
+  The Java ContentSigner owns a separate per-operation PIN cache, shared by its
+  two components and cleared in finally. Success, failure or cancellation cannot
+  carry that PIN into the next certificate/message signature. The existing ykman
+  three-line protocol is unchanged. See docs/PKCS11.md for the complete flow.

@@ -21,3 +21,7 @@ __pycache__/
 *.pyc
 native/
 Run PKCS11 Test.command
+
+Run Dual PKCS11 Test.command
+
+Setup No Touch RSA Demo.command

@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEPS="${HYBRID_PKCS11_DEPS_DIR:-$ROOT/.deps/pkcs11}"
 mkdir -p "$DEPS"
 DEPS="$(cd "$DEPS" && pwd)"
-for tool in git cargo rustc meson ninja pkg-config; do command -v "$tool" >/dev/null || { echo "Missing $tool; see docs/PKCS11.md" >&2; exit 1; }; done
+for tool in git cargo rustc meson ninja pkg-config python3; do command -v "$tool" >/dev/null || { echo "Missing $tool; see docs/PKCS11.md" >&2; exit 1; }; done
 checkout() {
   local name="$1" remote="$2" revision="$3" destination="$DEPS/$1"
   if [[ ! -d "$destination/.git" ]]; then

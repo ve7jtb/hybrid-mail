@@ -15,6 +15,14 @@ import org.bouncycastle.jcajce.spec.ContextParameterSpec;
 public final class ExternalMu {
     @FunctionalInterface public interface Backend {
         byte[] sign(PublicKey publicKey, byte[] mu) throws Exception;
+        default Backend newOperation() { return this; }
+        default void clearSecrets() {}
+        default byte[] signRsa(PublicKey publicKey, byte[] digest) throws Exception {
+            throw new GeneralSecurityException("This adapter does not support token RSA-PSS");
+        }
+        default byte[] signEcdsa(PublicKey publicKey, byte[] digest) throws Exception {
+            throw new GeneralSecurityException("This adapter does not support token ECDSA");
+        }
     }
     public record TokenKey(PublicKey publicKey, Backend backend) implements PrivateKey {
         public String getAlgorithm() { return "ML-DSA-65"; }
@@ -23,6 +31,8 @@ public final class ExternalMu {
     }
     public static final Provider PROVIDER = new Provider("ExternalMu", "1.0", "External mu ML-DSA adapter") {{
         put("Signature.ML-DSA-65", MuSignature.class.getName());
+        put("Signature.SHA256withECDSA", EcSignature.class.getName());
+        put("Signature.RSASSA-PSS", PssSignature.class.getName());
     }};
     public static final class MuSignature extends SignatureSpi {
         private TokenKey key;
@@ -63,25 +73,135 @@ public final class ExternalMu {
         @Deprecated protected void engineSetParameter(String n, Object v) { throw new UnsupportedOperationException(); }
         @Deprecated protected Object engineGetParameter(String n) { throw new UnsupportedOperationException(); }
     }
-    /** Executable protocol: 3 UTF-8 lines on stdin, one base64 signature on stdout. No shell. */
-    public static Backend executable(String executable) {
-        return (publicKey, mu) -> {
-            Process p = new ProcessBuilder(executable).redirectError(ProcessBuilder.Redirect.DISCARD).start();
-            ExecutorService pool = Executors.newSingleThreadExecutor();
+    public record EcTokenKey(PublicKey publicKey, Backend backend) implements PrivateKey {
+        public String getAlgorithm() { return "EC"; }
+        public String getFormat() { return null; }
+        public byte[] getEncoded() { return null; }
+    }
+    /** BC supplies the composite representative; this component hashes it once with SHA-256. */
+    public static final class EcSignature extends SignatureSpi {
+        private EcTokenKey key;
+        private MessageDigest digest;
+        protected void engineInitSign(PrivateKey k) throws InvalidKeyException {
+            if (!(k instanceof EcTokenKey t)) throw new InvalidKeyException("Expected external EC key");
+            key=t;
+            try { digest=MessageDigest.getInstance("SHA-256"); }
+            catch (GeneralSecurityException e) { throw new InvalidKeyException(e); }
+        }
+        protected void engineInitVerify(PublicKey k) throws InvalidKeyException { throw new InvalidKeyException("Use BC to verify"); }
+        protected void engineUpdate(byte b) { digest.update(b); }
+        protected void engineUpdate(byte[] b,int off,int len) { digest.update(b,off,len); }
+        protected byte[] engineSign() throws SignatureException {
             try {
+                byte[] hash=digest.digest();
+                byte[] signature=key.backend().signEcdsa(key.publicKey(),hash.clone());
+                Signature verifier=Signature.getInstance("NONEwithECDSA","BC");
+                verifier.initVerify(key.publicKey());verifier.update(hash);
+                if(signature==null||!verifier.verify(signature)) throw new SignatureException("Invalid external ECDSA signature");
+                return signature;
+            } catch(Exception e) { throw new SignatureException("External ECDSA signing failed",e); }
+            finally { digest.reset(); }
+        }
+        protected boolean engineVerify(byte[] s) { return false; }
+        @Deprecated protected void engineSetParameter(String n,Object v) { throw new UnsupportedOperationException(); }
+        @Deprecated protected Object engineGetParameter(String n) { throw new UnsupportedOperationException(); }
+    }
+    public record RsaTokenKey(PublicKey publicKey, Backend backend) implements PrivateKey {
+        public String getAlgorithm() { return "RSA"; }
+        public String getFormat() { return null; }
+        public byte[] getEncoded() { return null; }
+    }
+    public static final java.security.spec.PSSParameterSpec PSS = new java.security.spec.PSSParameterSpec(
+        "SHA-256","MGF1",java.security.spec.MGF1ParameterSpec.SHA256,32,1);
+    public static final class PssSignature extends SignatureSpi {
+        private RsaTokenKey key;
+        private final ByteArrayOutputStream message=new ByteArrayOutputStream();
+        protected void engineInitSign(PrivateKey k) throws InvalidKeyException {
+            if(!(k instanceof RsaTokenKey t))throw new InvalidKeyException("Expected external RSA key");
+            key=t;message.reset();
+        }
+        protected void engineInitVerify(PublicKey k)throws InvalidKeyException{throw new InvalidKeyException("Use BC to verify");}
+        protected void engineUpdate(byte b)throws SignatureException{checkSize(1);message.write(b);}
+        protected void engineUpdate(byte[] b,int off,int len)throws SignatureException{checkSize(len);message.write(b,off,len);}
+        private void checkSize(int n)throws SignatureException{if(n>8192-message.size())throw new SignatureException("Composite representative too large");}
+        protected byte[] engineSign()throws SignatureException{
+            try{
+                byte[] bytes=message.toByteArray();
+                byte[] sig=key.backend().signRsa(key.publicKey(),MessageDigest.getInstance("SHA-256").digest(bytes));
+                Signature verify=Signature.getInstance("RSASSA-PSS","BC");verify.setParameter(PSS);
+                verify.initVerify(key.publicKey());verify.update(bytes);
+                if(sig==null||!verify.verify(sig))throw new SignatureException("Invalid external RSA-PSS signature");
+                return sig;
+            }catch(Exception e){throw new SignatureException("External RSA-PSS signing failed",e);}
+            finally{message.reset();}
+        }
+        protected boolean engineVerify(byte[] s){return false;}
+        protected void engineSetParameter(AlgorithmParameterSpec params)throws InvalidAlgorithmParameterException{
+            if(!(params instanceof java.security.spec.PSSParameterSpec p)||!p.getDigestAlgorithm().equalsIgnoreCase("SHA-256")
+                ||!p.getMGFAlgorithm().equalsIgnoreCase("MGF1")||!(p.getMGFParameters() instanceof java.security.spec.MGF1ParameterSpec m)
+                ||!m.getDigestAlgorithm().equalsIgnoreCase("SHA-256")||p.getSaltLength()!=32||p.getTrailerField()!=1)
+                throw new InvalidAlgorithmParameterException("Expected SHA-256 / MGF1-SHA256 / 32-byte salt / trailer 1");
+        }
+        @Deprecated protected void engineSetParameter(String n,Object v){throw new UnsupportedOperationException();}
+        @Deprecated protected Object engineGetParameter(String n){throw new UnsupportedOperationException();}
+    }
+    /** Executable protocol: 3 UTF-8 lines on stdin, one base64 signature on stdout. No shell. */
+    public static Backend executable(String executable) { return new ExecutableBackend(executable); }
+    @FunctionalInterface interface PinSource { char[] request()throws Exception; }
+    static final class OperationPinCache {
+        private char[] value;
+        synchronized char[] copy(PinSource source)throws Exception {
+            if(value==null)value=source.request();
+            if(value==null)throw new SignatureException("PIN entry cancelled");
+            return value.clone();
+        }
+        synchronized void clear(){if(value!=null){Arrays.fill(value,'\0');value=null;}}
+    }
+    private static final class ExecutableBackend implements Backend {
+        private final String executable;
+        private final OperationPinCache pinCache=new OperationPinCache();
+        ExecutableBackend(String executable){this.executable=executable;}
+        public Backend newOperation(){return new ExecutableBackend(executable);}
+        public synchronized void clearSecrets(){pinCache.clear();}
+        private synchronized byte[] call(String algorithm,PublicKey pub,byte[] input)throws Exception{
+            boolean appPin=java.nio.file.Path.of(executable).getFileName().toString().equals("pkcs11-mu.py");
+            try{
+                return invoke(executable,algorithm,pub,input,appPin?pinCache.copy(()->TokenPin.request(algorithm)):null);
+            }catch(Exception e){clearSecrets();throw e;}
+        }
+        public byte[] sign(PublicKey pub,byte[] mu)throws Exception{return call("ML-DSA-65",pub,mu);}
+        public byte[] signEcdsa(PublicKey pub,byte[] digest)throws Exception{return call("ECDSA-P256-SHA256",pub,digest);}
+        public byte[] signRsa(PublicKey pub,byte[] digest)throws Exception{return call("RSA3072-PSS-SHA256",pub,digest);}
+    }
+    private static byte[] invoke(String executable,String algorithm,PublicKey publicKey,byte[] mu,char[] pin) throws Exception {
+            boolean pinDialog=pin!=null;
+            ProcessBuilder builder=new ProcessBuilder(executable).redirectError(pinDialog?ProcessBuilder.Redirect.PIPE:ProcessBuilder.Redirect.DISCARD);
+            if(pinDialog)builder.environment().put("HYBRID_MAIL_PIN_STDIN","1");
+            Process p;
+            try { p=builder.start(); } catch(Exception e){if(pin!=null)Arrays.fill(pin,'\0');throw e;}
+            AutoCloseable progress=pinDialog?TokenPin.progress():()->{};
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                Future<byte[]> errors=pool.submit(()->p.getErrorStream().readNBytes(2048));
                 Future<byte[]> output = pool.submit(() -> {
                     byte[] result = p.getInputStream().readNBytes(16385);
                     if (result.length > 16384) throw new IOException("Adapter output too large");
                     return result;
                 });
                 try (OutputStream out = p.getOutputStream()) {
-                    out.write(("ML-DSA-65\n" + Base64.getEncoder().encodeToString(publicKey.getEncoded()) + "\n"
+                    out.write((algorithm + "\n" + Base64.getEncoder().encodeToString(publicKey.getEncoded()) + "\n"
                         + Base64.getEncoder().encodeToString(mu) + "\n").getBytes(StandardCharsets.US_ASCII));
+                    if(pin!=null){for(char c:pin)out.write((byte)c);out.write('\n');Arrays.fill(pin,'\0');}
                 }
                 if (!p.waitFor(150, TimeUnit.SECONDS)) throw new IOException("Token adapter timed out");
-                if (p.exitValue() != 0) throw new IOException("Token adapter failed (exit " + p.exitValue() + ")");
+                if (p.exitValue() != 0) {
+                    String reason=pinDialog?new String(errors.get(1,TimeUnit.SECONDS),StandardCharsets.US_ASCII).trim():"";
+                    throw new IOException("Token adapter failed (exit " + p.exitValue() + ")"+(reason.isEmpty()?"":": "+reason));
+                }
                 return Base64.getDecoder().decode(new String(output.get(1, TimeUnit.SECONDS), StandardCharsets.US_ASCII).trim());
             } finally {
+                if(pin!=null)Arrays.fill(pin,'\0');
+                progress.close();
                 pool.shutdownNow();
                 if (p.isAlive()) {
                     try { p.descendants().forEach(child -> child.destroyForcibly()); }
@@ -89,6 +209,5 @@ public final class ExternalMu {
                     p.destroyForcibly();
                 }
             }
-        };
     }
 }

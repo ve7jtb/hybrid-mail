@@ -71,4 +71,81 @@ class Pkcs11AdapterTest(unittest.TestCase):
         with self.assertRaises(subprocess.TimeoutExpired):self.call(timeout)
         self.assertEqual(len(self.commands),1)
 
+class EcdsaAdapterTest(unittest.TestCase):
+    def test_digest_signing_and_slot(self):
+        public=b"e"*91;digest=b"d"*32;signature=b"s"*70;commands=[]
+        def run(command,**kwargs):
+            commands.append(command)
+            out=Path(command[-1])
+            if command[1]=="pkey":
+                self.assertIn("pkcs11:serial=123456;id=%01;type=public",command)
+                out.write_bytes(public)
+            else:
+                self.assertIn("pkcs11:serial=123456;id=%01;type=private",command)
+                self.assertIn("digest:sha256",command);self.assertNotIn("mu:1",command);self.assertNotIn("-rawin",command)
+                self.assertEqual(Path(command[command.index("-in")+1]).read_bytes(),digest)
+                out.write_bytes(signature)
+            return subprocess.CompletedProcess(command,0)
+        result=ADAPTER.sign(public,digest,"/openssl","/provider","/module","123456",io.BytesIO(),run,
+                            algorithm="ECDSA-P256-SHA256",ec_slot="9a")
+        self.assertEqual(result,signature);self.assertEqual(len(commands),2)
+    def test_slot_guard(self):
+        for slot in ("", "9c", "9a;type=private", "ff"):
+            with self.assertRaises(ADAPTER.AdapterError):ADAPTER.ec_object_id(slot)
+        self.assertEqual(ADAPTER.ec_object_id("82"),"%05")
+        self.assertEqual(ADAPTER.ec_object_id("95"),"%18")
+    def test_protocol(self):
+        import base64
+        request=b"ECDSA-P256-SHA256\n"+base64.b64encode(b"e"*91)+b"\n"+base64.b64encode(b"d"*32)+b"\n"
+        self.assertEqual(ADAPTER.read_request(io.BytesIO(request)),("ECDSA-P256-SHA256",b"e"*91,b"d"*32))
+        with self.assertRaises(ADAPTER.AdapterError):ADAPTER.read_request(io.BytesIO(request.replace(base64.b64encode(b"d"*32),base64.b64encode(b"d"*64))))
+
+class RsaPinAdapterTest(unittest.TestCase):
+    def test_pss_parameters_and_anonymous_pin_pipe(self):
+        public=b"r"*422;digest=b"d"*32;signature=b"s"*384;commands=[];pin=bytearray(b"654321")
+        def run(command,**kwargs):
+            commands.append(command)
+            self.assertFalse(any("654321" in arg for arg in command))
+            self.assertFalse(any("654321" in value for value in kwargs["env"].values()))
+            out=Path(command[command.index("-out")+1])
+            config=Path(kwargs["env"]["OPENSSL_CONF"]).read_text()
+            self.assertNotIn("654321",config)
+            if command[1]=="pkey":
+                self.assertIn("pkcs11-module-login-behavior = never",config)
+                self.assertIn("pkcs11:serial=123456;id=%01;type=public",command)
+                out.write_bytes(public)
+            else:
+                self.assertIn("rsa_padding_mode:pss",command);self.assertIn("rsa_pss_saltlen:32",command)
+                self.assertIn("rsa_mgf1_md:sha256",command);self.assertIn("digest:sha256",command)
+                self.assertNotIn("-rawin",command)
+                fd=int(command[command.index("-passin")+1].split(":")[1])
+                self.assertEqual(kwargs["pass_fds"],(fd,));self.assertEqual(os.read(fd,20),b"654321\n")
+                self.assertEqual(Path(command[command.index("-in")+1]).read_bytes(),digest)
+                out.write_bytes(signature)
+            return subprocess.CompletedProcess(command,0)
+        result=ADAPTER.sign(public,digest,"/openssl","/provider","/module","123456",io.BytesIO(),run,
+                           algorithm="RSA3072-PSS-SHA256",ec_slot="9a",pin=pin)
+        self.assertEqual(result,signature);self.assertEqual(pin,bytearray(6));self.assertEqual(len(commands),2)
+    def test_rsa_protocol(self):
+        import base64
+        data=b"RSA3072-PSS-SHA256\n"+base64.b64encode(b"r"*422)+b"\n"+base64.b64encode(b"d"*32)+b"\n"
+        self.assertEqual(ADAPTER.read_request(io.BytesIO(data))[0],"RSA3072-PSS-SHA256")
+
+class RsaEncodingRegressionTest(unittest.TestCase):
+    def test_equivalent_spki_and_different_exponent(self):
+        import base64, shutil, tempfile
+        executable=os.environ.get("OPENSSL_BIN") or shutil.which("openssl")
+        if not executable:self.skipTest("OpenSSL 3 needed for canonicalization regression")
+        version=subprocess.run([executable,"version"],capture_output=True,text=True)
+        if not version.stdout.startswith("OpenSSL 3."):self.skipTest("OpenSSL 3 needed for canonicalization regression")
+        # Generated software fixture public key, not a hardware/user key.
+        original=base64.b64decode("MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAyrv0xBd7HBxGXJjULFyA4WBKQx8YxPh2XFsDOP/GSYhPEYd0kTiu1HSzduUUvr4Qi9ElQfiN9oW+gTqd/CnDeDSmJch0x2TP9ii94BrGqM7xuzmq5PpOvL4OONjjwUVj1altriQNwN3t4lxOWPIkYjwcGIzQ+X8GRFQbw1EaHLM87O/ckpwFFfV49C6ki9axR3lienzFNA466cUAp0kszcZOT9Qewubp3zG5vBGIOj6iRvwQvnFh/ka/YLFSHfRAxx/F0C7CqrlSufUnQHQ5bKwkds5jLDzIDgul9d7L9HKtx0m8U0OjH8Dy/u9GArxlwvdhAG427Pl9E/LoJBI69Zn3i4ypHTmEsfMK5c8rKTA5dEVEV1nEEo9PV3aAwXeaYN5UTkVYggPgV5mpn+yjcgo6s/pAJ/OgB97Lv32B4UOkze+M4G+kl5vzU2eSAabICFXBjM5fcpP5C1D3HwqPj4R/IfKFm2iF/nCUP9R1ooXqWM5qNlLstnHxId7qH7c1AgMBAAE=")
+        decoded=base64.b64decode("MIIBoDALBgkqhkiG9w0BAQEDggGPADCCAYoCggGBAMq79MQXexwcRlyY1CxcgOFgSkMfGMT4dlxbAzj/xkmITxGHdJE4rtR0s3blFL6+EIvRJUH4jfaFvoE6nfwpw3g0piXIdMdkz/YoveAaxqjO8bs5quT6Try+DjjY48FFY9Wpba4kDcDd7eJcTljyJGI8HBiM0Pl/BkRUG8NRGhyzPOzv3JKcBRX1ePQupIvWsUd5Ynp8xTQOOunFAKdJLM3GTk/UHsLm6d8xubwRiDo+okb8EL5xYf5Gv2CxUh30QMcfxdAuwqq5Urn1J0B0OWysJHbOYyw8yA4LpfXey/RyrcdJvFNDox/A8v7vRgK8ZcL3YQBuNuz5fRPy6CQSOvWZ94uMqR05hLHzCuXPKykwOXRFRFdZxBKPT1d2gMF3mmDeVE5FWIID4FeZqZ/so3IKOrP6QCfzoAfey799geFDpM3vjOBvpJeb81NnkgGmyAhVwYzOX3KT+QtQ9x8Kj4+EfyHyhZtohf5wlD/UdaKF6ljOajZS7LZx8SHe6h+3NQIDAQAB")
+        with tempfile.TemporaryDirectory() as directory:
+            folder=Path(directory);actual=folder/"actual.der";actual.write_bytes(original)
+            args=(actual,"RSA3072-PSS-SHA256",executable,folder,os.environ.copy(),subprocess.run)
+            self.assertTrue(ADAPTER.public_keys_match(decoded,*args))
+            different=bytearray(decoded);different[-1]=3
+            self.assertFalse(ADAPTER.public_keys_match(bytes(different),*args))
+
 if __name__=="__main__":unittest.main()

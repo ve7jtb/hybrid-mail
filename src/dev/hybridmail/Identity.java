@@ -20,10 +20,11 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
                        X509Certificate encryptionCert, PrivateKey encryptionKey, PrivateKey traditionalKey) {
     public static final String PURE_SIGN = "ML-DSA-65";
     public static final String HYBRID_SIGN = "MLDSA65-ECDSA-P256-SHA512";
+    public static final String HYBRID_RSA_SIGN = "MLDSA65-RSA3072-PSS-SHA512";
     public static final String PURE_KEM = "ML-KEM-768";
     public static final String HYBRID_KEM = "MLKEM768-ECDH-P256-SHA3-256";
     public String signatureAlgorithm() {
-        return signingCert.getPublicKey() instanceof CompositePublicKey ? HYBRID_SIGN : PURE_SIGN;
+        return signingCert.getPublicKey().getAlgorithm();
     }
     public static Identity generate(String email, boolean hybrid) throws Exception {
         new jakarta.mail.internet.InternetAddress(email, true).validate();
@@ -66,6 +67,23 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         certificate.verify(publicKey, "BC");
         return new Identity(certificate, null, null, null, conventional);
     }
+    /** Both signing components remain on the token; only a public certificate is stored. */
+    public static Identity forDualToken(String email, PublicKey ml, PublicKey ec, ExternalMu.Backend backend) throws Exception {
+        new jakarta.mail.internet.InternetAddress(email,true).validate();
+        if (!PURE_SIGN.equalsIgnoreCase(ml.getAlgorithm())) throw new GeneralSecurityException("Expected ML-DSA-65");
+        boolean rsa=ec instanceof java.security.interfaces.RSAPublicKey;
+        if(rsa && ((java.security.interfaces.RSAPublicKey)ec).getModulus().bitLength()!=3072)throw new GeneralSecurityException("Expected RSA-3072");
+        var expected=java.security.AlgorithmParameters.getInstance("EC","BC");
+        expected.init(new java.security.spec.ECGenParameterSpec("secp256r1"));
+        var curve=expected.getParameterSpec(java.security.spec.ECParameterSpec.class);
+        if (!rsa && (!(ec instanceof java.security.interfaces.ECPublicKey e) || !e.getParams().getCurve().equals(curve.getCurve())
+            || !e.getParams().getGenerator().equals(curve.getGenerator()) || !e.getParams().getOrder().equals(curve.getOrder())
+            || e.getParams().getCofactor()!=curve.getCofactor())) throw new GeneralSecurityException("Expected ECDSA P-256");
+        PublicKey pub=new CompositePublicKey(rsa?org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLDSA65_RSA3072_PSS_SHA512:org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLDSA65_ECDSA_P256_SHA512,ml,ec);
+        X509Certificate certificate=cert(email,pub,externalSigner(pub,null,backend),true);
+        certificate.verify(pub,"BC");
+        return new Identity(certificate,null,null,null,null);
+    }
     public ContentSigner signer(ExternalMu.Backend backend) throws Exception {
         signingCert.checkValidity();
         if (backend == null) {
@@ -77,15 +95,24 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         return externalSigner(signingCert.getPublicKey(), traditional, backend);
     }
     private static ContentSigner externalSigner(PublicKey pub, PrivateKey traditional, ExternalMu.Backend backend) throws Exception {
+        backend=backend.newOperation();
         if (pub instanceof CompositePublicKey c) {
-            if (traditional == null) throw new GeneralSecurityException("Composite token identity needs traditional private key alias 'traditional'");
+            PrivateKey ecKey = traditional == null ? (c.getPublicKeys().get(1) instanceof java.security.interfaces.RSAPublicKey ? new ExternalMu.RsaTokenKey(c.getPublicKeys().get(1),backend) : new ExternalMu.EcTokenKey(c.getPublicKeys().get(1), backend)) : traditional;
+            Provider ecProvider = traditional == null ? ExternalMu.PROVIDER : Security.getProvider("BC");
             var key = CompositePrivateKey.builder(c.getAlgorithmIdentifier().getAlgorithm())
                 .addPrivateKey(new ExternalMu.TokenKey(c.getPublicKeys().get(0), backend), ExternalMu.PROVIDER)
-                .addPrivateKey(traditional, Security.getProvider("BC")).build();
-            return new JcaContentSignerBuilder(HYBRID_SIGN).setProvider("BC").build(key);
+                .addPrivateKey(ecKey, ecProvider).build();
+            return clearAfterSignature(new JcaContentSignerBuilder(pub.getAlgorithm()).setProvider("BC").build(key),backend);
         }
-        return new JcaContentSignerBuilder(PURE_SIGN).setProvider(ExternalMu.PROVIDER)
-            .build(new ExternalMu.TokenKey(pub, backend));
+        return clearAfterSignature(new JcaContentSignerBuilder(PURE_SIGN).setProvider(ExternalMu.PROVIDER)
+            .build(new ExternalMu.TokenKey(pub, backend)),backend);
+    }
+    private static ContentSigner clearAfterSignature(ContentSigner signer,ExternalMu.Backend backend){
+        return new ContentSigner(){
+            public AlgorithmIdentifier getAlgorithmIdentifier(){return signer.getAlgorithmIdentifier();}
+            public OutputStream getOutputStream(){return signer.getOutputStream();}
+            public byte[] getSignature(){try{return signer.getSignature();}finally{backend.clearSecrets();}}
+        };
     }
     public void save(Path file, char[] password) throws Exception {
         if (password.length < 12) throw new IllegalArgumentException("Use at least 12 characters for the identity password");
@@ -108,7 +135,7 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         var sc = (X509Certificate)ks.getCertificate("sign");
         if (sc == null) throw new GeneralSecurityException("Missing certificate alias 'sign'");
         String a = sc.getPublicKey().getAlgorithm();
-        if (!a.equalsIgnoreCase(PURE_SIGN) && !a.equalsIgnoreCase(HYBRID_SIGN))
+        if (!a.equalsIgnoreCase(PURE_SIGN) && !a.equalsIgnoreCase(HYBRID_SIGN) && !a.equalsIgnoreCase(HYBRID_RSA_SIGN))
             throw new GeneralSecurityException("Unsupported signing key: " + a);
         return new Identity(sc, (PrivateKey)ks.getKey("sign", password), (X509Certificate)ks.getCertificate("encrypt"),
             (PrivateKey)ks.getKey("encrypt", password), (PrivateKey)ks.getKey("traditional", password));

@@ -8,7 +8,7 @@ This is an experimental interoperability app, not a production mail client. A Be
 
 | Operation | Pure profile | Composite profile |
 |---|---|---|
-| Signing | ML-DSA-65 | MLDSA65-ECDSA-P256-SHA512 |
+| Signing | ML-DSA-65 | MLDSA65-ECDSA-P256-SHA512; token demo also MLDSA65-RSA3072-PSS-SHA512 |
 | Encryption KEM | ML-KEM-768 | MLKEM768-ECDH-P256-SHA3-256 |
 
 S/MIME opaque SignedData is optionally wrapped in AuthEnvelopedData. Encryption uses CMS KEMRecipientInfo, HKDF-SHA256, AES-256 key wrap and AES-256-GCM content encryption. Signing and encryption profiles can be selected independently through the sender identity and recipient certificate. Composite formats/OIDs follow the pinned Bouncy Castle revision below.
@@ -106,7 +106,7 @@ The earlier public SDK/source inspection did not include the installed Beta0 CLI
 **Hardware test completed on 2026-11-16:** an existing ML-DSA-65 key in a physical Beta0 YubiKey's slot 9c signed both pure ML-DSA-65 and composite MLDSA65-ECDSA-P256-SHA512 S/MIME messages via `ykman 6.0.0-beta.0 --mu`. Both local test certificates and both serialized `.eml` messages verified with Bouncy Castle. Certificate-only PKCS#12 identities were reloaded successfully with no ML-DSA private key present. The saved messages were independently re-opened and verified after the interactive run. No email was sent or token keys changed. Device identifiers, certificates, identity files, and hardware test artifacts are not included in the repository.
 
 
-50 local checks passed on macOS/Java 25: all four signing/encryption combinations; Unicode MIME bodies; AES-GCM tampering and wrong-recipient rejection; pure and composite external-μ signing; corruption of each composite signature component; PKCS#12 reload and wrong-password rejection; address mismatch handling; and an executable-adapter round trip. [Recorded core results](docs/TEST-RESULTS.txt). Additional tests cover two certificate-only token identity scenarios (pure/composite) and 22 adapter protocol, command, key-match, failure and cleanup cases across the ykman and PKCS#11 backends.
+50 local checks passed on macOS/Java 25: all four signing/encryption combinations; Unicode MIME bodies; AES-GCM tampering and wrong-recipient rejection; pure and composite external-μ signing; corruption of each composite signature component; PKCS#12 reload and wrong-password rejection; address mismatch handling; and an executable-adapter round trip. [Recorded core results](docs/TEST-RESULTS.txt). Additional tests cover pure and ECDSA/RSA composite token identities, certificate-only persistence, per-signature PIN cache cleanup and 30 adapter/provisioning, command, key-match, failure and cleanup cases across the ykman and PKCS#11 backends.
 
 The automated software tests do not use a YubiKey or send mail. The interactive hardware test produces a separate local `result.txt`; do not infer hardware success from a software test run. Live SMTP/IMAP, third-party mail client interoperability and a production security audit remain outstanding. SMTP requires STARTTLS (default 587); IMAP uses TLS (default 993). No OAuth account setup. The reader supports signed text/plain messages, optionally inside AuthEnvelopedData; it does not display ordinary unsigned mail, legacy EnvelopedData, HTML or attachments.
 
@@ -125,3 +125,5 @@ Generated certificates are local test identities, not publicly trusted credentia
 - `SelfTest.java`, `TokenIdentityTest.java`, `TestMuAdapter.java`, `tests/`: tests and software fixtures
 
 All Java sources are under `src/dev/hybridmail/`. Third-party source and binaries are not vendored; their own licenses apply. No project license has been selected yet.
+
+For hybrid signing with **ML-DSA-65 and RSA-3072 keys on the YubiKey**, use the [dual-token PKCS#11 demo](docs/PKCS11.md#both-hybrid-signing-keys-on-the-token). It uses slot 9c plus RSA-3072 in 9a, creates certificate-only local identities, and prompts for the YubiKey PIN in the app. Each composite signature reuses one PIN for both components and then clears it. Hardware validation passed on 2026-11-16 for pure ML-DSA-65 and MLDSA65-RSA3072-PSS-SHA512 through PKCS#11, with PIN-protected, no-touch keys. Both saved messages were independently verified.

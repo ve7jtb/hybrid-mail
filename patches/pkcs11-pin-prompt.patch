@@ -1,15 +1,37 @@
 diff --git a/src/session.c b/src/session.c
-index b3221b0..c031609 100644
+index b3221b0..f81d21d 100644
 --- a/src/session.c
 +++ b/src/session.c
-@@ -567,7 +567,9 @@ static CK_RV token_login(P11PROV_SESSION *session, P11PROV_URI *uri,
+@@ -567,7 +567,10 @@ static CK_RV token_login(P11PROV_SESSION *session, P11PROV_URI *uri,
          if (pin) {
              pinlen = strlen((const char *)pin);
          } else {
 -            if (pw_cb) {
 +            /* Hybrid Mail: use the native hidden PIN UI, not the generic
 +             * OpenSSL passphrase callback, for token authentication. */
-+            if (pw_cb && false) {
++            if (pw_cb && getenv("HYBRID_MAIL_PIN_STDIN")
++                && strcmp(getenv("HYBRID_MAIL_PIN_STDIN"), "1") == 0) {
                  const char *login_info = p11prov_slot_get_login_info(slot);
                  OSSL_PARAM params[2] = {
                      OSSL_PARAM_DEFN(OSSL_PASSPHRASE_PARAM_INFO,
+@@ -578,16 +581,10 @@ static CK_RV token_login(P11PROV_SESSION *session, P11PROV_URI *uri,
+                 ret = pw_cb(cb_pin, sizeof(cb_pin), &cb_pin_len, params,
+                             pw_cbarg);
+                 if (ret != RET_OSSL_OK) {
+-                    /* this error can mean anything from the user canceling
+-                     * the prompt to no UI method provided.
+-                     * Fall back to our prompt here */
+-                    ret = p11prov_session_prompt_for_pin(slot, (char *)cb_pin,
+-                                                         &cb_pin_len);
+-                    if (ret != RET_OSSL_OK) {
+-                        /* give up */
+-                        ret = CKR_GENERAL_ERROR;
+-                        goto done;
+-                    }
++                    /* App mode must never fall back to another PIN prompt. */
++                    ret = CKR_GENERAL_ERROR;
++                    goto done;
++
+                 }
+             } else {
+                 /* We are asking the user off-band for the user consent -- from

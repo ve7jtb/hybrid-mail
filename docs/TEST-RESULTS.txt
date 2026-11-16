@@ -49,3 +49,17 @@ PASS sender certificate mismatch rejected
 PASS recipient certificate mismatch rejected
 PASS external executable protocol round-trip
 SUCCESS: 50 checks; no mail sent, no hardware used.
+
+PKCS#11 RSA / app PIN extension, validated 2026-11-16
+PASS external ECDSA and RSA composite certificates and S/MIME in software fixtures
+PASS certificate-only PKCS12 round trip with no signing private keys
+PASS invalid external RSA/ECDSA component rejection
+PASS per-signature PIN reuse, mutable-cache overwrite, fresh next-operation prompt
+PASS signer secret cleanup on success and failure
+PASS 30 Python adapter/provisioning tests, including real OpenSSL RSA encoding regression
+PASS physical Beta0 ML-DSA-65 pure S/MIME via PR #818 PKCS#11 external mu
+PASS physical Beta0 MLDSA65-RSA3072-PSS-SHA512 composite S/MIME, both components via PKCS#11
+PASS both saved messages and certificates independently reopened and verified by BC
+PASS token metadata: 9c ML-DSA-65 and 9a RSA-3072, PIN always / touch never
+No email sent. Provisioning was a separate explicitly authorized operation.
+Private/local hardware artifacts and device identifiers are excluded from the repository.

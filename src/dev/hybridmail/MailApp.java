@@ -72,7 +72,7 @@ public final class MailApp extends JFrame {
         })); token.add(button("Use software signer",()->{adapter=null;tokenLabel.setText("Signing: software");})); p.add(token);
         p.add(new JLabel("Adapter receives public key + 64-byte μ. Returned signatures are verified before use."));
         p.add(Box.createVerticalStrut(12));
-        p.add(new JLabel("Beta0 ykman adapter: launch from Terminal for local PIN and touch prompts."));
+        p.add(new JLabel("PKCS#11: PIN dialog in app. ykman: launch from Terminal for PIN prompts."));
         p.add(Box.createVerticalStrut(24));
         p.add(new JLabel("Generated identities are local test identities. Exchange certificate fingerprints out of band."));
         p.add(new JLabel("Private keys stay local. Account passwords are not saved by this app."));
@@ -160,7 +160,7 @@ public final class MailApp extends JFrame {
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
                 MailApp app = new MailApp();
                 app.setIdentity(id); app.adapter = executable;
-                app.tokenLabel.setText((executable.contains("pkcs11") ? "PKCS#11" : "ykman") + " adapter · slot 9c · PIN/touch in Terminal");
+                app.tokenLabel.setText((executable.contains("pkcs11") ? "PKCS#11" : "ykman") + " adapter · " + (executable.contains("pkcs11") ? "PIN dialog + touch" : "PIN/touch in Terminal"));
                 app.pinnedSigner = id.signingCert(); app.pinLabel.setText("Pinned local Beta0 test signing certificate");
                 app.from.setText("beta0@example.test"); app.to.setText("recipient@example.test"); app.encrypt.setSelected(false);
                 app.showMessage(app.display(verifiedMail, id, id.signingCert()));

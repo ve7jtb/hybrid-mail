@@ -1,0 +1,17 @@
+.deps/
+build/
+dist/
+lib/
+*.jar
+*.app/
+.env
+*.p12
+*.pfx
+*.pk8
+*.pem
+*.key
+*.eml
+*.log
+.DS_Store
+.idea/
+.vscode/

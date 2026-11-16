@@ -1,0 +1,51 @@
+PASS S/MIME round-trip signing=0 encryption=0
+PASS AES-256-GCM on wire
+PASS wrong recipient rejected
+PASS modified GCM tag rejected
+PASS S/MIME round-trip signing=0 encryption=1
+PASS AES-256-GCM on wire
+PASS wrong recipient rejected
+PASS modified GCM tag rejected
+PASS S/MIME round-trip signing=1 encryption=0
+PASS AES-256-GCM on wire
+PASS wrong recipient rejected
+PASS modified GCM tag rejected
+PASS S/MIME round-trip signing=1 encryption=1
+PASS AES-256-GCM on wire
+PASS wrong recipient rejected
+PASS modified GCM tag rejected
+PASS external adapter receives 64-byte mu
+PASS external-mu S/MIME verified by BC profile=0
+PASS valid untrusted signer distinguished
+PASS located signature value
+PASS corrupted signature component rejected at offset 0
+PASS external adapter receives 64-byte mu
+PASS external identity has no ML-DSA private key profile=0
+PASS unsigned From spoof flagged
+PASS bad external signature rejected
+PASS located signed MIME payload
+PASS modified signed body rejected
+PASS PKCS12 profile=0
+PASS reloaded keys sign correctly profile=0
+PASS wrong PKCS12 password rejected
+PASS sender certificate mismatch rejected
+PASS recipient certificate mismatch rejected
+PASS external adapter receives 64-byte mu
+PASS external-mu S/MIME verified by BC profile=1
+PASS valid untrusted signer distinguished
+PASS located signature value
+PASS corrupted signature component rejected at offset 0
+PASS corrupted signature component rejected at offset 3309
+PASS external adapter receives 64-byte mu
+PASS external identity has no ML-DSA private key profile=1
+PASS unsigned From spoof flagged
+PASS bad external signature rejected
+PASS located signed MIME payload
+PASS modified signed body rejected
+PASS PKCS12 profile=1
+PASS reloaded keys sign correctly profile=1
+PASS wrong PKCS12 password rejected
+PASS sender certificate mismatch rejected
+PASS recipient certificate mismatch rejected
+PASS external executable protocol round-trip
+SUCCESS: 50 checks; no mail sent, no hardware used.

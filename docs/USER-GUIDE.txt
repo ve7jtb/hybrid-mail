@@ -1,0 +1,92 @@
+HYBRID MAIL — LOCAL DEVELOPMENT APP
+
+Launch
+  Run ./run.sh after building, or open dist/Hybrid Mail.app after packaging.
+  The packaged app includes its Java runtime.
+  The app is unsigned, intended for development on this Mac.
+
+Implemented profiles
+  Pure signature: ML-DSA-65
+  Composite signature: MLDSA65-ECDSA-P256-SHA512
+  Pure encryption KEM: ML-KEM-768
+  Composite encryption KEM: MLKEM768-ECDH-P256-SHA3-256
+  CMS KEMRecipientInfo: HKDF-SHA256 + AES-256 key wrap
+  Content encryption: AES-256-GCM, S/MIME AuthEnvelopedData
+  Opaque S/MIME SignedData with signed attributes, then optional encryption.
+  Signing and encryption profiles are independent; all four combinations tested.
+  Composite encodings/OIDs are those implemented by the pinned BC snapshot below.
+
+Try without a server
+  1. Keys & token → Create identity. Create Alice and Bob identities with their
+     email addresses and unique .p12 filenames. Choose Pure or Hybrid for each.
+  2. With Alice loaded, export her signing certificate. With Bob loaded, export
+     his encryption certificate. These are public .cer files, safe to exchange.
+  3. Load Alice. Import Bob's encryption certificate. Confirm its fingerprint
+     with Bob. Compose with matching From and To, then Save signed .eml.
+  4. Load Bob. Pin Alice's signing certificate after confirming its fingerprint.
+     Read & verify → Open .eml. The app authenticates/decrypts, checks the
+     signature, and distinguishes pinned versus untrusted signing certificates.
+  You can also send to yourself using one identity and its encryption certificate.
+  Signing only: uncheck Encrypt for recipient. Files are never overwritten.
+
+Mail transport
+  SMTP: authenticated submission with required STARTTLS, default port 587.
+  IMAP: TLS, default port 993; fetches the latest INBOX message read-only.
+  Server hostname checks and connection/read/write timeouts are enabled.
+  Account details/passwords are requested per operation and not saved.
+  These transport paths are implemented but have not been tested against a live
+  account. No email was sent during development. Password/app-password login only;
+  OAuth account setup is not implemented. SMTP implicit TLS/465 is not offered.
+
+Scope and trust
+  This is a text-only development app, not a production replacement for Thunderbird.
+  One To recipient; no attachments, HTML rendering, mailbox sync or address book.
+  20 MiB message limit. Only the two profiles above are selectable for sending.
+  Reader handles opaque or multipart signed text/plain content, optionally inside
+  AuthEnvelopedData. It does not read ordinary unsigned mail or legacy EnvelopedData.
+  Self-issued test certificates are generated for the two key roles, valid one year.
+  Trust uses exact signing-certificate pinning; no CA path building, OCSP or CRLs.
+  Certificate validity and key usage are checked. rfc822Name SAN binds addresses.
+  Outer From/To/Subject headers remain unsigned and unencrypted; the reader flags
+  a From/certificate mismatch. A valid signature is not automatically trusted.
+  Identities are encrypted PKCS#12 files with owner-only permissions. Loaded keys
+  remain in process memory until exit. Imported certs/pins are session-only.
+  Encryption private keys and the conventional half of hybrid signing are software
+  keys in this version. The token extension covers the ML-DSA signing half.
+  No third-party S/MIME client interoperability or production security audit yet.
+
+YubiKey / external mu
+  See docs/EXTERNAL-MU.txt. Both signature profiles have a tested external-mu backend.
+  The included executable fixture is SOFTWARE ONLY, not a token driver.
+  The public Yubico PIV SDK documentation supplied by the user was reviewed on
+  2026-11-16; it does not document ML-DSA or an external-mu operation. A vendor
+  extension/APDU specification is still needed to finish the physical token bridge.
+
+Build and test
+  See README.md for JDK/Maven prerequisites and dependency setup.
+  ./scripts/build-dependencies.sh
+  ./build.sh test
+  ./package.sh
+  Tests use ephemeral local identities and delete their keys afterward.
+  docs/TEST-RESULTS.txt records the run. Tests do not connect to a mail server.
+
+Source map
+  src/dev/hybridmail/MailApp.java       Native Swing UI and account dialogs
+  src/dev/hybridmail/MailEngine.java    S/MIME and SMTP/IMAP
+  src/dev/hybridmail/Identity.java      Certificates, PKCS#12, signer selection
+  src/dev/hybridmail/ExternalMu.java    Provider SPI and executable adapter
+  src/dev/hybridmail/TokenSetup.java    Certificate-only token identity utility
+  src/dev/hybridmail/SelfTest.java      Round-trip and negative tests
+  src/dev/hybridmail/TestMuAdapter.java Software-only subprocess test fixture
+
+Local stack provenance
+  Jakarta Mail API 2.2.0-SNAPSHOT: 09b27cf52b4b382c55cc8736858456f3aa43b369
+    https://github.com/ve7jtb/mail-api
+  Angus Mail 2.1.0-SNAPSHOT: d33de7563efdf5a3cb0691994500d6cad8aecafd
+    https://github.com/ve7jtb/angus-mail
+  Bouncy Castle 1.88-SNAPSHOT: 6b4f58259d2b3ee8301fda1d6c8798f816abc5ea
+    https://github.com/ve7jtb/bc-java
+  Jakarta Activation API 2.2.0-M2; Angus Activation 2.1.0-M1.
+  Library jars built/downloaded by the earlier local stack setup; copied into lib/.
+  Third-party license notices are retained inside their jars.
+  Source repository: https://github.com/ve7jtb/hybrid-mail

@@ -1,0 +1,71 @@
+EXTERNAL-MU SIGNER CONTRACT
+
+Java integration
+  ExternalMu.Backend.sign(PublicKey publicKey, byte[] mu) -> byte[] signature
+  publicKey is the ML-DSA-65 component key, never the composite SPKI.
+  mu is exactly 64 bytes; return the 3309-byte raw ML-DSA-65 signature.
+  Throw on cancellation, authentication failure, timeout, or unsupported algorithm.
+  Never fall back to software signing if the token call fails.
+
+The host computes mu with BC MLDSASigner initialized from the public key and the
+appropriate context. Pure CMS signing uses the empty ML-DSA context. Composite
+signing uses BC's composite Signature implementation, which builds the domain-
+separated composite representative and supplies its ML-DSA label as the context.
+This avoids a second handwritten implementation of composite serialization.
+The adapter must sign the supplied mu directly, NOT hash it or call ordinary
+message-signing on it. This is pure ML-DSA with external mu, not HashML-DSA.
+The host verifies every returned signature against the exact mu and public key.
+It also verifies the complete outgoing CMS signature before encryption/sending.
+
+Executable integration (available in Keys & token)
+  Select an executable by absolute path. It is spawned directly, without a shell
+  or command-line arguments. Use a wrapper executable for fixed device/slot config.
+  stdin: exactly three newline-terminated ASCII lines, followed by EOF:
+    ML-DSA-65
+    <base64 DER SubjectPublicKeyInfo for the ML-DSA component>
+    <base64 64-byte mu>
+  stdout: one base64 raw signature, optionally followed by a newline. No logging.
+  Exit 0 for success; nonzero for failure. 60-second operation timeout.
+  stdout capped at 16 KiB; stderr is discarded to avoid exposing SDK/PIN diagnostics.
+  Select only your own trusted adapter; selecting it authorizes local execution.
+  PIN/touch UI belongs in the adapter, not stdin (stdin carries the protocol).
+  Do not pass a PIN through arguments or environment variables. Cancel rather than
+  automatically retrying a bad PIN. Validate the device key matches the supplied SPKI.
+  A malicious host can request arbitrary signatures through mu; token touch/PIN
+  authenticates the operation, not a trustworthy on-token display of the mail body.
+
+Token identity setup
+  Do NOT create a software ML-DSA private key for a real token identity. Obtain a
+  signing certificate for the token's public key (or a composite public key whose
+  first component is that token key). Its email must be in rfc822Name SAN.
+  For pure signing, create a certificate-only .p12 with:
+    # Set JAVA_HOME and build dependencies/app as described in README.md.
+    java -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.TokenSetup signing.cer token.p12
+  For composite signing, also supply an existing PKCS#12 holding the corresponding
+  conventional ECDSA P-256 private key and its alias:
+    java -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.TokenSetup composite-signing.cer token.p12 traditional.p12 your-alias
+  Passwords are prompted in the terminal. No ML-DSA private key is stored.
+  Load token.p12 in the app, then choose the adapter executable.
+  Such a token signing identity has no encryption key; it can send encrypted mail
+  to imported recipient certificates but cannot decrypt received mail. Load a
+  separate software recipient identity to decrypt. A deployment can provision
+  aliases 'sign', 'traditional', and 'encrypt' together in a PKCS#12 if needed.
+
+Yubico SDK mapping and remaining dependency
+  User-provided API:
+    https://docs.yubico.com/yesdk/yubikey-api/Yubico.YubiKey.Piv.html
+  Algorithm inventory:
+    https://docs.yubico.com/yesdk/yubikey-api/Yubico.YubiKey.Piv.PivAlgorithm.html
+  PivSession API:
+    https://docs.yubico.com/yesdk/yubikey-api/Yubico.YubiKey.Piv.PivSession.html
+  Reviewed 2026-11-16. The published PivAlgorithm enum has no ML-DSA value; the
+  documented Sign method covers conventional digest signing, not external mu.
+  A .NET helper can use the SDK's device selection, PivSession and KeyCollector
+  lifecycle, but its actual ML-DSA external-mu call needs the appropriate firmware/
+  SDK extension or APDU spec. No algorithm code, APDU, or nonexistent SDK method
+  has been guessed here. No PIV key generation, reset or PIN attempts were made.
+
+Testing
+  SelfTest exercises pure and composite external mu in-process and the exact
+  executable protocol with TestMuAdapter. All signatures are verified using BC's
+  ordinary verifier. TestMuAdapter is a software fixture, not a YubiKey adapter.

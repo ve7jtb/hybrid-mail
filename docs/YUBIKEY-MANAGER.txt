@@ -1,0 +1,29 @@
+YUBIKEY MANAGER SOURCE INSPECTION — 2026-11-16
+
+Repository: https://github.com/Yubico/yubikey-manager
+Inspected main at: 4ca60f706af930459138d8dc0f0f953480e1c7a4
+Primary file:
+https://github.com/Yubico/yubikey-manager/blob/4ca60f706af930459138d8dc0f0f953480e1c7a4/yubikit/piv.py
+
+The public PIV KEY_TYPE enum supports RSA 1024/2048/3072/4096, ECDSA P-256/P-384,
+Ed25519 and X25519. No ML-DSA or ML-KEM type is defined there.
+
+PivSession.sign validates the KEY_TYPE, formats the input with _pad_message, then
+uses _use_private_key. Conventional prehashed input is supported through Python
+cryptography's Prehashed utility. That does not provide ML-DSA's external-mu mode.
+
+The private helper sends a GENERAL AUTHENTICATE operation with a dynamic
+ authentication template and parses the returned response. It is useful evidence
+for how the existing PIV transport works, not a specification for future ML-DSA
+firmware. Private underscored APIs are not stable public integration interfaces.
+
+Potential integration: a Python executable using yubikey-manager for device
+selection, smart-card connection and PIN handling can implement this app's
+three-line stdin / base64-signature stdout adapter protocol. The ML-DSA command
+still needs an authoritative algorithm identifier, slot/key metadata rules,
+APDU input/output encoding (including long responses), and confirmation that the
+64-byte input is external mu rather than a message or a conventional prehash.
+No identifier or APDU extension has been invented, and no token state was changed.
+
+This inspection covers the public main revision above, not private or unreleased
+Yubico firmware/branches. A prototype-specific implementation could differ.

@@ -1,0 +1,12 @@
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")"
+if [[ -n "${JAVA_HOME:-}" ]]; then export PATH="$JAVA_HOME/bin:$PATH"; fi
+command -v javac >/dev/null || { echo 'Install JDK 25 and set JAVA_HOME.' >&2; exit 1; }
+[[ -f lib/bcprov-jdk18on-1.88-SNAPSHOT.jar ]] || { echo 'Run ./scripts/build-dependencies.sh first.' >&2; exit 1; }
+mkdir -p build/classes
+javac -encoding UTF-8 -cp 'lib/*' -d build/classes src/dev/hybridmail/*.java
+jar --create --file build/hybrid-mail.jar --main-class dev.hybridmail.MailApp -C build/classes .
+if [[ "${1:-}" == test ]]; then
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.SelfTest
+fi

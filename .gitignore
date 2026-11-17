@@ -28,3 +28,10 @@ Setup No Touch RSA Demo.command
 
 Run KEM PKCS11 Test.command
 Setup KEM Demo.command
+
+*.cer
+*.der
+google-client.json
+client_secret*.json
+settings.properties
+identities/

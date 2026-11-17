@@ -110,33 +110,31 @@ public final class MailEngine {
         return new Opened((String)body.getContent(), encrypted, cert.getPublicKey().getAlgorithm(), fp, trusted, matches);
     }
     public static void send(MimeMessage m, String host, int port, String user, String password) throws Exception {
-        Properties p = networkProperties("smtp");
+        send(m,host,port,user,password,false);
+    }
+    public static void send(MimeMessage m,String host,int port,String user,String credential,boolean oauth)throws Exception {
+        Properties p = networkProperties("smtp",oauth);
         p.setProperty("mail.smtp.starttls.enable", "true"); p.setProperty("mail.smtp.starttls.required", "true");
         p.setProperty("mail.smtp.auth", "true");
         Session session = Session.getInstance(p);
-        try (Transport t = session.getTransport("smtp")) { t.connect(host, port, user, password); t.sendMessage(m, m.getAllRecipients()); }
+        try (Transport t = session.getTransport("smtp")) { t.connect(host, port, user, credential); t.sendMessage(m, m.getAllRecipients()); }
     }
-    public static MimeMessage fetchLatest(String host, int port, String user, String password) throws Exception {
-        Session s = Session.getInstance(networkProperties("imaps"));
-        try (Store store = s.getStore("imaps")) {
-            store.connect(host, port, user, password);
-            Folder inbox = store.getFolder("INBOX"); inbox.open(Folder.READ_ONLY);
-            try {
-                if (inbox.getMessageCount() == 0) throw new IOException("Inbox is empty");
-                Message m = inbox.getMessage(inbox.getMessageCount());
-                if (m.getSizeLong() > MAX_MESSAGE) throw new IOException("Message too large");
-                ByteArrayOutputStream out = new ByteArrayOutputStream() {
-                    public synchronized void write(byte[] b, int o, int l) { if (count + l > MAX_MESSAGE) throw new IllegalStateException("Message too large"); super.write(b,o,l); }
-                    public synchronized void write(int b) { if (count >= MAX_MESSAGE) throw new IllegalStateException("Message too large"); super.write(b); }
-                };
-                m.writeTo(out); return parse(out.toByteArray());
-            } finally { inbox.close(false); }
+    public static MimeMessage fetchLatest(String host,int port,String user,String password)throws Exception {
+        try(ImapInbox inbox=ImapInbox.connect(host,port,user,password,false)){
+            var entries=inbox.latest();if(entries.isEmpty())throw new IOException("Inbox is empty");return inbox.message(entries.getFirst().uid());
         }
     }
-    private static Properties networkProperties(String protocol) {
+    static Properties networkProperties(String protocol,boolean oauth) {
         Properties p = new Properties(); String prefix = "mail." + protocol + ".";
         p.setProperty(prefix + "ssl.checkserveridentity", "true");
         p.setProperty(prefix + "connectiontimeout", "15000"); p.setProperty(prefix + "timeout", "30000"); p.setProperty(prefix + "writetimeout", "30000");
+        if(protocol.equals("imaps"))p.setProperty(prefix+"peek","true");
+        if(oauth){
+            p.setProperty(prefix+"auth.mechanisms","XOAUTH2");
+            p.setProperty(prefix+"auth.xoauth2.disable","false");
+            p.setProperty(prefix+"auth.login.disable","true");
+            p.setProperty(prefix+"auth.plain.disable","true");
+        }
         return p;
     }
 }

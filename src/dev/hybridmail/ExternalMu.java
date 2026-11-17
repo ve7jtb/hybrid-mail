@@ -166,7 +166,7 @@ public final class ExternalMu {
         private synchronized byte[] call(String algorithm,PublicKey pub,byte[] input)throws Exception{
             boolean appPin=java.nio.file.Path.of(executable).getFileName().toString().equals("pkcs11-mu.py");
             try{
-                return invoke(executable,algorithm,pub,input,appPin?pinCache.copy(()->TokenPin.request(algorithm)):null);
+                return invoke(executable,algorithm,pub,input,appPin?pinCache.copy(()->{TokenPresence.require(executable);return TokenPin.request(algorithm);}):null);
             }catch(Exception e){clearSecrets();throw e;}
         }
         public byte[] sign(PublicKey pub,byte[] mu)throws Exception{return call("ML-DSA-65",pub,mu);}
@@ -178,7 +178,7 @@ public final class ExternalMu {
     }
     static byte[] invoke(String executable,String algorithm,PublicKey publicKey,byte[] mu,char[] pin,boolean rawOutput) throws Exception {
             boolean pinDialog=pin!=null;
-            ProcessBuilder builder=new ProcessBuilder(executable).redirectError(pinDialog?ProcessBuilder.Redirect.PIPE:ProcessBuilder.Redirect.DISCARD);
+            ProcessBuilder builder=DesktopState.process(executable).redirectError(pinDialog?ProcessBuilder.Redirect.PIPE:ProcessBuilder.Redirect.DISCARD);
             if(pinDialog)builder.environment().put("HYBRID_MAIL_PIN_STDIN","1");
             Process p;
             try { p=builder.start(); } catch(Exception e){if(pin!=null)Arrays.fill(pin,'\0');throw e;}

@@ -79,3 +79,22 @@ PASS both saved encrypted messages reopened, authenticated and signature-verifie
 PASS separate inspection of saved certificates, KEMRecipientInfo profiles, AES-256-GCM, and expected recovered test bodies
 Encryption keys: 9d ML-KEM-768, 82 ECDH P-256; PIN always / touch never.
 Signing keys in 9a/9c unchanged. No email sent. Hardware artifacts stay local.
+
+Desktop / inbox / OAuth software validation (2026-11-16)
+- Public-only identity restore, software PKCS12 restore/wrong-password rejection,
+  PEM round trip, saved device configuration and certificate pins: PASS.
+- Certificate email reissue updates both SANs and preserves both keys: PASS.
+- Inbox 0/1/9/10/25 messages, ten-item cap, newest-first order, no eager bodies,
+  UID selection after expunge and UIDVALIDITY change rejection: PASS.
+- PKCE RFC7636 S256 vector, callback state/duplicate rejection, consent denial,
+  token scope/expiry handling and local sign-out: PASS.
+- Real loopback HTTP callback with mismatched state then denial: PASS.
+- Google authorization/token endpoints are fixed; imported redirect URLs ignored.
+- Unsigned text explicitly labelled, S/MIME not downgraded to plain preview: PASS.
+- macOS app launch without Terminal and saved token identity restore: PASS.
+- Bundled OpenSSL launch with minimal PATH and ad-hoc signature verification: PASS.
+Live Gmail OAuth, IMAP and SMTP remain untested pending user client configuration.
+No test emails were sent.
+- Token presence: absent/wrong/matching serial and enumeration errors, cleanup,
+  insertion Retry/Cancel and no prompt on module errors: PASS.
+  Python adapter/provisioning test total is now 40.

@@ -1,6 +1,6 @@
 # Hybrid Mail
 
-A native Java desktop development app for post-quantum S/MIME, built with Jakarta Mail, Eclipse Angus Mail and Bouncy Castle. Compose text messages, save/open `.eml`, sign and verify, encrypt and decrypt, send with SMTP, and fetch the latest message over IMAP.
+A native Java desktop development app for post-quantum S/MIME, built with Jakarta Mail, Eclipse Angus Mail and Bouncy Castle. Compose text messages, save/open `.eml`, sign and verify, encrypt and decrypt, send with SMTP, and browse the 10 most recent inbox messages over IMAP.
 
 This is an experimental interoperability app, not a production mail client. A Beta0 ykman external-μ adapter is included. It uses an existing ML-DSA-65 key in PIV slot `9c`, with PIN entry handled directly by ykman in Terminal. Both pure and composite S/MIME signing have been verified with a physical Beta0 key; see the validation section below.
 
@@ -13,7 +13,7 @@ This is an experimental interoperability app, not a production mail client. A Be
 
 S/MIME opaque SignedData is optionally wrapped in AuthEnvelopedData. Encryption uses CMS KEMRecipientInfo, HKDF-SHA256, AES-256 key wrap and AES-256-GCM content encryption. Signing and encryption profiles can be selected independently through the sender identity and recipient certificate. Composite formats/OIDs follow the pinned Bouncy Castle revision below.
 
-Both signing profiles can send the ML-DSA component through an external-μ adapter. Bouncy Castle handles composite domain separation and signature assembly. The app verifies the adapter's returned signature and the complete outgoing signature before use. The conventional signing component and encryption keys remain in software.
+Both signing profiles can send the ML-DSA component through an external-μ adapter. Bouncy Castle handles composite domain separation and signature assembly. The app verifies the adapter's returned signature and the complete outgoing signature before use. The PKCS#11 backend supports both composite signing components and both hybrid decryption components on the token.
 
 ## Build from source
 
@@ -30,7 +30,7 @@ mvn -version
 ./run.sh
 ```
 
-The repository is private; cloning requires your GitHub credentials or an authorized SSH remote. The dependency forks are fetched at exact revisions, not floating branch heads:
+The repository and dependency forks are public. The dependency forks are fetched at exact revisions, not floating branch heads:
 
 | Repository | Revision |
 |---|---|
@@ -55,7 +55,9 @@ Subsequent app-only builds need no network:
 ./package.sh
 ```
 
-On macOS this produces `dist/Hybrid Mail.app` with its Java runtime. On Linux `jpackage` produces a platform-specific app image. Packaging must run on the target platform. Move an older generated image out of `dist/` before rerunning; the script does not overwrite it. The image is not signed with a distribution identity or notarized. Generated binaries are excluded from Git.
+On macOS this produces `dist/Hybrid Mail.app` with Java, OpenSSL and the locally built PKCS#11 modules. Build the native modules first using `scripts/build-pkcs11.sh`; set `HYBRID_OPENSSL_ROOT` if OpenSSL is not under `/opt/homebrew/opt/openssl@3`. Python 3 must exist on the target Mac (default `/usr/bin/python3`, configurable in the app). `HYBRID_MAIL_PACKAGE_DIR` selects an alternate output directory. Existing app images are not overwritten. The image is ad-hoc signed for local use, not notarized for public distribution.
+
+Open the app from Finder. Use **Keys & token → YubiKey configuration** to save the serial and slot assignments. Certificate-only identities restore without an identity password; software identities retain their PKCS#12 encryption and require their password. PINs and mail account passwords are never saved. [Desktop and Gmail setup](docs/DESKTOP.md).
 
 ## Local demonstration
 
@@ -65,7 +67,7 @@ On macOS this produces `dist/Hybrid Mail.app` with its Java runtime. On Linux `j
 4. Compose with matching From/To addresses. Leave encryption enabled and save an `.eml` file.
 5. Load Bob, pin Alice's signing certificate, and open the message in **Read & verify**.
 
-You can also send to yourself with one identity and its own encryption certificate. Uncheck encryption to produce a signed-only message. Existing files are not overwritten. Certificates and pins are session-only.
+You can also send to yourself with one identity and its own encryption certificate. Uncheck encryption to produce a signed-only message. Existing files are not overwritten. Identities, certificate pins and non-secret settings are saved locally.
 
 See [user guide](docs/USER-GUIDE.txt) for transport and scope details, and [external-μ integration](docs/EXTERNAL-MU.txt) for the executable protocol and certificate-only token identity setup.
 
@@ -106,9 +108,9 @@ The earlier public SDK/source inspection did not include the installed Beta0 CLI
 **Hardware test completed on 2026-11-16:** an existing ML-DSA-65 key in a physical Beta0 YubiKey's slot 9c signed both pure ML-DSA-65 and composite MLDSA65-ECDSA-P256-SHA512 S/MIME messages via `ykman 6.0.0-beta.0 --mu`. Both local test certificates and both serialized `.eml` messages verified with Bouncy Castle. Certificate-only PKCS#12 identities were reloaded successfully with no ML-DSA private key present. The saved messages were independently re-opened and verified after the interactive run. No email was sent or token keys changed. Device identifiers, certificates, identity files, and hardware test artifacts are not included in the repository.
 
 
-50 local checks passed on macOS/Java 25: all four signing/encryption combinations; Unicode MIME bodies; AES-GCM tampering and wrong-recipient rejection; pure and composite external-μ signing; corruption of each composite signature component; PKCS#12 reload and wrong-password rejection; address mismatch handling; and an executable-adapter round trip. [Recorded core results](docs/TEST-RESULTS.txt). Additional tests cover pure and ECDSA/RSA composite token identities, certificate-only persistence, per-signature PIN cache cleanup and 38 adapter/provisioning, command, key-match, failure and cleanup cases across the ykman and PKCS#11 backends.
+50 local checks passed on macOS/Java 25: all four signing/encryption combinations; Unicode MIME bodies; AES-GCM tampering and wrong-recipient rejection; pure and composite external-μ signing; corruption of each composite signature component; PKCS#12 reload and wrong-password rejection; address mismatch handling; and an executable-adapter round trip. [Recorded core results](docs/TEST-RESULTS.txt). Additional tests cover pure and ECDSA/RSA composite token identities, certificate-only persistence, per-signature PIN cache cleanup and 40 adapter/provisioning, command, key-match, failure and cleanup cases across the ykman and PKCS#11 backends.
 
-The automated software tests do not use a YubiKey or send mail. The interactive hardware test produces a separate local `result.txt`; do not infer hardware success from a software test run. Live SMTP/IMAP, third-party mail client interoperability and a production security audit remain outstanding. SMTP requires STARTTLS (default 587); IMAP uses TLS (default 993). No OAuth account setup. The reader supports signed text/plain messages, optionally inside AuthEnvelopedData; it does not display ordinary unsigned mail, legacy EnvelopedData, HTML or attachments.
+The automated software tests do not use a YubiKey or send mail. The interactive hardware test produces a separate local `result.txt`; do not infer hardware success from a software test run. Live Gmail OAuth/SMTP/IMAP, third-party mail client interoperability and a production security audit remain outstanding. SMTP requires STARTTLS (default 587); IMAP uses TLS (default 993). Google Desktop OAuth is supported for Gmail IMAP and SMTP; import your own Desktop OAuth client JSON. The reader supports signed text/plain messages, optionally inside AuthEnvelopedData; ordinary plain-text mail is shown explicitly as unsigned. Legacy EnvelopedData, rendered HTML and attachments remain unsupported.
 
 Generated certificates are local test identities, not publicly trusted credentials. Trust uses exact certificate pinning, validity and key-usage checks; no CA chain building or revocation checking. Outer From/To/Subject headers are not signed or encrypted. The UI distinguishes signature validity from pin trust and flags a From/certificate mismatch. Passwords are not persisted; loaded keys remain in process memory until exit.
 
@@ -131,3 +133,11 @@ For hybrid signing with **ML-DSA-65 and RSA-3072 keys on the YubiKey**, use the 
 ## Token-backed S/MIME decryption
 
 Pure ML-KEM-768 and hybrid MLKEM768-ECDH-P256-SHA3-256 decryption are available through PKCS#11, using separate token keys and one app PIN per message. Encryption uses the recipient’s public certificate on the host. See [build, provisioning, demo and app instructions](docs/PKCS11-KEM.md). Hardware validation passed on 2026-11-16 for both profiles: saved messages were reopened, token-decrypted, AES-GCM authenticated and signature-verified. Signing slots remained unchanged.
+
+## Inbox and Google account
+
+The **Inbox** tab lists the ten most recent arrivals, newest first, using a read-only IMAP folder. Refresh updates headers; double-click a row or choose **Open selected message** to fetch its body. Message UIDs preserve the selection when another client removes messages. The reader never fetches remote images or renders HTML. S/MIME verification/decryption failures are not downgraded to unsigned content.
+
+For Gmail, import a Google **Desktop app** client JSON and choose **Sign in with Google**. Authorization uses the system browser, a loopback callback, state verification and S256 PKCE. **Connect Gmail** uses IMAP TLS/XOAUTH2; **Send via SMTP → Google OAuth** uses STARTTLS/XOAUTH2. Tokens remain in memory until sign-out/exit and require sign-in again after expiration. There is no background refresh or persistent token storage. Other servers can use password authentication; only host, port and username persist. No network connection is made on startup.
+
+Public demonstration certificates are published separately at [hybrid-mail-test-certificates](https://github.com/ve7jtb/hybrid-mail-test-certificates). User certificate files, identities, Google client JSON and device identifiers are not bundled in this source repository.

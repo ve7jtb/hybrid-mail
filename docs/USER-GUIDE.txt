@@ -2,12 +2,13 @@ HYBRID MAIL — LOCAL DEVELOPMENT APP
 
 Launch
   Run ./run.sh after building, or open dist/Hybrid Mail.app after packaging.
-  The packaged app includes its Java runtime.
-  The app is unsigned, intended for development on this Mac.
+  The packaged app includes Java, OpenSSL and the built PKCS#11 modules.
+  It is ad-hoc signed for local testing, not notarized. Python 3 must be installed.
+  See docs/DESKTOP.md for saved identities, inbox and Google OAuth setup.
 
 Implemented profiles
   Pure signature: ML-DSA-65
-  Composite signature: MLDSA65-ECDSA-P256-SHA512
+  Composite signatures: MLDSA65-ECDSA-P256-SHA512 and MLDSA65-RSA3072-PSS-SHA512
   Pure encryption KEM: ML-KEM-768
   Composite encryption KEM: MLKEM768-ECDH-P256-SHA3-256
   CMS KEMRecipientInfo: HKDF-SHA256 + AES-256 key wrap
@@ -20,7 +21,7 @@ Try without a server
   1. Keys & token → Create identity. Create Alice and Bob identities with their
      email addresses and unique .p12 filenames. Choose Pure or Hybrid for each.
   2. With Alice loaded, export her signing certificate. With Bob loaded, export
-     his encryption certificate. These are public .cer files, safe to exchange.
+     his encryption certificate. Choose .cer for DER or .pem for PEM; both contain public certificates.
   3. Load Alice. Import Bob's encryption certificate. Confirm its fingerprint
      with Bob. Compose with matching From and To, then Save signed .eml.
   4. Load Bob. Pin Alice's signing certificate after confirming its fingerprint.
@@ -31,28 +32,30 @@ Try without a server
 
 Mail transport
   SMTP: authenticated submission with required STARTTLS, default port 587.
-  IMAP: TLS, default port 993; fetches the latest INBOX message read-only.
+  IMAP: TLS, default port 993; lists ten newest INBOX arrivals read-only.
+  Double-click a row to fetch its body; refresh updates headers.
   Server hostname checks and connection/read/write timeouts are enabled.
-  Account details/passwords are requested per operation and not saved.
+  Host, port and username are saved; account passwords are not saved.
   These transport paths are implemented but have not been tested against a live
-  account. No email was sent during development. Password/app-password login only;
-  OAuth account setup is not implemented. SMTP implicit TLS/465 is not offered.
+  account. No email was sent during development. Password and Google Desktop OAuth
+  authentication are supported. SMTP implicit TLS/465 is not offered.
 
 Scope and trust
   This is a text-only development app, not a production replacement for Thunderbird.
   One To recipient; no attachments, HTML rendering, mailbox sync or address book.
   20 MiB message limit. Only the two profiles above are selectable for sending.
   Reader handles opaque or multipart signed text/plain content, optionally inside
-  AuthEnvelopedData. It does not read ordinary unsigned mail or legacy EnvelopedData.
+  AuthEnvelopedData. Ordinary text mail is labelled unsigned; legacy EnvelopedData is unsupported.
   Self-issued test certificates are generated for the two key roles, valid one year.
   Trust uses exact signing-certificate pinning; no CA path building, OCSP or CRLs.
   Certificate validity and key usage are checked. rfc822Name SAN binds addresses.
   Outer From/To/Subject headers remain unsigned and unencrypted; the reader flags
   a From/certificate mismatch. A valid signature is not automatically trusted.
-  Identities are encrypted PKCS#12 files with owner-only permissions. Loaded keys
-  remain in process memory until exit. Imported certs/pins are session-only.
-  Encryption private keys and the conventional half of hybrid signing are software
-  keys in this version. The token extension covers the ML-DSA signing half.
+  Software identities retain encrypted PKCS#12 files with owner-only permissions.
+  Token identities store only public certificates. Identities, pins and token
+  configuration persist in Application Support. Both components of hybrid
+  signing and decryption can use the YubiKey through PKCS#11. PINs are temporary.
+  Google OAuth tokens remain in memory until sign-out/exit or expiry.
   No third-party S/MIME client interoperability or production security audit yet.
 
 YubiKey / external mu
@@ -66,6 +69,7 @@ Build and test
   See README.md for JDK/Maven prerequisites and dependency setup.
   ./scripts/build-dependencies.sh
   ./build.sh test
+  ./scripts/build-pkcs11.sh
   ./package.sh
   Tests use ephemeral local identities and delete their keys afterward.
   docs/TEST-RESULTS.txt records the run. Tests do not connect to a mail server.

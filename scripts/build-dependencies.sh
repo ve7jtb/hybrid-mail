@@ -32,7 +32,7 @@ maven -DskipTests -Dmail-api.version=2.2.0-SNAPSHOT -f "$DEPS/repos/angus-mail/p
 echo 'Building Bouncy Castle (log: bc-build.log)…'
 (cd "$DEPS/repos/bc-java" && ./gradlew --no-daemon --max-workers=4 :prov:jar :util:jar :pkix:jar :jmail:jar) > "$DEPS/logs/bc-build.log" 2>&1
 # Resolve the two activation jars explicitly, rather than rely on incidental transitive versions.
-for artifact in jakarta.activation:jakarta.activation-api:2.2.0-M2 org.eclipse.angus:angus-activation:2.1.0-M1; do
+for artifact in jakarta.activation:jakarta.activation-api:2.2.0-M2 org.eclipse.angus:angus-activation:2.1.0-M1 com.google.code.gson:gson:2.13.2; do
   maven org.apache.maven.plugins:maven-dependency-plugin:3.8.1:get "-Dartifact=$artifact" -Dtransitive=false
  done
 cp "$DEPS/repos/mail-api/api/target/jakarta.mail-api-2.2.0-SNAPSHOT.jar" "$ROOT/lib/"
@@ -42,4 +42,5 @@ for module in prov util pkix jmail; do
 done
 cp "$M2/jakarta/activation/jakarta.activation-api/2.2.0-M2/jakarta.activation-api-2.2.0-M2.jar" "$ROOT/lib/"
 cp "$M2/org/eclipse/angus/angus-activation/2.1.0-M1/angus-activation-2.1.0-M1.jar" "$ROOT/lib/"
+cp "$M2/com/google/code/gson/gson/2.13.2/gson-2.13.2.jar" "$ROOT/lib/"
 echo "Dependencies ready in $ROOT/lib. Logs: $DEPS/logs"

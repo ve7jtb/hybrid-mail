@@ -1,0 +1,24 @@
+Hybrid Mail third-party components
+
+Java runtime: Eclipse Temurin/OpenJDK (GPLv2 with Classpath Exception).
+Runtime license and legal files are retained in the packaged Java runtime.
+
+Jakarta Mail API: Eclipse Foundation, EPL-2.0 / GPL-2.0 with Classpath Exception.
+Eclipse Angus Mail and Activation: Eclipse Foundation, EPL-2.0 / GPL-2.0 with
+Classpath Exception. Jakarta Activation API uses its upstream licensing.
+Bouncy Castle: The Legion of the Bouncy Castle Inc., MIT-style license.
+Gson 2.13.2: Google, Apache-2.0.
+The original Java archives retain their META-INF notices/licenses.
+
+OpenSSL: OpenSSL project, Apache-2.0. OpenSSL-LICENSE.txt accompanies the bundle.
+pkcs11-provider: https://github.com/joostd/pkcs11-provider
+  Apache-2.0; revision and local patch recorded in docs/PKCS11.md.
+Yubico Rust PKCS#11 module: https://github.com/Yubico/yubico-pkcs11
+  Apache-2.0 with additional notices in its OASIS PKCS#11 headers.
+  Revision and local patch recorded in docs/PKCS11.md.
+  Built Rust dependencies retain their upstream licenses; see its Cargo.lock.
+
+The locally packaged native provider is modified for app PIN callbacks;
+the Yubico module is modified for certificate-independent EC key metadata.
+These patches are distributed with the source repository under patches/.
+Python 3 is supplied by the Mac's existing installation, not bundled.

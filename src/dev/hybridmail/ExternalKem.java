@@ -37,7 +37,7 @@ public final class ExternalKem {
         public void clearSecrets(){pin.clear();}
         private byte[] invoke(String algorithm,PublicKey key,byte[] input)throws Exception{
             try{
-                byte[] secret=ExternalMu.invoke(path,algorithm,key,input,pin.copy(()->TokenPin.request("S/MIME decryption")),true);
+                byte[] secret=ExternalMu.invoke(path,algorithm,key,input,pin.copy(()->{TokenPresence.require(path);return TokenPin.request("S/MIME decryption");}),true);
                 if(secret.length!=32){Arrays.fill(secret,(byte)0);throw new GeneralSecurityException("Invalid token shared-secret length");}
                 return secret;
             }catch(Exception e){clearSecrets();throw e;}

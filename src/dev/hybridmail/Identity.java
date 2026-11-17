@@ -114,6 +114,15 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
             public byte[] getSignature(){try{return signer.getSignature();}finally{backend.clearSecrets();}}
         };
     }
+    /** Reissue local demo certificates for the same keys and a new mailbox address. */
+    public Identity reissue(String email,ExternalMu.Backend backend)throws Exception{
+        new jakarta.mail.internet.InternetAddress(email,true).validate();
+        X509Certificate signing=cert(email,signingCert.getPublicKey(),signer(backend),true);
+        signing.verify(signingCert.getPublicKey(),"BC");
+        X509Certificate encryption=encryptionCert==null?null:cert(email,encryptionCert.getPublicKey(),signer(backend),false);
+        if(encryption!=null)encryption.verify(signing.getPublicKey(),"BC");
+        return new Identity(signing,signingKey,encryption,encryptionKey,traditionalKey);
+    }
     public Identity withTokenEncryption(String email,PublicKey key,ExternalMu.Backend signingBackend)throws Exception{
         ExternalKem.validatePublicKey(key);
         X509Certificate certificate=cert(email,key,signer(signingBackend),false);

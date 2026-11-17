@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['src/**', 'adapters/**', 'native-src/**', 'patches/**', 'scripts/**', '.github/workflows/windows-installers.yml']
+    paths: ['src/**', 'adapters/**', 'native-src/**', 'patches/**', 'scripts/**', 'assets/**', '.github/workflows/windows-installers.yml']
 permissions:
   contents: read
 jobs:
@@ -67,7 +67,7 @@ jobs:
           Copy-Item native-src/provision/target/release/hybrid-mail-provision.exe build/native/
           cl /O2 native-src/credentials-win.c /Fe:build/native/hybrid-mail-credentials.exe advapi32.lib
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          git clone https://github.com/Yubico/yubico-pkcs11.git .deps/ykcs11
+          git clone --config core.autocrlf=false https://github.com/Yubico/yubico-pkcs11.git .deps/ykcs11
           git -C .deps/ykcs11 checkout c28419969d0ac2ead2e94065b77ebbd281cc52de
           git -C .deps/ykcs11 apply "$PWD/patches/ykcs11-ec-metadata.patch"
           cargo build --locked --release --manifest-path .deps/ykcs11/Cargo.toml -p ykcs11
@@ -90,7 +90,7 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          git clone https://github.com/joostd/pkcs11-provider.git .deps/provider
+          git clone --config core.autocrlf=false https://github.com/joostd/pkcs11-provider.git .deps/provider
           git -C .deps/provider checkout 8e01f28b98bb0543a9d5600ebd9e061edb21de53
           git -C .deps/provider apply "$PWD/patches/pkcs11-pin-prompt.patch"
           meson setup .deps/provider/build .deps/provider -Dbuild_info=HybridMail-PR818

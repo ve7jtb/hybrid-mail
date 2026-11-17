@@ -21,16 +21,22 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
     public static final String PURE_SIGN = "ML-DSA-65";
     public static final String HYBRID_SIGN = "MLDSA65-ECDSA-P256-SHA512";
     public static final String HYBRID_RSA_SIGN = "MLDSA65-RSA3072-PSS-SHA512";
+    public static final String PURE_87_SIGN = "ML-DSA-87";
+    public static final String HYBRID_87_SIGN = "MLDSA87-ECDSA-P384-SHA512";
     public static final String PURE_KEM = "ML-KEM-768";
     public static final String HYBRID_KEM = "MLKEM768-ECDH-P256-SHA3-256";
     public String signatureAlgorithm() {
         return signingCert.getPublicKey().getAlgorithm();
     }
     public static Identity generate(String email, boolean hybrid) throws Exception {
-        new jakarta.mail.internet.InternetAddress(email, true).validate();
-        KeyPair s = KeyPairGenerator.getInstance(hybrid ? HYBRID_SIGN : PURE_SIGN, "BC").generateKeyPair();
-        KeyPair k = KeyPairGenerator.getInstance(hybrid ? HYBRID_KEM : PURE_KEM, "BC").generateKeyPair();
-        String alg = hybrid ? HYBRID_SIGN : PURE_SIGN;
+        return generate(email,hybrid?HYBRID_SIGN:PURE_SIGN);
+    }
+    public static Identity generate(String email,String alg)throws Exception{
+        new jakarta.mail.internet.InternetAddress(email,true).validate();
+        if(!Set.of(PURE_SIGN,HYBRID_SIGN,HYBRID_RSA_SIGN,PURE_87_SIGN,HYBRID_87_SIGN).contains(alg))throw new GeneralSecurityException("Unsupported signing profile");
+        boolean hybrid=alg.startsWith("MLDSA");
+        KeyPair s=KeyPairGenerator.getInstance(alg,"BC").generateKeyPair();
+        KeyPair k=KeyPairGenerator.getInstance(hybrid?HYBRID_KEM:PURE_KEM,"BC").generateKeyPair();
         X509Certificate sc = cert(email, s.getPublic(), s.getPrivate(), alg, true);
         X509Certificate kc = cert(email, k.getPublic(), s.getPrivate(), alg, false);
         return new Identity(sc, s.getPrivate(), kc, k.getPrivate(), null);
@@ -151,7 +157,7 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         var sc = (X509Certificate)ks.getCertificate("sign");
         if (sc == null) throw new GeneralSecurityException("Missing certificate alias 'sign'");
         String a = sc.getPublicKey().getAlgorithm();
-        if (!a.equalsIgnoreCase(PURE_SIGN) && !a.equalsIgnoreCase(HYBRID_SIGN) && !a.equalsIgnoreCase(HYBRID_RSA_SIGN))
+        if (!a.equalsIgnoreCase(PURE_SIGN) && !a.equalsIgnoreCase(HYBRID_SIGN) && !a.equalsIgnoreCase(HYBRID_RSA_SIGN) && !a.equalsIgnoreCase(PURE_87_SIGN) && !a.equalsIgnoreCase(HYBRID_87_SIGN))
             throw new GeneralSecurityException("Unsupported signing key: " + a);
         return new Identity(sc, (PrivateKey)ks.getKey("sign", password), (X509Certificate)ks.getCertificate("encrypt"),
             (PrivateKey)ks.getKey("encrypt", password), (PrivateKey)ks.getKey("traditional", password));

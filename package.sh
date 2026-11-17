@@ -17,6 +17,7 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/adapters" "$stage/native/bin" "$stage/native/lib" "$stage/notices"
 cp build/hybrid-mail.jar lib/*.jar "$stage/"
+cp build/native/hybrid-mail-keychain "$stage/native/bin/"
 cp adapters/*.py "$stage/adapters/"
 cp native/*.dylib "$stage/native/lib/"
 cp -L "$OPENSSL_ROOT/bin/openssl" "$stage/native/bin/openssl"

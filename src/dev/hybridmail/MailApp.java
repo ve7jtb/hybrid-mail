@@ -90,7 +90,7 @@ public final class MailApp extends JFrame {
         google.add(button("Import Google OAuth client…",this::importGoogleClient));
         google.add(button("Enter Google client credentials…",this::enterGoogleClient));
         google.add(button("Sign in with Google…",this::signInGoogle));
-        google.add(button("Sign out of Google",this::signOutGoogle));top.add(google);p.add(top,BorderLayout.NORTH);
+        google.add(button("Sign out of Google",this::signOutGoogle));google.add(button("Test Mac Keychain",()->job("Testing Mac Keychain with disposable data…",()->{String value=java.util.UUID.randomUUID().toString();try{MacKeychain.put("self-test",value);if(!value.equals(MacKeychain.get("self-test")))throw new IOException("Keychain round trip failed");}finally{MacKeychain.delete("self-test");}return true;},ok->status.setText("PASS Mac Keychain write/read/delete; no Google credentials used"))));top.add(google);p.add(top,BorderLayout.NORTH);
         inboxTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);inboxTable.setRowHeight(30);inboxTable.setAutoCreateRowSorter(true);
         // Mail headers are untrusted; disable Swing's implicit HTML renderer.
         inboxTable.setDefaultRenderer(Object.class,new javax.swing.table.DefaultTableCellRenderer(){
@@ -130,7 +130,7 @@ public final class MailApp extends JFrame {
     }
     private void importGoogleClient(){
         Path path=choose(false,"Import Google Desktop OAuth client JSON");if(path==null)return;
-        try{GoogleOAuth.Client.read(path);state().importGoogleClient(path);googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved locally; not uploaded");}catch(Exception e){error(e);}
+        try{GoogleOAuth.Client.read(path);GoogleSession.saveClient(GoogleOAuth.Client.read(path));Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in Mac Keychain; not uploaded");}catch(Exception e){error(e);}
     }
     private void enterGoogleClient(){
         JTextField clientId=new JTextField(42);JPasswordField secret=new JPasswordField(42);
@@ -139,29 +139,43 @@ public final class MailApp extends JFrame {
         fields.add(new JLabel("Saved only in this Mac's Hybrid Mail configuration; not uploaded to GitHub."));
         if(JOptionPane.showConfirmDialog(this,fields,"Google Desktop client credentials",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)!=JOptionPane.OK_OPTION){secret.setText("");return;}
         char[] value=secret.getPassword();secret.setText("");
-        try{state().saveGoogleClient(new GoogleOAuth.Client(clientId.getText().trim(),new String(value).trim()));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved locally. Choose Sign in with Google.");}
+        try{GoogleSession.saveClient(new GoogleOAuth.Client(clientId.getText().trim(),new String(value).trim()));Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in Mac Keychain. Choose Sign in with Google.");}
         catch(Exception e){error(e);}finally{Arrays.fill(value,'\0');}
     }
     private void signInGoogle(){
         try{
-            GoogleOAuth.Client client=GoogleOAuth.Client.read(state().directory().resolve("google-client.json"));
+            GoogleOAuth.Client client=GoogleSession.client(state());
             JTextField email=new JTextField(state().get("google.email",""),30);
             JPanel prompt=new JPanel(new GridLayout(0,1,0,8));prompt.add(new JLabel("Google account email"));prompt.add(email);
             prompt.add(new JLabel("Google requires full mail permission for IMAP/SMTP. Review consent in your browser."));
-            prompt.add(new JLabel("Tokens stay in memory and are cleared on sign-out or app exit."));
+            prompt.add(new JLabel("Your refresh token is saved in Mac Keychain until you sign out."));
             if(JOptionPane.showConfirmDialog(this,prompt,"Sign in with Google",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
             String address=email.getText().trim();new jakarta.mail.internet.InternetAddress(address,true).validate();
             var cancelled=new java.util.concurrent.atomic.AtomicBoolean();
             JDialog progress=new JDialog(this,"Google sign-in",false);JPanel content=new JPanel(new BorderLayout(12,12));content.setBorder(new EmptyBorder(20,20,20,20));content.add(new JLabel("Complete sign-in in your browser, then return here."));content.add(button("Cancel",()->cancelled.set(true)),BorderLayout.SOUTH);progress.setContentPane(content);progress.pack();progress.setLocationRelativeTo(this);progress.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);progress.addWindowListener(new java.awt.event.WindowAdapter(){public void windowClosing(java.awt.event.WindowEvent e){cancelled.set(true);}});progress.setVisible(true);
             job("Waiting for Google sign-in…",()->{
-                try{return GoogleOAuth.authorize(client,address,uri->{try{Desktop.getDesktop().browse(uri);}catch(Exception e){throw new IllegalStateException("Could not open the system browser");}},cancelled::get);}
+                try{GoogleOAuth.Token token=GoogleOAuth.authorize(client,address,uri->{try{Desktop.getDesktop().browse(uri);}catch(Exception e){throw new IllegalStateException("Could not open the system browser");}},cancelled::get);try{GoogleSession.save(client,address,token);return token;}catch(Exception e){token.close();throw e;}}
                 finally{SwingUtilities.invokeLater(progress::dispose);}
-            },token->{if(googleToken!=null)googleToken.close();googleToken=token;googleEmail=address;googleLabel.setText("Google: "+address+" · signed in for this session");try{state().set("google.email",address);state().save();}catch(Exception e){error(e);}status.setText("Google sign-in ready. Connect Gmail or send with Google OAuth.");});
+            },token->{if(googleToken!=null)googleToken.close();googleToken=token;googleEmail=address;googleLabel.setText("Google: "+address+" · saved in Mac Keychain");try{state().set("google.email",address);state().save();}catch(Exception e){error(e);}status.setText("Google sign-in ready. Connect Gmail or send with Google OAuth.");});
         }catch(NoSuchFileException e){error(new IOException("Import your Google Desktop OAuth client JSON first"));}catch(Exception e){error(e);}
     }
-    private void signOutGoogle(){if(googleToken!=null)googleToken.close();googleToken=null;googleEmail=null;googleLabel.setText("Google: signed out");disconnectInbox();status.setText("Local Google session cleared. You can revoke app access in your Google account.");}
+    private void signOutGoogle(){
+        if(googleToken!=null)googleToken.close();googleToken=null;googleEmail=null;disconnectInbox();
+        googleLabel.setText("Google: signed out locally · removing saved session…");
+        job("Removing Google session from Mac Keychain…",()->{MacKeychain.delete("google-session");return true;},ok->{googleLabel.setText("Google: signed out");status.setText("Google refresh token removed from Keychain. Client configuration retained; access can also be revoked at Google.");});
+    }
+    private GoogleOAuth.Token restoreGoogleSession()throws Exception{
+        JDialog progress=new JDialog(this,"Google session",true);progress.add(new JLabel("  Restoring Google sign-in from Mac Keychain…  "));progress.pack();progress.setLocationRelativeTo(this);progress.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+        String email=state().get("google.email","");if(email.isBlank())throw new IOException("Sign in with Google from the Inbox tab first");
+        var worker=new SwingWorker<GoogleOAuth.Token,Void>(){
+            protected GoogleOAuth.Token doInBackground()throws Exception{return GoogleSession.restore(GoogleSession.client(MailApp.this.state()),email);}
+            protected void done(){progress.dispose();}
+        };worker.execute();progress.setVisible(true);
+        try{GoogleOAuth.Token token=worker.get();googleEmail=email;googleLabel.setText("Google: "+email+" · restored from Mac Keychain");return token;}
+        catch(java.util.concurrent.ExecutionException e){throw new IOException(e.getCause().getMessage());}
+    }
     private Account googleAccount(boolean smtp){
-        try{if(googleToken==null||!googleToken.valid())throw new IOException("Sign in with Google from the Inbox tab first");return new Account(smtp?"smtp.gmail.com":"imap.gmail.com",smtp?587:993,googleEmail,googleToken.credential(),true);}catch(Exception e){error(e);tabs.setSelectedIndex(3);return null;}
+        try{if(googleToken==null||!googleToken.valid()){if(googleToken!=null)googleToken.close();googleToken=restoreGoogleSession();}return new Account(smtp?"smtp.gmail.com":"imap.gmail.com",smtp?587:993,googleEmail,googleToken.credential(),true);}catch(Exception e){error(e);tabs.setSelectedIndex(3);return null;}
     }
     private JPanel certificatesPanel(){
         JPanel p=panel();JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -296,7 +310,7 @@ public final class MailApp extends JFrame {
     }
     private void restoreDesktop(){
         try{
-            state();desktopState.migrateTrust();refreshSaved();refreshContacts();adapter=desktopState.adapter(false);kemAdapter=desktopState.adapter(true);updateBackendLabels();
+            state();if(!desktopState.get("google.email","").isBlank())googleLabel.setText("Google: connect to restore saved Keychain session");desktopState.migrateTrust();refreshSaved();refreshContacts();adapter=desktopState.adapter(false);kemAdapter=desktopState.adapter(true);updateBackendLabels();
             recipient=desktopState.certificate("recipient");pinnedSigner=desktopState.certificate("pinned");refreshOutgoingEncryption();
             if(recipient!=null)recipientLabel.setText(recipient.getPublicKey().getAlgorithm()+" · "+recipient.getSubjectX500Principal());
             if(pinnedSigner!=null)pinLabel.setText(pinnedSigner.getSubjectX500Principal().toString());
@@ -357,13 +371,13 @@ public final class MailApp extends JFrame {
         }catch(Exception e){error(e);}
     }
     private void generate() {
-        JTextField email=new JTextField(from.getText()); JComboBox<String> mode=new JComboBox<>(new String[]{"Pure: ML-DSA-65 + ML-KEM-768","Hybrid: ML-DSA-65/ECDSA + ML-KEM-768/ECDH"});
+        JTextField email=new JTextField(from.getText()); JComboBox<String> mode=new JComboBox<>(new String[]{"Pure: ML-DSA-65 + ML-KEM-768","Hybrid: ML-DSA-65/ECDSA + ML-KEM-768/ECDH","Pure: ML-DSA-87 + ML-KEM-768","Hybrid: ML-DSA-87/ECDSA P-384 + ML-KEM-768/ECDH"});
         mode.setSelectedIndex(1); JPasswordField pass=new JPasswordField();
         JPanel p=new JPanel(new GridLayout(0,1,0,8)); p.add(new JLabel("Email address"));p.add(email);p.add(mode);p.add(new JLabel("New PKCS#12 password (12+ characters)"));p.add(pass);
         if(JOptionPane.showConfirmDialog(this,p,"Create local test identity",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
         Path file=choose(true,"Save new identity (choose a new .p12 filename)");if(file==null)return;
-        char[] password=pass.getPassword();String address=email.getText().trim();boolean hybrid=mode.getSelectedIndex()==1;
-        job("Generating identity…",()->{try {Identity id=Identity.generate(address,hybrid);id.save(file,password);return id;}finally{Arrays.fill(password,'\0');}},id->{setIdentity(id);from.setText(address);rememberIdentity(id,file,address);});
+        char[] password=pass.getPassword();String address=email.getText().trim();String algorithm=new String[]{Identity.PURE_SIGN,Identity.HYBRID_SIGN,Identity.PURE_87_SIGN,Identity.HYBRID_87_SIGN}[mode.getSelectedIndex()];
+        job("Generating identity…",()->{try {Identity id=Identity.generate(address,algorithm);id.save(file,password);return id;}finally{Arrays.fill(password,'\0');}},id->{setIdentity(id);from.setText(address);rememberIdentity(id,file,address);});
     }
     private void load() {
         Path file=choose(false,"Load identity .p12");if(file==null)return;

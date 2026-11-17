@@ -52,6 +52,17 @@ public final class DesktopStateTest {
             check(!state.isTrusted(software.signingCert(),"encryption")&&!state.isTrusted(renewed.signingCert(),"signing"),"trust is role-specific and does not follow reissued certificates with the same key");
             check(state.isTrusted(software.signingCert(),"signing")&&state.isTrusted(software.encryptionCert(),"encryption"),"multiple certificate fingerprints coexist");
             state.removeContact(signingContact);check(state.contacts().size()==3&&!state.isTrusted(software.signingCert(),"signing")&&Files.isDirectory(state.directory().resolve("removed-contacts")),"contact removal preserves recoverable public certificate");
+            for(String algorithm:List.of(Identity.PURE_87_SIGN,Identity.HYBRID_87_SIGN)){
+                Identity strong=Identity.generate("strong@example.test",algorithm);
+                Path strongFile=dir.resolve(algorithm+".p12");strong.save(strongFile,password);strong=Identity.load(strongFile,password);
+                check(strong.signatureAlgorithm().equals(algorithm),"ML-DSA-87 profile survives PKCS12 round trip: "+algorithm);
+                strong.signingCert().verify(strong.signingCert().getPublicKey(),"BC");
+                for(boolean encrypt:new boolean[]{false,true}){
+                    var message=MailEngine.compose(strong,"strong@example.test","strong@example.test","87 test","Strong signature",encrypt?strong.encryptionCert():null,null);
+                    var opened=MailEngine.open(message,strong,strong.signingCert());
+                    check(opened.text().contains("Strong signature")&&opened.pinned()&&opened.encrypted()==encrypt,"ML-DSA-87 S/MIME round trip "+algorithm+" encrypted="+encrypt);
+                }
+            }
             state.saveGoogleClient(new GoogleOAuth.Client("test.apps.googleusercontent.com","test-client-secret"));
             var client=GoogleOAuth.Client.read(state.directory().resolve("google-client.json"));
             check(client.id().equals("test.apps.googleusercontent.com")&&client.secret().equals("test-client-secret")&&!Files.readString(state.directory().resolve("settings.properties")).contains("test-client-secret"),"manual OAuth client round trip in separate owner-only config");

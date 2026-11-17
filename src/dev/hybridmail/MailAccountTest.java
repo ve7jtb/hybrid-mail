@@ -36,9 +36,14 @@ public final class MailAccountTest {
             check(token.valid()&&new String(token.credential()).equals("test-token"),"session token available");token.close();reject(token::credential,"sign-out clears token");
         }
         try(var expired=new GoogleOAuth.Token("expired-test-token",1)){reject(expired::credential,"expired token rejected");}
+        try(var token=GoogleOAuth.token("{\"access_token\":\"test-access\",\"refresh_token\":\"test-refresh\",\"token_type\":\"Bearer\",\"expires_in\":3600}")){
+            check(token.refreshToken().equals("test-refresh"),"refresh token parsed without logging");token.close();check(token.refreshToken()==null,"closing session clears refresh token");
+        }
+        var refreshParams=GoogleOAuth.refreshParameters(new GoogleOAuth.Client("test.apps.googleusercontent.com","test-secret"),"test-refresh");
+        check(refreshParams.get("grant_type").equals("refresh_token")&&refreshParams.get("refresh_token").equals("test-refresh")&&!refreshParams.containsKey("code"),"refresh grant uses saved token and correct client");
         reject(()->GoogleOAuth.token("{\"access_token\":\"secret-not-for-logs\",\"token_type\":\"Bearer\",\"expires_in\":3600,\"scope\":\"openid\"}"),"insufficient OAuth scope rejected");
         Path config=Files.createTempFile("google-test-client-",".json");
-        try{Files.writeString(config,"{\"web\":{\"client_id\":\"test.apps.googleusercontent.com\"}}");reject(()->GoogleOAuth.Client.read(config),"web OAuth client rejected");Files.writeString(config,"{\"installed\":{\"client_id\":\"test.apps.googleusercontent.com\",\"token_uri\":\"https://attacker.invalid\"}}");var client=GoogleOAuth.Client.read(config);var uri=GoogleOAuth.authorization(client,"user@example.test","http://127.0.0.1:1234/oauth2/callback","state","verifier");check(uri.getHost().equals("accounts.google.com")&&GoogleOAuth.query(uri.getRawQuery()).get("code_challenge_method").equals("S256"),"authorization endpoint fixed and PKCE mandatory");}
+        try{Files.writeString(config,"{\"web\":{\"client_id\":\"test.apps.googleusercontent.com\"}}");reject(()->GoogleOAuth.Client.read(config),"web OAuth client rejected");Files.writeString(config,"{\"installed\":{\"client_id\":\"test.apps.googleusercontent.com\",\"token_uri\":\"https://attacker.invalid\"}}");var client=GoogleOAuth.Client.read(config);var uri=GoogleOAuth.authorization(client,"user@example.test","http://127.0.0.1:1234/oauth2/callback","state","verifier");check(uri.getHost().equals("accounts.google.com")&&GoogleOAuth.query(uri.getRawQuery()).get("code_challenge_method").equals("S256")&&GoogleOAuth.query(uri.getRawQuery()).get("access_type").equals("offline")&&GoogleOAuth.query(uri.getRawQuery()).get("prompt").contains("consent"),"authorization endpoint fixed and PKCE mandatory");}
         finally{Files.delete(config);}
         var callbackReached=new java.util.concurrent.atomic.AtomicBoolean();
         var callbackClient=new GoogleOAuth.Client("test.apps.googleusercontent.com","");

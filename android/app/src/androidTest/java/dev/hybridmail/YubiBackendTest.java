@@ -64,6 +64,13 @@ public class YubiBackendTest {
    for(char[] pin:pins)assertArrayEquals(new char[6],pin);
   }
  }
+ @Test public void unavailablePivShowsHeaderWithoutPin()throws Exception{
+  Card card=new Card(TokenProfile.LEVEL2){public byte[] sendAndReceive(byte[] apdu)throws IOException{if((apdu[1]&255)==0xa4)return new byte[]{0x6a,(byte)0x82};return super.sendAndReceive(apdu);}};
+  var backend=new YubiBackend(()->card,label->{fail("PIN requested before PIV selection");return null;},12345,card.publicKeys());
+  try{backend.sign(card.publicKeys().get(Slot.SIGNATURE),new byte[64]);fail("Expected PIV selection error");}
+  catch(PivDiagnostic e){assertTrue(e.getMessage().contains("Selecting and initializing PIV"));assertTrue(e.getMessage().contains("INS=A4"));assertTrue(e.getMessage().contains("SW=6A82"));}
+  assertEquals(0,card.verifies);assertEquals(0,card.privateOps);assertEquals(1,card.closes);
+ }
  @Test public void wrongSerialMismatchAndRejectedPinFailClosed()throws Exception{
   Card card=new Card(TokenProfile.LEVEL2);int[] prompts={0};YubiBackend.PinSource pins=label->{prompts[0]++;return "123456".toCharArray();};
   var key=card.keys.get(Slot.SIGNATURE).getPublic();var wrongSerial=new YubiBackend(()->card,pins,999,card.publicKeys());

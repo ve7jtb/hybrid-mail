@@ -45,14 +45,17 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
     }
     private void connect()throws Exception {
         if(session!=null)return;
+        String stage="Opening smart-card connection";
         try {
-            connection=devices.get().openConnection(SmartCardConnection.class);
+            connection=new PivDiagnostic.Connection(devices.get().openConnection(SmartCardConnection.class));
+            stage="Selecting and initializing PIV";
             session=new PivSession(connection);
+            stage="Reading PIV serial number";
             if(session.getSerialNumber()!=serial)throw new GeneralSecurityException("Wrong YubiKey. Insert serial "+serial);
             // Check ALL bound public keys before requesting or submitting a PIN.
-            for(var e:expected.entrySet())if(!MessageDigest.isEqual(e.getValue().getEncoded(),publicKey(session,e.getKey()).getEncoded()))
-                throw new GeneralSecurityException("YubiKey slot "+e.getKey()+" does not match this identity");
-        }catch(Exception e){clearSecrets();throw e;}
+            for(var e:expected.entrySet()){stage="Reading public-key metadata for slot "+e.getKey();if(!MessageDigest.isEqual(e.getValue().getEncoded(),publicKey(session,e.getKey()).getEncoded()))
+                throw new GeneralSecurityException("YubiKey slot "+e.getKey()+" does not match this identity");}
+        }catch(Exception e){String detail=connection instanceof PivDiagnostic.Connection c?c.detail():"connection unavailable";clearSecrets();throw new PivDiagnostic(stage+" failed before PIN entry.\n"+detail+"\n"+e.getMessage(),e);}
     }
     private KeyType authorize(Slot slot,PublicKey key,String label)throws Exception {
         connect();

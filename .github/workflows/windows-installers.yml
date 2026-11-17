@@ -10,14 +10,14 @@ jobs:
   java:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-java@v6.3.0
         with:
           distribution: zulu
           java-version: '25'
       - run: bash scripts/build-dependencies.sh
       - run: bash build.sh test
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: java-runtime-input
           path: |
@@ -43,11 +43,11 @@ jobs:
             compiler: clang
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: java-runtime-input
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6.3.0
         with:
           distribution: zulu
           java-version: '25'
@@ -102,7 +102,7 @@ jobs:
       - name: Package and smoke-test
         shell: pwsh
         run: ./scripts/package-windows.ps1 -Architecture ${{ matrix.arch }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: PQ-Mail-Windows-${{ matrix.arch }}
           path: dist/windows/*.exe

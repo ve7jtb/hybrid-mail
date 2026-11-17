@@ -93,6 +93,22 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         certificate.verify(pub,"BC");
         return new Identity(certificate,null,null,null,null);
     }
+    public static Identity forToken87(String email,PublicKey ml,PublicKey ec,PublicKey kem,PublicKey ecdh,ExternalMu.Backend backend)throws Exception{
+        new jakarta.mail.internet.InternetAddress(email,true).validate();
+        if(!PURE_87_SIGN.equals(ml.getAlgorithm()))throw new GeneralSecurityException("Expected ML-DSA-87");
+        PublicKey signing=ml,encryption=kem;
+        if(ec!=null){
+            var params=AlgorithmParameters.getInstance("EC","BC");params.init(new java.security.spec.ECGenParameterSpec("secp384r1"));
+            var expected=params.getParameterSpec(java.security.spec.ECParameterSpec.class);
+            if(!(ec instanceof java.security.interfaces.ECPublicKey e)||!e.getParams().getCurve().equals(expected.getCurve())||!e.getParams().getOrder().equals(expected.getOrder())||!e.getParams().getGenerator().equals(expected.getGenerator()))throw new GeneralSecurityException("Expected P-384 signing key");
+            signing=new CompositePublicKey(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLDSA87_ECDSA_P384_SHA512,ml,ec);
+            encryption=new CompositePublicKey(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLKEM1024_ECDH_P384_SHA3_256,kem,ecdh);
+        }else if(!PURE_1024_KEM.equals(kem.getAlgorithm()))throw new GeneralSecurityException("Expected ML-KEM-1024");
+        validateEncryptionKey(encryption);
+        var sc=cert(email,signing,externalSigner(signing,null,backend),true);sc.verify(signing,"BC");
+        var kc=cert(email,encryption,externalSigner(signing,null,backend),false);kc.verify(signing,"BC");
+        return new Identity(sc,null,kc,null,null);
+    }
     public ContentSigner signer(ExternalMu.Backend backend) throws Exception {
         signingCert.checkValidity();
         if (backend == null) {
@@ -113,7 +129,7 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
                 .addPrivateKey(ecKey, ecProvider).build();
             return clearAfterSignature(new JcaContentSignerBuilder(pub.getAlgorithm()).setProvider("BC").build(key),backend);
         }
-        return clearAfterSignature(new JcaContentSignerBuilder(PURE_SIGN).setProvider(ExternalMu.PROVIDER)
+        return clearAfterSignature(new JcaContentSignerBuilder(pub.getAlgorithm()).setProvider(ExternalMu.PROVIDER)
             .build(new ExternalMu.TokenKey(pub, backend)),backend);
     }
     private static ContentSigner clearAfterSignature(ContentSigner signer,ExternalMu.Backend backend){
@@ -150,8 +166,7 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
             X509Certificate storageCert = cert("conventional-component@example.test", ec, traditionalKey, "SHA256withECDSA", true);
             ks.setKeyEntry("traditional", traditionalKey, password, new java.security.cert.Certificate[]{storageCert});
         }
-        Files.createFile(file, java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
-            java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")));
+        PrivateFiles.create(file);
         try (OutputStream out = Files.newOutputStream(file)) { ks.store(out, password); }
     }
     public static Identity load(Path file, char[] password) throws Exception {

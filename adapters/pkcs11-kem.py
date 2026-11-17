@@ -24,12 +24,14 @@ def object_id(slot):
 def read_request(stream):
     lines=[stream.readline(8193) for _ in range(3)]
     if any(len(line)>8192 or not line.endswith(b'\n') for line in lines):raise AdapterError('Malformed KEM request')
-    if lines[0] not in (b'ML-KEM-768\n',b'ECDH-P256\n'):raise AdapterError('Unsupported private operation')
+    if lines[0] not in (b'ML-KEM-768\n',b'ML-KEM-1024\n',b'ECDH-P256\n',b'ECDH-P384\n'):raise AdapterError('Unsupported private operation')
     try:public,data=[base64.b64decode(line.strip(),validate=True) for line in lines[1:]]
     except ValueError as error:raise AdapterError('Invalid request encoding') from error
     algorithm=lines[0].decode().strip()
     if algorithm=='ML-KEM-768':
         if not 1190<=len(public)<=1250 or len(data)!=1088:raise AdapterError('Expected ML-KEM-768 key and 1088-byte ciphertext')
+    elif algorithm=='ML-KEM-1024':
+        if not 1570<=len(public)<=1620 or len(data)!=1568:raise AdapterError('Expected ML-KEM-1024 and 1568-byte ciphertext')
     elif not 80<=len(public)<=150 or not 80<=len(data)<=150:raise AdapterError('Expected P-256 recipient and peer SPKIs')
     return algorithm,public,data
 
@@ -44,7 +46,7 @@ def export_public(executable,provider,module,serial,slot,algorithm,run=subproces
                    stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,env=_common.child_environment(config),timeout=30)
         if result.returncode or not public.exists():raise AdapterError('Cannot export encryption slot public key'+_common.safe_openssl_error(result))
         size=public.stat().st_size
-        if not (1190<=size<=1250 if algorithm=='ML-KEM-768' else 80<=size<=150):raise AdapterError('Unexpected encryption public key type')
+        if not (1190<=size<=1250 if algorithm=='ML-KEM-768' else 1570<=size<=1620 if algorithm=='ML-KEM-1024' else 80<=size<=150):raise AdapterError('Unexpected encryption public key type')
         return public.read_bytes()
 
 
@@ -54,7 +56,7 @@ def check_config(executable,serial):
 
 def recover(algorithm,public,data,executable,provider,module,serial,slot,pin,run=subprocess.run):
     check_config(executable,serial)
-    if algorithm not in ('ML-KEM-768','ECDH-P256'):raise AdapterError('Unsupported private operation')
+    if algorithm not in ('ML-KEM-768','ML-KEM-1024','ECDH-P256','ECDH-P384'):raise AdapterError('Unsupported private operation')
     if not 6<=len(pin)<=8 or any(c<32 or c>126 for c in pin):raise AdapterError('Invalid PIN input format')
     try:
         actual=export_public(executable,provider,module,serial,slot,algorithm,run)
@@ -65,17 +67,20 @@ def recover(algorithm,public,data,executable,provider,module,serial,slot,pin,run
             config.write_text(_common.configuration(provider,module),encoding='utf-8');input_file.write_bytes(data)
             env=_common.child_environment(config);env['HYBRID_MAIL_PIN_STDIN']='1'
             command=[executable,'pkeyutl','-provider','default','-provider','pkcs11','-inkey',uri]
-            command+=['-decap','-in',str(input_file)] if algorithm=='ML-KEM-768' else ['-derive','-peerkey',str(input_file),'-peerform','DER']
-            read_fd,write_fd=os.pipe()
-            try:
-                os.write(write_fd,pin);os.write(write_fd,b'\n');os.close(write_fd);write_fd=-1
-                result=run(command+['-passin','fd:'+str(read_fd)],pass_fds=(read_fd,),stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=100)
-            finally:
-                os.close(read_fd)
-                if write_fd!=-1:os.close(write_fd)
+            command+=['-decap','-in',str(input_file)] if algorithm.startswith('ML-KEM-') else ['-derive','-peerkey',str(input_file),'-peerform','DER']
+            if os.name=='nt':
+                result=run(command+['-passin','stdin'],input=bytes(pin)+b'\n',stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=100)
+            else:
+                read_fd,write_fd=os.pipe()
+                try:
+                    os.write(write_fd,pin);os.write(write_fd,b'\n');os.close(write_fd);write_fd=-1
+                    result=run(command+['-passin','fd:'+str(read_fd)],pass_fds=(read_fd,),stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,timeout=100)
+                finally:
+                    os.close(read_fd)
+                    if write_fd!=-1:os.close(write_fd)
             if result.returncode:raise AdapterError('PKCS#11 '+algorithm+' failed; no retry'+_common.safe_openssl_error(result))
-            if len(result.stdout)!=32:raise AdapterError('Expected 32-byte token shared secret')
+            if len(result.stdout)!=(48 if algorithm=='ECDH-P384' else 32):raise AdapterError('Invalid token shared secret length')
             return result.stdout
     finally:pin[:]=b'\0'*len(pin)
 
@@ -87,14 +92,14 @@ def main():
         if not all(values):raise AdapterError('Set OpenSSL, provider, module and token serial configuration')
         if sys.argv[1:] in (['--export-mlkem'],['--export-ecdh']):
             algorithm='ML-KEM-768' if sys.argv[1]=='--export-mlkem' else 'ECDH-P256'
-            slot=os.environ.get('PKCS11_KEM_SLOT' if algorithm=='ML-KEM-768' else 'PKCS11_ECDH_SLOT','')
+            slot=os.environ.get('PKCS11_KEM_SLOT' if algorithm.startswith('ML-KEM-') else 'PKCS11_ECDH_SLOT','')
             sys.stdout.buffer.write(export_public(*values,slot,algorithm));return 0
         if len(sys.argv)!=1 or os.environ.get('HYBRID_MAIL_PIN_STDIN')!='1':raise AdapterError('Use the app PIN dialog for token decryption')
         algorithm,public,data=read_request(sys.stdin.buffer)
         pin=bytearray(sys.stdin.buffer.readline(10))
         if not pin.endswith(b'\n'):raise AdapterError('Missing app PIN input')
         del pin[-1:]
-        slot=os.environ.get('PKCS11_KEM_SLOT' if algorithm=='ML-KEM-768' else 'PKCS11_ECDH_SLOT','')
+        slot=os.environ.get('PKCS11_KEM_SLOT' if algorithm.startswith('ML-KEM-') else 'PKCS11_ECDH_SLOT','')
         secret=recover(algorithm,public,data,*values,slot,pin)
         sys.stdout.buffer.write(secret);sys.stdout.buffer.flush();return 0
     except (AdapterError,OSError,subprocess.SubprocessError) as error:

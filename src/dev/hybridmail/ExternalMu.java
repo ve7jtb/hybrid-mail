@@ -25,12 +25,14 @@ public final class ExternalMu {
         }
     }
     public record TokenKey(PublicKey publicKey, Backend backend) implements PrivateKey {
-        public String getAlgorithm() { return "ML-DSA-65"; }
+        public String getAlgorithm() { return publicKey.getAlgorithm(); }
         public String getFormat() { return null; }
         public byte[] getEncoded() { return null; }
     }
     public static final Provider PROVIDER = new Provider("ExternalMu", "1.0", "External mu ML-DSA adapter") {{
         put("Signature.ML-DSA-65", MuSignature.class.getName());
+        put("Signature.ML-DSA-87", MuSignature.class.getName());
+        put("Signature.SHA384withECDSA", Ec384Signature.class.getName());
         put("Signature.SHA256withECDSA", EcSignature.class.getName());
         put("Signature.RSASSA-PSS", PssSignature.class.getName());
     }};
@@ -79,13 +81,14 @@ public final class ExternalMu {
         public byte[] getEncoded() { return null; }
     }
     /** BC supplies the composite representative; this component hashes it once with SHA-256. */
-    public static final class EcSignature extends SignatureSpi {
+    public static class EcSignature extends SignatureSpi {
         private EcTokenKey key;
+        protected String hash(){return "SHA-256";}
         private MessageDigest digest;
         protected void engineInitSign(PrivateKey k) throws InvalidKeyException {
             if (!(k instanceof EcTokenKey t)) throw new InvalidKeyException("Expected external EC key");
             key=t;
-            try { digest=MessageDigest.getInstance("SHA-256"); }
+            try { digest=MessageDigest.getInstance(hash()); }
             catch (GeneralSecurityException e) { throw new InvalidKeyException(e); }
         }
         protected void engineInitVerify(PublicKey k) throws InvalidKeyException { throw new InvalidKeyException("Use BC to verify"); }
@@ -106,6 +109,7 @@ public final class ExternalMu {
         @Deprecated protected void engineSetParameter(String n,Object v) { throw new UnsupportedOperationException(); }
         @Deprecated protected Object engineGetParameter(String n) { throw new UnsupportedOperationException(); }
     }
+    public static final class Ec384Signature extends EcSignature { protected String hash(){return "SHA-384";} }
     public record RsaTokenKey(PublicKey publicKey, Backend backend) implements PrivateKey {
         public String getAlgorithm() { return "RSA"; }
         public String getFormat() { return null; }
@@ -169,8 +173,8 @@ public final class ExternalMu {
                 return invoke(executable,algorithm,pub,input,appPin?pinCache.copy(()->{TokenPresence.require(executable);return TokenPin.request(algorithm);}):null);
             }catch(Exception e){clearSecrets();throw e;}
         }
-        public byte[] sign(PublicKey pub,byte[] mu)throws Exception{return call("ML-DSA-65",pub,mu);}
-        public byte[] signEcdsa(PublicKey pub,byte[] digest)throws Exception{return call("ECDSA-P256-SHA256",pub,digest);}
+        public byte[] sign(PublicKey pub,byte[] mu)throws Exception{return call(pub.getAlgorithm(),pub,mu);}
+        public byte[] signEcdsa(PublicKey pub,byte[] digest)throws Exception{return call(((java.security.interfaces.ECPublicKey)pub).getParams().getCurve().getField().getFieldSize()==384?"ECDSA-P384-SHA384":"ECDSA-P256-SHA256",pub,digest);}
         public byte[] signRsa(PublicKey pub,byte[] digest)throws Exception{return call("RSA3072-PSS-SHA256",pub,digest);}
     }
     private static byte[] invoke(String executable,String algorithm,PublicKey publicKey,byte[] mu,char[] pin)throws Exception{

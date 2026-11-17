@@ -7,9 +7,9 @@ import java.util.concurrent.*;
 /** No secrets in arguments, environment variables, logs or temporary files. */
 final class MacKeychain {
     static byte[] call(String operation,String account,byte[] input)throws IOException{
-        Path helper=DesktopState.resources().resolve("native/bin/hybrid-mail-keychain");
+        Path helper=DesktopState.resources().resolve(DesktopState.windows()?"native/bin/hybrid-mail-credentials.exe":"native/bin/hybrid-mail-keychain");
         if(!Files.isExecutable(helper))helper=Path.of("build/native/hybrid-mail-keychain").toAbsolutePath();
-        if(!Files.isExecutable(helper))throw new IOException("Mac Keychain helper is unavailable. Use the packaged Mac app.");
+        if(!Files.isExecutable(helper))throw new IOException("Credential-store helper is unavailable. Use the packaged desktop app.");
         Process process=new ProcessBuilder(helper.toString(),operation,account).redirectError(ProcessBuilder.Redirect.DISCARD).start();
         try{
             try(var out=process.getOutputStream()){if(input!=null)out.write(input);}

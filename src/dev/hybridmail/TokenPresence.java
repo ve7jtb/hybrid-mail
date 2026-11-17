@@ -15,11 +15,11 @@ public final class TokenPresence {
         String name=Path.of(adapter).getFileName().toString();if(!name.equals("pkcs11-mu.py")&&!name.equals("pkcs11-kem.py"))return;
         Path probe=Path.of(adapter).resolveSibling("pkcs11-presence.py");
         require(()->{
-            Process process=DesktopState.process(probe.toString()).redirectInput(ProcessBuilder.Redirect.from(new java.io.File("/dev/null"))).redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.DISCARD).start();
+            Process process=DesktopState.process(probe.toString()).redirectInput(ProcessBuilder.Redirect.from(new java.io.File(DesktopState.windows()?"NUL":"/dev/null"))).redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.DISCARD).start();
             try{if(!process.waitFor(15,TimeUnit.SECONDS))throw new IOException("YubiKey presence check timed out");return process.exitValue();}finally{if(process.isAlive())process.destroyForcibly();}
         },()->{
             if(GraphicsEnvironment.isHeadless())throw new IOException("Connect the configured YubiKey, then run the operation again");
-            boolean[] retry={false};Runnable show=()->{Object[] options={"Retry","Cancel"};retry[0]=JOptionPane.showOptionDialog(null,"Connect your configured YubiKey, then choose Retry.\nIf another YubiKey is connected, insert the one selected in YubiKey configuration.\nNo PIN or private-key operation has been sent.","Connect your YubiKey",JOptionPane.DEFAULT_OPTION,JOptionPane.INFORMATION_MESSAGE,null,options,options[0])==0;};
+            boolean[] retry={false};Runnable show=()->{Object[] options={"Retry","Cancel"};retry[0]=JOptionPane.showOptionDialog(null,"This identity requires YubiKey serial "+DesktopState.activeTokenSerial()+".\nConnect that YubiKey, then choose Retry. Another key will not be used.\nNo PIN or private-key operation has been sent.","Connect your YubiKey",JOptionPane.DEFAULT_OPTION,JOptionPane.INFORMATION_MESSAGE,null,options,options[0])==0;};
             if(SwingUtilities.isEventDispatchThread())show.run();else SwingUtilities.invokeAndWait(show);return retry[0];
         });
     }

@@ -1,0 +1,9 @@
+[package]
+name = "hybrid-mail-provision"
+version = "0.1.0"
+edition = "2024"
+[dependencies]
+yubikit = { git = "https://github.com/Yubico/yubikey-manager.git", rev = "f59e6fedb4f7a75da551ba4dea5d0c7863c8a2b4", default-features = false, features = ["pcsc"] }
+zeroize = "1.9"
+base64 = "0.22"
+serde_json = "1"

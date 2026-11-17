@@ -1,0 +1,109 @@
+name: Windows installers
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['src/**', 'adapters/**', 'native-src/**', 'patches/**', 'scripts/**', '.github/workflows/windows-installers.yml']
+permissions:
+  contents: read
+jobs:
+  java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '25'
+      - run: bash scripts/build-dependencies.sh
+      - run: bash build.sh test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: java-runtime-input
+          path: |
+            build/hybrid-mail.jar
+            lib/*.jar
+  windows:
+    needs: java
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            java: x64
+            msystem: UCRT64
+            prefix: mingw-w64-ucrt-x86_64
+            compiler: gcc
+          - arch: arm64
+            runner: windows-11-arm
+            java: aarch64
+            msystem: CLANGARM64
+            prefix: mingw-w64-clang-aarch64
+            compiler: clang
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: java-runtime-input
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '25'
+          architecture: ${{ matrix.java }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+      - name: Build provisioning and credential helpers
+        shell: pwsh
+        run: |
+          cargo build --locked --release --manifest-path native-src/provision/Cargo.toml
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path native-src/provision/Cargo.toml
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force build/native | Out-Null
+          Copy-Item native-src/provision/target/release/hybrid-mail-provision.exe build/native/
+          cl /O2 native-src/credentials-win.c /Fe:build/native/hybrid-mail-credentials.exe advapi32.lib
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git clone https://github.com/Yubico/yubico-pkcs11.git .deps/ykcs11
+          git -C .deps/ykcs11 checkout c28419969d0ac2ead2e94065b77ebbd281cc52de
+          git -C .deps/ykcs11 apply "$PWD/patches/ykcs11-ec-metadata.patch"
+          cargo build --locked --release --manifest-path .deps/ykcs11/Cargo.toml -p ykcs11
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Copy-Item .deps/ykcs11/target/release/ykcs11.dll build/native/
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: >-
+            git
+            ${{ matrix.prefix }}-${{ matrix.compiler }}
+            ${{ matrix.prefix }}-meson
+            ${{ matrix.prefix }}-ninja
+            ${{ matrix.prefix }}-pkgconf
+            ${{ matrix.prefix }}-openssl
+            ${{ matrix.prefix }}-dlfcn
+            ${{ matrix.prefix }}-python
+      - name: Build OpenSSL PKCS11 provider
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          git clone https://github.com/joostd/pkcs11-provider.git .deps/provider
+          git -C .deps/provider checkout 8e01f28b98bb0543a9d5600ebd9e061edb21de53
+          git -C .deps/provider apply "$PWD/patches/pkcs11-pin-prompt.patch"
+          meson setup .deps/provider/build .deps/provider -Dbuild_info=HybridMail-PR818
+          meson compile -C .deps/provider/build
+          cp .deps/provider/build/src/pkcs11.dll build/native/
+          mkdir -p build/native/openssl
+          cp "$MINGW_PREFIX/bin/openssl.exe" "$MINGW_PREFIX/bin/"*.dll build/native/openssl/
+          cp "$MINGW_PREFIX/share/licenses/openssl/LICENSE.txt" build/native/openssl/ || true
+      - name: Package and smoke-test
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -Architecture ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hybrid-Mail-Windows-${{ matrix.arch }}
+          path: dist/windows/*.exe
+          if-no-files-found: error

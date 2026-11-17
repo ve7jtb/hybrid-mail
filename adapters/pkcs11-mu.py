@@ -23,24 +23,15 @@ _spec.loader.exec_module(_protocol)
 AdapterError = _protocol.AdapterError
 def read_request(stream):
     algorithm = stream.readline(16385)
-    if algorithm == b"ML-DSA-65\n":
-        # Reuse the bounded existing parser without reading unbounded stdin.
-        rest = stream.readline(16385) + stream.readline(16385)
-        spki, payload = _protocol.read_request(io.BytesIO(algorithm + rest))
-        return "ML-DSA-65", spki, payload
-    if algorithm not in (b"ECDSA-P256-SHA256\n",b"RSA3072-PSS-SHA256\n"):
-        raise AdapterError("Unsupported signing algorithm")
-    fields = [stream.readline(16385) for _ in range(2)]
-    if any(len(line)>16384 or not line.endswith(b"\n") for line in fields):
-        raise AdapterError("Malformed ECDSA request")
-    try:
-        spki, payload = [base64.b64decode(line.strip(),validate=True) for line in fields]
-    except ValueError as error:
-        raise AdapterError("Invalid base64 request") from error
-    spki_ok = 80<=len(spki)<=150 if algorithm.startswith(b"ECDSA") else 390<=len(spki)<=500
-    if len(payload)!=32 or not spki_ok:
-        raise AdapterError("Expected conventional SPKI and 32-byte SHA-256 digest")
-    return algorithm.decode().strip(), spki, payload
+    profiles={b"ML-DSA-65\n":(64,1900,2100),b"ML-DSA-87\n":(64,2590,2650),b"ECDSA-P256-SHA256\n":(32,80,150),b"ECDSA-P384-SHA384\n":(48,110,150),b"RSA3072-PSS-SHA256\n":(32,390,500)}
+    if algorithm not in profiles:raise AdapterError("Unsupported signing algorithm")
+    fields=[stream.readline(16385) for _ in range(2)]
+    if any(len(line)>16384 or not line.endswith(b"\n") for line in fields):raise AdapterError("Malformed signing request")
+    try:spki,payload=[base64.b64decode(line.strip(),validate=True) for line in fields]
+    except ValueError as error:raise AdapterError("Invalid base64 request") from error
+    size,low,high=profiles[algorithm]
+    if len(payload)!=size or not low<=len(spki)<=high:raise AdapterError("Invalid signing key or input length")
+    return algorithm.decode().strip(),spki,payload
 
 
 def ec_object_id(slot):
@@ -53,9 +44,9 @@ def ec_object_id(slot):
 
 
 def config_path(value):
-    if not Path(value).is_absolute() or any(c in value for c in '\r\n"$\\'):
+    if (os.name!="nt" and "\\" in value) or not Path(value).is_absolute() or any(c in value for c in '\r\n"$'):
         raise AdapterError("Provider/module paths must be absolute and contain no config metacharacters")
-    return '"' + value + '"'
+    return '"' + value.replace('\\','/') + '"'
 
 
 def configuration(provider, module, public=False):
@@ -89,7 +80,7 @@ def export_traditional(executable, provider, module, serial, slot, terminal, ml=
         result=subprocess.run([executable,"pkey","-provider","default","-provider","pkcs11",
                                "-pubin","-in",uri,"-pubout","-outform","DER","-out",str(public)],
                               stdin=terminal,stderr=terminal,stdout=subprocess.DEVNULL,env=child_environment(config),timeout=30)
-        if result.returncode or not public.exists() or not (1900<=public.stat().st_size<=2100 if ml else 80<=public.stat().st_size<=500):
+        if result.returncode or not public.exists() or not (1900<=public.stat().st_size<=2650 if ml else 80<=public.stat().st_size<=500):
             raise AdapterError("Cannot export conventional public key from configured slot")
         return public.read_bytes()
 
@@ -128,9 +119,9 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
         raise AdapterError("OPENSSL_BIN must be an absolute path")
     config = configuration(provider, module)
     # The Yubico module maps PIV signature slot 9c to binary CKA_ID 02.
-    if algorithm not in ("ML-DSA-65", "ECDSA-P256-SHA256", "RSA3072-PSS-SHA256"):
+    if algorithm not in ("ML-DSA-65", "ML-DSA-87", "ECDSA-P256-SHA256", "ECDSA-P384-SHA384", "RSA3072-PSS-SHA256"):
         raise AdapterError("Unsupported signing algorithm")
-    object_id = "%02" if algorithm == "ML-DSA-65" else ec_object_id(ec_slot)
+    object_id = "%02" if algorithm.startswith("ML-DSA-") else ec_object_id(ec_slot)
     uri = "pkcs11:serial=" + serial + ";id=" + object_id + ";type="
     with tempfile.TemporaryDirectory(prefix="hybrid-mail-pkcs11-") as temporary:
         folder = Path(temporary)
@@ -149,7 +140,7 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
         mu_file.write_bytes(mu)
         terminal.write(("\nHybrid Mail: PKCS#11 " + algorithm + " signing. Enter PIN and touch the key.\n").encode())
         terminal.flush()
-        options = ["-pkeyopt","mu:1"] if algorithm == "ML-DSA-65" else ["-pkeyopt","digest:sha256"]
+        options = ["-pkeyopt","mu:1"] if algorithm.startswith("ML-DSA-") else ["-pkeyopt","digest:sha384" if algorithm=="ECDSA-P384-SHA384" else "digest:sha256"]
         if algorithm == "RSA3072-PSS-SHA256":
             options += ["-pkeyopt","rsa_padding_mode:pss","-pkeyopt","rsa_pss_saltlen:32","-pkeyopt","rsa_mgf1_md:sha256"]
         command = [executable,"pkeyutl","-provider","default","-provider","pkcs11",
@@ -160,20 +151,26 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
         else:
             if not 6<=len(pin)<=8 or any(c<32 or c>126 for c in pin):
                 raise AdapterError("Invalid PIN input format")
-            read_fd,write_fd=os.pipe()
-            try:
-                os.write(write_fd,pin);os.write(write_fd,b"\n")
-                os.close(write_fd);write_fd=-1
-                env["HYBRID_MAIL_PIN_STDIN"]="1"
-                signed=run(command+["-passin","fd:"+str(read_fd)],pass_fds=(read_fd,),timeout=100,**common)
-            finally:
-                os.close(read_fd)
-                if write_fd!=-1:os.close(write_fd)
-                pin[:]=b"\0"*len(pin)
+            env["HYBRID_MAIL_PIN_STDIN"]="1"
+            if os.name=="nt":
+                args=dict(common);args.pop("stdin",None)
+                try:signed=run(command+["-passin","stdin"],input=bytes(pin)+b"\n",timeout=100,**args)
+                finally:pin[:]=b"\0"*len(pin)
+            else:
+                read_fd,write_fd=os.pipe()
+                try:
+                    os.write(write_fd,pin);os.write(write_fd,b"\n")
+                    os.close(write_fd);write_fd=-1
+                    env["HYBRID_MAIL_PIN_STDIN"]="1"
+                    signed=run(command+["-passin","fd:"+str(read_fd)],pass_fds=(read_fd,),timeout=100,**common)
+                finally:
+                    os.close(read_fd)
+                    if write_fd!=-1:os.close(write_fd)
+                    pin[:]=b"\0"*len(pin)
         if signed.returncode:
             raise AdapterError("PKCS#11 "+algorithm+" signing failed; no retry"+safe_openssl_error(signed))
         size = sig_file.stat().st_size
-        if (algorithm == "ML-DSA-65" and size != 3309) or (algorithm == "ECDSA-P256-SHA256" and not 8 <= size <= 72) or (algorithm=="RSA3072-PSS-SHA256" and size!=384):
+        if (algorithm == "ML-DSA-65" and size != 3309) or (algorithm == "ML-DSA-87" and size != 4627) or (algorithm == "ECDSA-P384-SHA384" and not 8 <= size <= 104) or (algorithm == "ECDSA-P256-SHA256" and not 8 <= size <= 72) or (algorithm=="RSA3072-PSS-SHA256" and size!=384):
             raise AdapterError("Unexpected signature length")
         return sig_file.read_bytes()
 

@@ -18,28 +18,30 @@ public final class DesktopState {
         Path file=directory.resolve("settings.properties");
         if(Files.exists(file))try(InputStream in=Files.newInputStream(file)){values.load(in);}
     }
+    public static boolean windows(){return System.getProperty("os.name").startsWith("Windows");}
+    public static String defaultPython(){return windows()?resources().resolve("native/python/python.exe").toString():"/usr/bin/python3";}
     public static DesktopState open()throws IOException{
         String override=System.getProperty("hybridmail.dataDir");
-        return new DesktopState(override==null?Path.of(System.getProperty("user.home"),"Library","Application Support","Hybrid Mail"):Path.of(override));
+        return new DesktopState(override==null?(windows()?Path.of(System.getenv().getOrDefault("LOCALAPPDATA",System.getProperty("user.home")),"Hybrid Mail"):Path.of(System.getProperty("user.home"),"Library","Application Support","Hybrid Mail")):Path.of(override));
     }
     public Path directory(){return directory;}
     public String get(String name,String fallback){return values.getProperty(name,fallback);}
     public void set(String name,String value){if(value==null)values.remove(name);else values.setProperty(name,value);}
     public void save()throws IOException{
-        Files.createDirectories(directory);Files.setPosixFilePermissions(directory,PosixFilePermissions.fromString("rwx------"));
+        PrivateFiles.directory(directory);
         ByteArrayOutputStream out=new ByteArrayOutputStream();values.store(out,"Hybrid Mail — non-secret preferences; no PINs or passwords");
         write(directory.resolve("settings.properties"),out.toByteArray());
     }
     private static void write(Path path,byte[] bytes)throws IOException{
-        Files.createDirectories(path.getParent());Files.setPosixFilePermissions(path.getParent(),PosixFilePermissions.fromString("rwx------"));
-        Path temporary=Files.createTempFile(path.getParent(),".save-",".tmp",PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
+        PrivateFiles.directory(path.getParent());
+        Path temporary=PrivateFiles.temporary(path.getParent());
         try{Files.write(temporary,bytes);Files.move(temporary,path,StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.ATOMIC_MOVE);}
         finally{Files.deleteIfExists(temporary);}
     }
     public List<SavedIdentity> identities(){
         List<SavedIdentity> result=new ArrayList<>();
         for(String id:get("identities","").split(","))if(id.matches("[a-f0-9]{24}"))
-            result.add(new SavedIdentity(id,get("identity."+id+".name",id),get("identity."+id+".type","token").equals("pkcs12")));
+            result.add(new SavedIdentity(id,get("identity."+id+".name",id)+(get("identity."+id+".type","token").equals("pkcs12")?" · software .p12":" · YubiKey "+get("identity."+id+".token.serial","unbound")),get("identity."+id+".type","token").equals("pkcs12")));
         return result;
     }
     private Path identityDirectory(String id){
@@ -52,14 +54,30 @@ public final class DesktopState {
         X509Certificate signing=Identity.readCertificate(folder.resolve("signing.cer"));
         X509Certificate encryption=Files.exists(folder.resolve("encryption.cer"))?Identity.readCertificate(folder.resolve("encryption.cer")):null;
         String alg=signing.getPublicKey().getAlgorithm();
-        if(!Set.of(Identity.PURE_SIGN,Identity.HYBRID_SIGN,Identity.HYBRID_RSA_SIGN).contains(alg))throw new IOException("Unsupported saved signing identity");
-        if(encryption!=null)ExternalKem.validatePublicKey(encryption.getPublicKey());
+        if(!Set.of(Identity.PURE_SIGN,Identity.HYBRID_SIGN,Identity.HYBRID_RSA_SIGN,Identity.PURE_87_SIGN,Identity.HYBRID_87_SIGN).contains(alg))throw new IOException("Unsupported saved signing identity");
+        if(encryption!=null)Identity.validateEncryptionKey(encryption.getPublicKey());
         return new Identity(signing,null,encryption,null,null);
     }
+    static String identityId(Identity identity)throws Exception{
+        MessageDigest hash=MessageDigest.getInstance("SHA-256");hash.update(identity.signingCert().getEncoded());if(identity.encryptionCert()!=null)hash.update(identity.encryptionCert().getEncoded());return HexFormat.of().formatHex(hash.digest()).substring(0,24);
+    }
+    public void bindToken(String id,String serial,String traditional,String kem,String ecdh)throws Exception{
+        if(serial==null||serial.isBlank())throw new IOException("Specify the YubiKey serial for this identity");
+        for(var entry:Map.of("serial",serial,"rsaSlot",traditional,"kemSlot",kem,"ecdhSlot",ecdh).entrySet())set("identity."+id+".token."+entry.getKey(),entry.getValue());save();
+    }
+    public void migrateTokenBindings()throws Exception{
+        for(var saved:identities())if(!saved.passwordRequired()&&get("identity."+saved.id()+".token.serial","").isBlank()&&!get("token.serial","").isBlank())bindToken(saved.id(),get("token.serial",""),get("token.rsaSlot","9a"),get("token.kemSlot","9d"),get("token.ecdhSlot","82"));
+    }
+    public void activateIdentity(Identity identity)throws Exception{
+        Map<String,String> config=new HashMap<>(configuration());
+        if(identity.signingKey()==null){String id=identityId(identity);String serial=get("identity."+id+".token.serial","");
+            if(serial.isBlank())throw new IOException("YubiKey identity has no saved device binding");
+            config.put("PKCS11_SERIAL",serial);config.put("PKCS11_TRADITIONAL_SLOT",get("identity."+id+".token.rsaSlot","9a"));config.put("PKCS11_KEM_SLOT",get("identity."+id+".token.kemSlot","9d"));config.put("PKCS11_ECDH_SLOT",get("identity."+id+".token.ecdhSlot","82"));
+        }processConfig=Map.copyOf(config);
+    }
+    public static String activeTokenSerial(){return processConfig.getOrDefault("PKCS11_SERIAL","");}
     public String remember(Identity identity,String name,Path encryptedOriginal)throws Exception{
-        MessageDigest hash=MessageDigest.getInstance("SHA-256");hash.update(identity.signingCert().getEncoded());
-        if(identity.encryptionCert()!=null)hash.update(identity.encryptionCert().getEncoded());
-        String id=HexFormat.of().formatHex(hash.digest()).substring(0,24);
+        String id=identityId(identity);
         Path folder=directory.resolve("identities").resolve(id);
         boolean token=identity.signingKey()==null&&identity.encryptionKey()==null&&identity.traditionalKey()==null;
         if(token){
@@ -71,7 +89,7 @@ public final class DesktopState {
             write(folder.resolve("identity.p12"),Files.readAllBytes(encryptedOriginal));
         }
         LinkedHashSet<String> ids=new LinkedHashSet<>();for(var old:identities())ids.add(old.id());ids.add(id);
-        set("identities",String.join(",",ids));set("identity."+id+".name",name);set("identity."+id+".type",token?"token":"pkcs12");set("selected.identity",id);save();return id;
+        set("identities",String.join(",",ids));set("identity."+id+".name",name);set("identity."+id+".type",token?"token":"pkcs12");set("selected.identity",id);if(token&&get("identity."+id+".token.serial","").isBlank()&&!get("token.serial","").isBlank())bindToken(id,get("token.serial",""),get("token.rsaSlot","9a"),get("token.kemSlot","9d"),get("token.ecdhSlot","82"));save();return id;
     }
     public void saveCertificate(String role,X509Certificate certificate)throws Exception{
         if(!Set.of("recipient","pinned").contains(role))throw new IllegalArgumentException("Invalid certificate role");
@@ -122,7 +140,7 @@ public final class DesktopState {
     public void removeContact(Contact contact)throws Exception{
         if(!contacts().contains(contact))throw new IOException("Unknown certificate contact");
         setTrusted(contactCertificate(contact),contact.role(),false);
-        Path trash=directory.resolve("removed-contacts");Files.createDirectories(trash);Files.setPosixFilePermissions(trash,PosixFilePermissions.fromString("rwx------"));
+        Path trash=directory.resolve("removed-contacts");PrivateFiles.directory(trash);
         Files.move(directory.resolve("contacts").resolve(contact.id()),trash.resolve(contact.id()+"-"+System.currentTimeMillis()));
         var ids=new ArrayList<String>();for(var old:contacts())if(!old.id().equals(contact.id()))ids.add(old.id());
         set("contacts",String.join(",",ids));set("contact."+contact.id()+".email",null);set("contact."+contact.id()+".role",null);save();
@@ -158,10 +176,10 @@ public final class DesktopState {
     }
     public Map<String,String> configuration(){
         Map<String,String> result=new HashMap<>();
-        result.put("OPENSSL_BIN",nativePath("openssl.path","native/bin/openssl","/opt/homebrew/bin/openssl"));
-        result.put("PKCS11_PROVIDER",nativePath("provider.path","native/lib/pkcs11.dylib",resources().resolve("native/pkcs11.dylib").toString()));
-        result.put("PKCS11_MODULE",nativePath("module.path","native/lib/libykcs11.dylib",resources().resolve("native/libykcs11.dylib").toString()));
-        result.put("PYTHON_BIN",get("python.path","/usr/bin/python3"));
+        result.put("OPENSSL_BIN",nativePath("openssl.path",windows()?"native/bin/openssl.exe":"native/bin/openssl","/opt/homebrew/bin/openssl"));
+        result.put("PKCS11_PROVIDER",nativePath("provider.path",windows()?"native/lib/pkcs11.dll":"native/lib/pkcs11.dylib",resources().resolve("native/pkcs11.dylib").toString()));
+        result.put("PKCS11_MODULE",nativePath("module.path",windows()?"native/lib/ykcs11.dll":"native/lib/libykcs11.dylib",resources().resolve("native/libykcs11.dylib").toString()));
+        result.put("PYTHON_BIN",get("python.path",defaultPython()));
         result.put("PKCS11_SERIAL",get("token.serial",""));result.put("PKCS11_TRADITIONAL_SLOT",get("token.rsaSlot","9a"));
         result.put("PKCS11_KEM_SLOT",get("token.kemSlot","9d"));result.put("PKCS11_ECDH_SLOT",get("token.ecdhSlot","82"));
         return Map.copyOf(result);
@@ -169,7 +187,7 @@ public final class DesktopState {
     public void activate(){processConfig=configuration();}
     public static ProcessBuilder process(String executable){
         Map<String,String> config=processConfig;
-        ProcessBuilder builder=executable.endsWith(".py")?new ProcessBuilder(config.getOrDefault("PYTHON_BIN","/usr/bin/python3"),executable):new ProcessBuilder(executable);
+        ProcessBuilder builder=executable.endsWith(".py")?new ProcessBuilder(config.getOrDefault("PYTHON_BIN",defaultPython()),executable):new ProcessBuilder(executable);
         builder.environment().putAll(config);builder.environment().put("PYTHONDONTWRITEBYTECODE","1");
         return builder;
     }

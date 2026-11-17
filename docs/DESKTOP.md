@@ -54,6 +54,18 @@ References: [Google desktop OAuth](https://developers.google.com/identity/protoc
 
 ## ML-DSA-87 software identities
 
-Choose **Keys & token → Create identity…** and select pure ML-DSA-87 or hybrid ML-DSA-87/ECDSA P-384. Save a new password-protected `.p12` file. The identity is remembered and selectable for outgoing messages. Pure ML-DSA-87 pairs with ML-KEM-1024; the P-384 composite signature pairs with MLKEM1024-ECDH-P384-SHA3-256. These software profiles and do not generate or replace YubiKey keys.
+Choose **Keys & token → Create identity…** and select pure ML-DSA-87 or hybrid ML-DSA-87/ECDSA P-384. Save a new password-protected `.p12` file. The identity is remembered and selectable for outgoing messages. Pure ML-DSA-87 pairs with ML-KEM-1024; the P-384 composite signature pairs with MLKEM1024-ECDH-P384-SHA3-256. These software profiles do not generate or replace YubiKey keys.
 
 Validation: native Keychain write/read/delete passed in the packaged app. After user consent, the app was fully quit and relaunched; Connect Gmail restored its refresh token from Keychain and loaded the inbox without browser authorization. Pure ML-DSA-87 and composite ML-DSA-87/P-384 certificate, PKCS#12, signed-only and encrypted S/MIME round trips passed.
+
+## Software versus YubiKey identities
+
+**Software identities (.p12)** has its own selector, Create software identity and Import software PKCS#12 controls. Keys are generated in software and stored encrypted under the chosen PKCS#12 password. **YubiKey identities** has a separate selector; its entries include the required device serial. Compose also labels software versus YubiKey identities. Each token identity persists its own serial and 9c/signing, conventional-signing, KEM and ECDH slots; editing general device defaults does not rebind an existing credential. Before each private operation the app requests the bound serial if it is absent or the wrong key is inserted, without attempting a PIN on another device.
+
+**Create identity on empty YubiKey…** offers pure ML-DSA-87 / ML-KEM-1024 or both pure and P-384 hybrid profiles. The latter creates four on-device keys: ML-DSA-87 in 9c, ML-KEM-1024 in 9d, ECDSA P-384 in 9a, and ECDH P-384 in 82. Pure and composite certificates reuse the ML keys. Policy is PIN Always / Touch Never. Certificates are local test certificates, not CA-issued credentials; no private key is exported or stored on this computer.
+
+All 24 user PIV slots must have neither a key nor a certificate. The factory attestation slot F9 is excluded. Unknown metadata, unsupported firmware, communication failures and an occupied slot all stop provisioning. The native helper repeats the check on an exclusive connection immediately before generation. It has no reset/delete/import/overwrite operation. Credentials travel over stdin pipes, never command arguments or environment variables. An explicit management key or the factory AES-192 management key and the existing PIV PIN are required; credentials are not changed by this flow.
+
+Provisioning several slots is not atomic. Failure leaves any successfully created keys in place and blocks another generation attempt. Public DER files are preserved in `token-setups`; when generation completed but certificate signing was cancelled or failed, use **Finish pending certificates…** and select that setup's `setup.properties`. This only reads and verifies the existing on-device public keys against the saved setup, then issues certificates; it never generates keys. Partially generated setups require manual recovery, not rerunning generation.
+
+No ykman installation is needed for the packaged creation flow. It uses the bundled native Yubico yubikit helper and PKCS#11 adapters. The older Terminal scripts and optional ykman signer still require ykman. Building the helper from source requires Rust 1.88 or newer and the platform PC/SC development libraries: run `scripts/build-provision.sh` before packaging.

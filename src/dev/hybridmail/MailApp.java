@@ -34,6 +34,7 @@ public final class MailApp extends JFrame {
     private final JLabel googleLabel=new JLabel("Google: signed out");
     private DesktopState desktopState;
     private final JComboBox<DesktopState.SavedIdentity> savedIdentities=new JComboBox<>();
+    private final JComboBox<DesktopState.SavedIdentity> softwareIdentities=new JComboBox<>(),yubikeyIdentities=new JComboBox<>();
     private X509Certificate recipient, pinnedSigner;
     private String adapter,kemAdapter;
     private final JLabel kemLabel=new JLabel("Decryption: software");
@@ -90,7 +91,7 @@ public final class MailApp extends JFrame {
         google.add(button("Import Google OAuth client…",this::importGoogleClient));
         google.add(button("Enter Google client credentials…",this::enterGoogleClient));
         google.add(button("Sign in with Google…",this::signInGoogle));
-        google.add(button("Sign out of Google",this::signOutGoogle));google.add(button("Test Mac Keychain",()->job("Testing Mac Keychain with disposable data…",()->{String value=java.util.UUID.randomUUID().toString();try{MacKeychain.put("self-test",value);if(!value.equals(MacKeychain.get("self-test")))throw new IOException("Keychain round trip failed");}finally{MacKeychain.delete("self-test");}return true;},ok->status.setText("PASS Mac Keychain write/read/delete; no Google credentials used"))));top.add(google);p.add(top,BorderLayout.NORTH);
+        google.add(button("Sign out of Google",this::signOutGoogle));google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStore()+" with disposable data…",()->{String value=java.util.UUID.randomUUID().toString();try{MacKeychain.put("self-test",value);if(!value.equals(MacKeychain.get("self-test")))throw new IOException("Keychain round trip failed");}finally{MacKeychain.delete("self-test");}return true;},ok->status.setText("PASS "+credentialStore()+" write/read/delete; no Google credentials used"))));top.add(google);p.add(top,BorderLayout.NORTH);
         inboxTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);inboxTable.setRowHeight(30);inboxTable.setAutoCreateRowSorter(true);
         // Mail headers are untrusted; disable Swing's implicit HTML renderer.
         inboxTable.setDefaultRenderer(Object.class,new javax.swing.table.DefaultTableCellRenderer(){
@@ -130,7 +131,7 @@ public final class MailApp extends JFrame {
     }
     private void importGoogleClient(){
         Path path=choose(false,"Import Google Desktop OAuth client JSON");if(path==null)return;
-        try{GoogleOAuth.Client.read(path);GoogleSession.saveClient(GoogleOAuth.Client.read(path));Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in Mac Keychain; not uploaded");}catch(Exception e){error(e);}
+        try{GoogleOAuth.Client.read(path);GoogleSession.saveClient(GoogleOAuth.Client.read(path));Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in "+credentialStore()+"; not uploaded");}catch(Exception e){error(e);}
     }
     private void enterGoogleClient(){
         JTextField clientId=new JTextField(42);JPasswordField secret=new JPasswordField(42);
@@ -139,16 +140,17 @@ public final class MailApp extends JFrame {
         fields.add(new JLabel("Saved only in this Mac's Hybrid Mail configuration; not uploaded to GitHub."));
         if(JOptionPane.showConfirmDialog(this,fields,"Google Desktop client credentials",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)!=JOptionPane.OK_OPTION){secret.setText("");return;}
         char[] value=secret.getPassword();secret.setText("");
-        try{GoogleSession.saveClient(new GoogleOAuth.Client(clientId.getText().trim(),new String(value).trim()));Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in Mac Keychain. Choose Sign in with Google.");}
+        try{GoogleSession.saveClient(new GoogleOAuth.Client(clientId.getText().trim(),new String(value).trim()));Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in "+credentialStore()+". Choose Sign in with Google.");}
         catch(Exception e){error(e);}finally{Arrays.fill(value,'\0');}
     }
+    private static String credentialStore(){return DesktopState.windows()?"Windows Credential Manager":"Mac Keychain";}
     private void signInGoogle(){
         try{
             GoogleOAuth.Client client=GoogleSession.client(state());
             JTextField email=new JTextField(state().get("google.email",""),30);
             JPanel prompt=new JPanel(new GridLayout(0,1,0,8));prompt.add(new JLabel("Google account email"));prompt.add(email);
             prompt.add(new JLabel("Google requires full mail permission for IMAP/SMTP. Review consent in your browser."));
-            prompt.add(new JLabel("Your refresh token is saved in Mac Keychain until you sign out."));
+            prompt.add(new JLabel("Your refresh token is saved in "+credentialStore()+" until you sign out."));
             if(JOptionPane.showConfirmDialog(this,prompt,"Sign in with Google",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
             String address=email.getText().trim();new jakarta.mail.internet.InternetAddress(address,true).validate();
             var cancelled=new java.util.concurrent.atomic.AtomicBoolean();
@@ -156,22 +158,22 @@ public final class MailApp extends JFrame {
             job("Waiting for Google sign-in…",()->{
                 try{GoogleOAuth.Token token=GoogleOAuth.authorize(client,address,uri->{try{Desktop.getDesktop().browse(uri);}catch(Exception e){throw new IllegalStateException("Could not open the system browser");}},cancelled::get);try{GoogleSession.save(client,address,token);return token;}catch(Exception e){token.close();throw e;}}
                 finally{SwingUtilities.invokeLater(progress::dispose);}
-            },token->{if(googleToken!=null)googleToken.close();googleToken=token;googleEmail=address;googleLabel.setText("Google: "+address+" · saved in Mac Keychain");try{state().set("google.email",address);state().save();}catch(Exception e){error(e);}status.setText("Google sign-in ready. Connect Gmail or send with Google OAuth.");});
+            },token->{if(googleToken!=null)googleToken.close();googleToken=token;googleEmail=address;googleLabel.setText("Google: "+address+" · saved in "+credentialStore()+"");try{state().set("google.email",address);state().save();}catch(Exception e){error(e);}status.setText("Google sign-in ready. Connect Gmail or send with Google OAuth.");});
         }catch(NoSuchFileException e){error(new IOException("Import your Google Desktop OAuth client JSON first"));}catch(Exception e){error(e);}
     }
     private void signOutGoogle(){
         if(googleToken!=null)googleToken.close();googleToken=null;googleEmail=null;disconnectInbox();
         googleLabel.setText("Google: signed out locally · removing saved session…");
-        job("Removing Google session from Mac Keychain…",()->{MacKeychain.delete("google-session");return true;},ok->{googleLabel.setText("Google: signed out");status.setText("Google refresh token removed from Keychain. Client configuration retained; access can also be revoked at Google.");});
+        job("Removing Google session from "+credentialStore()+"…",()->{MacKeychain.delete("google-session");return true;},ok->{googleLabel.setText("Google: signed out");status.setText("Google refresh token removed from Keychain. Client configuration retained; access can also be revoked at Google.");});
     }
     private GoogleOAuth.Token restoreGoogleSession()throws Exception{
-        JDialog progress=new JDialog(this,"Google session",true);progress.add(new JLabel("  Restoring Google sign-in from Mac Keychain…  "));progress.pack();progress.setLocationRelativeTo(this);progress.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+        JDialog progress=new JDialog(this,"Google session",true);progress.add(new JLabel("  Restoring Google sign-in from "+credentialStore()+"…  "));progress.pack();progress.setLocationRelativeTo(this);progress.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
         String email=state().get("google.email","");if(email.isBlank())throw new IOException("Sign in with Google from the Inbox tab first");
         var worker=new SwingWorker<GoogleOAuth.Token,Void>(){
             protected GoogleOAuth.Token doInBackground()throws Exception{return GoogleSession.restore(GoogleSession.client(MailApp.this.state()),email);}
             protected void done(){progress.dispose();}
         };worker.execute();progress.setVisible(true);
-        try{GoogleOAuth.Token token=worker.get();googleEmail=email;googleLabel.setText("Google: "+email+" · restored from Mac Keychain");return token;}
+        try{GoogleOAuth.Token token=worker.get();googleEmail=email;googleLabel.setText("Google: "+email+" · restored from "+credentialStore()+"");return token;}
         catch(java.util.concurrent.ExecutionException e){throw new IOException(e.getCause().getMessage());}
     }
     private Account googleAccount(boolean smtp){
@@ -221,14 +223,16 @@ public final class MailApp extends JFrame {
     }
     private JPanel keysPanel() {
         JPanel outer = panel(); JPanel p = new JPanel(); p.setLayout(new BoxLayout(p,BoxLayout.Y_AXIS)); outer.add(new JScrollPane(p),BorderLayout.CENTER);
-        p.add(section("1  Your identity",identityLabel));
-        JPanel saved=new JPanel(new FlowLayout(FlowLayout.LEFT));saved.add(savedIdentities);
-        saved.add(button("Open saved identity",()->openSaved((DesktopState.SavedIdentity)savedIdentities.getSelectedItem())));p.add(saved);
-        JPanel keys = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        keys.add(button("Create identity…",this::generate)); keys.add(button("Import PKCS#12…",this::load));
-        keys.add(button("Export signing certificate…",()->export(true))); keys.add(button("Export encryption certificate…",()->export(false))); p.add(keys);
-        p.add(section("2  Recipient encryption certificate",recipientLabel));
-        p.add(left(button("Import recipient certificate…", () -> importCert(false))));
+        p.add(section("Selected outgoing identity",identityLabel));
+        p.add(section("1  Software identities (.p12)",new JLabel("Private keys are encrypted in a local PKCS#12 file; no YubiKey provisioning.")));
+        JPanel saved=new JPanel(new FlowLayout(FlowLayout.LEFT));saved.add(softwareIdentities);
+        saved.add(button("Open software identity",()->openSaved((DesktopState.SavedIdentity)softwareIdentities.getSelectedItem())));p.add(saved);
+        p.add(left(button("Create software identity…",this::generate),button("Import software PKCS#12…",this::load)));
+        p.add(section("2  YubiKey identities",new JLabel("Private keys stay on the bound YubiKey. Each identity remembers its serial and slots.")));
+        JPanel hardware=new JPanel(new FlowLayout(FlowLayout.LEFT));hardware.add(yubikeyIdentities);
+        hardware.add(button("Select YubiKey identity",()->openSaved((DesktopState.SavedIdentity)yubikeyIdentities.getSelectedItem())));p.add(hardware);
+        p.add(left(button("Create identity on empty YubiKey…",this::provisionYubiKey),button("Finish pending certificates…",this::finishTokenCertificates)));
+        p.add(left(button("Export selected signing certificate…",()->export(true)),button("Export selected encryption certificate…",()->export(false))));
         JPanel settings=new JPanel(new FlowLayout(FlowLayout.LEFT));
         settings.add(button("YubiKey configuration…",this::configureYubiKey));
         settings.add(button("Update token certificate email…",this::reissueTokenCertificates));
@@ -238,7 +242,7 @@ public final class MailApp extends JFrame {
             Path path=choose(false,"Choose trusted external-mu adapter executable"); if(path==null)return;
             if(!Files.isExecutable(path)){error(new IOException("Select an executable adapter"));return;}
             adapter=path.toAbsolutePath().toString(); saveAdapter(false,adapter); tokenLabel.setText("External adapter: " + path.getFileName() + " (hardware not detected)");
-        })); token.add(button("Use software signer",()->{adapter=null;saveAdapter(false,"software");tokenLabel.setText("Signing: software");})); p.add(token);
+        })); p.add(token);
         p.add(new JLabel("YubiKey settings and identities are saved on this Mac. PINs are not saved."));
         p.add(Box.createVerticalStrut(12));
         p.add(new JLabel("PKCS#11: PIN dialog in app. ykman: launch from Terminal for PIN prompts."));
@@ -249,7 +253,7 @@ public final class MailApp extends JFrame {
             if(!Files.isExecutable(path)){error(new IOException("Select an executable adapter"));return;}
             kemAdapter=path.toAbsolutePath().toString();saveAdapter(true,kemAdapter);kemLabel.setText("Token decryption: "+path.getFileName());
         }));
-        kem.add(button("Use software decryption",()->{kemAdapter=null;saveAdapter(true,"software");kemLabel.setText("Decryption: software");}));p.add(kem);
+        p.add(kem);
         p.add(new JLabel("ML-KEM and hybrid decryption use the token; one PIN prompt per message."));
         p.add(Box.createVerticalStrut(24));
         p.add(new JLabel("Generated identities are local test identities. Exchange certificate fingerprints out of band."));
@@ -268,9 +272,9 @@ public final class MailApp extends JFrame {
     }
     private void refreshSaved(){
         syncingOutgoing=true;
-        try{savedIdentities.removeAllItems();outgoingIdentity.removeAllItems();if(desktopState==null)return;
+        try{savedIdentities.removeAllItems();softwareIdentities.removeAllItems();yubikeyIdentities.removeAllItems();outgoingIdentity.removeAllItems();if(desktopState==null)return;
             String selected=desktopState.get("selected.identity","");
-            for(var saved:desktopState.identities()){savedIdentities.addItem(saved);outgoingIdentity.addItem(saved);if(saved.id().equals(selected)){savedIdentities.setSelectedItem(saved);outgoingIdentity.setSelectedItem(saved);}}
+            for(var saved:desktopState.identities()){savedIdentities.addItem(saved);(saved.passwordRequired()?softwareIdentities:yubikeyIdentities).addItem(saved);outgoingIdentity.addItem(saved);if(saved.id().equals(selected)){savedIdentities.setSelectedItem(saved);(saved.passwordRequired()?softwareIdentities:yubikeyIdentities).setSelectedItem(saved);outgoingIdentity.setSelectedItem(saved);}}
         }finally{syncingOutgoing=false;}
     }
     private static String certificateEmail(X509Certificate certificate)throws Exception{
@@ -308,7 +312,7 @@ public final class MailApp extends JFrame {
     }
     private void restoreDesktop(){
         try{
-            state();if(!desktopState.get("google.email","").isBlank())googleLabel.setText("Google: connect to restore saved Keychain session");desktopState.migrateTrust();refreshSaved();refreshContacts();adapter=desktopState.adapter(false);kemAdapter=desktopState.adapter(true);updateBackendLabels();
+            state();if(!desktopState.get("google.email","").isBlank())googleLabel.setText("Google: connect to restore saved Keychain session");desktopState.migrateTrust();desktopState.migrateTokenBindings();refreshSaved();refreshContacts();adapter=desktopState.adapter(false);kemAdapter=desktopState.adapter(true);updateBackendLabels();
             recipient=desktopState.certificate("recipient");pinnedSigner=desktopState.certificate("pinned");refreshOutgoingEncryption();
             if(recipient!=null)recipientLabel.setText(recipient.getPublicKey().getAlgorithm()+" · "+recipient.getSubjectX500Principal());
             from.setText(desktopState.get("mail.from",from.getText()));to.setText(desktopState.get("mail.to",to.getText()));
@@ -327,7 +331,7 @@ public final class MailApp extends JFrame {
             basic.add(new JLabel("Uses existing keys. Saving settings never generates or replaces keys."));
             JPanel advanced=new JPanel(new GridLayout(0,1,0,8));advanced.add(new JLabel("Leave crypto paths blank to use the app's bundled libraries."));
             String[] names={"openssl.path","provider.path","module.path","python.path"};String[] labels={"OpenSSL","Provider","Module","Python 3"};
-            JTextField[] paths=new JTextField[4];for(int i=0;i<4;i++){paths[i]=new JTextField(settings.get(names[i],i==3?"/usr/bin/python3":""),38);advanced.add(row(labels[i],paths[i]));}
+            JTextField[] paths=new JTextField[4];for(int i=0;i<4;i++){paths[i]=new JTextField(settings.get(names[i],i==3?DesktopState.defaultPython():""),38);advanced.add(row(labels[i],paths[i]));}
             JTabbedPane panes=new JTabbedPane();panes.addTab("YubiKey",basic);panes.addTab("Advanced",advanced);
             if(JOptionPane.showConfirmDialog(this,panes,"Saved YubiKey configuration",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)!=JOptionPane.OK_OPTION)return;
             if(!serial.getText().trim().matches("[0-9]+"))throw new IOException("Enter the YubiKey's numeric serial number");
@@ -337,7 +341,7 @@ public final class MailApp extends JFrame {
             settings.set("token.serial",serial.getText().trim());settings.set("token.rsaSlot",rsa.getSelectedItem().toString());settings.set("token.kemSlot",kem.getSelectedItem().toString());settings.set("token.ecdhSlot",ecdh.getSelectedItem().toString());
             for(int i=0;i<4;i++)settings.set(names[i],paths[i].getText().isBlank()?null:paths[i].getText().trim());
             settings.set("sign.adapter","pkcs11");settings.set("decrypt.adapter","pkcs11");settings.save();settings.activate();
-            adapter=settings.adapter(false);kemAdapter=settings.adapter(true);updateBackendLabels();status.setText("YubiKey configuration saved. PINs remain temporary.");
+            if(identity!=null)setIdentity(identity);else{adapter=settings.adapter(false);kemAdapter=settings.adapter(true);updateBackendLabels();}status.setText("YubiKey defaults saved. Selected credentials keep their own serial and slots.");
         }catch(Exception e){error(e);}
     }
     private void reissueTokenCertificates(){
@@ -367,11 +371,61 @@ public final class MailApp extends JFrame {
             });
         }catch(Exception e){error(e);}
     }
+    private void provisionYubiKey(){
+        try{
+            JTextField serial=new JTextField(state().get("token.serial","")),email=new JTextField(from.getText());
+            JComboBox<String> profile=new JComboBox<>(new String[]{"Pure ML-DSA-87 + ML-KEM-1024","Pure and P-384 hybrid profiles (four on-device keys)"});profile.setSelectedIndex(1);
+            JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("Target YubiKey serial"));form.add(serial);form.add(new JLabel("Certificate email address"));form.add(email);form.add(profile);
+            form.add(new JLabel("Requires all 24 user PIV slots empty. Factory attestation is excluded."));
+            form.add(new JLabel("No reset, import, deletion or replacement of existing keys is performed."));
+            if(JOptionPane.showConfirmDialog(this,form,"Create YubiKey identity",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+            String number=serial.getText().trim(),address=email.getText().trim();new jakarta.mail.internet.InternetAddress(address,true).validate();boolean hybrid=profile.getSelectedIndex()==1;
+            job("Checking every PIV slot on YubiKey "+number+"…",()->{TokenProvision.check(number);return true;},ok->provisionCredentials(number,address,hybrid));
+        }catch(Exception e){error(e);}
+    }
+    private void provisionCredentials(String serial,String email,boolean hybrid){
+        JPasswordField pin=new JPasswordField(),management=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default management key",true);
+        JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("YubiKey "+serial+" passed the empty-slot check."));
+        form.add(new JLabel("Generate ML-DSA-87 in 9c; ML-KEM-1024 in 9d."));if(hybrid)form.add(new JLabel("Also generate ECDSA P-384 in 9a and ECDH P-384 in 82."));
+        form.add(new JLabel("All keys: PIN Always, Touch Never. Private keys never leave the device."));
+        form.add(new JLabel("YubiKey PIN"));form.add(pin);form.add(factory);form.add(new JLabel("Management key (hex, only if not factory default)"));form.add(management);
+        form.add(new JLabel("Creating keys is not atomic: a failure can leave some slots provisioned. No automatic retry."));
+        if(JOptionPane.showConfirmDialog(this,form,"Generate keys on empty YubiKey",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){pin.setText("");management.setText("");return;}
+        char[] secret=pin.getPassword(),admin=factory.isSelected()?"010203040506070801020304050607080102030405060708".toCharArray():management.getPassword();pin.setText("");management.setText("");
+        if(secret.length<6||secret.length>8||!new String(secret).matches("[ -~]+")||!new String(admin).matches("(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{48}|[a-fA-F0-9]{64})")){Arrays.fill(secret,'\0');Arrays.fill(admin,'\0');error(new IOException("Use a 6–8 character ASCII PIN and a valid hexadecimal management key"));return;}
+        job("Generating keys on YubiKey "+serial+"…",()->{
+            Path parent=state().directory().resolve("token-setups");Files.createDirectories(parent);Path folder=parent.resolve(java.util.UUID.randomUUID().toString());
+            try{
+                var keys=TokenProvision.create(serial,hybrid,folder,secret,admin);
+                var manifest=new java.util.Properties();manifest.setProperty("serial",serial);manifest.setProperty("email",email);manifest.setProperty("hybrid",Boolean.toString(hybrid));
+                try(var out=Files.newOutputStream(folder.resolve("setup.properties"),StandardOpenOption.CREATE_NEW)){manifest.store(out,"Public setup metadata; keys remain on YubiKey");}
+                return issueTokenIdentities(serial,email,hybrid,keys);
+            }finally{Arrays.fill(secret,'\0');Arrays.fill(admin,'\0');if(identity!=null)state().activateIdentity(identity);}
+        },created->{setIdentity(created);refreshSaved();from.setText(email);status.setText("YubiKey identities saved. Keys generated on serial "+serial+"; no private keys stored on this Mac.");});
+    }
+    private Identity issueTokenIdentities(String serial,String email,boolean hybrid,java.util.Map<String,java.security.PublicKey> keys)throws Exception{
+                state().set("token.serial",serial);state().set("token.rsaSlot","9a");state().set("token.kemSlot","9d");state().set("token.ecdhSlot","82");state().activate();
+                String signer=DesktopState.resources().resolve("adapters/pkcs11-mu.py").toString();Identity selected=null;
+                for(boolean composite:hybrid?new boolean[]{false,true}:new boolean[]{false}){
+                    selected=Identity.forToken87(email,keys.get("9c"),composite?keys.get("9a"):null,keys.get("9d"),composite?keys.get("82"):null,ExternalMu.executable(signer));
+                    String id=state().remember(selected,email+" · "+selected.signatureAlgorithm(),null);state().bindToken(id,serial,"9a","9d","82");
+                }return selected;
+    }
+    private void finishTokenCertificates(){
+        Path manifest=choose(false,"Choose setup.properties from a pending YubiKey setup (certificate creation only)");if(manifest==null)return;
+        job("Checking pending setup keys; no key generation…",()->{
+            var values=new java.util.Properties();try(var input=Files.newInputStream(manifest)){values.load(input);}
+            String serial=values.getProperty("serial",""),email=values.getProperty("email","");boolean hybrid=Boolean.parseBoolean(values.getProperty("hybrid","false"));
+            new jakarta.mail.internet.InternetAddress(email,true).validate();
+            var keys=TokenProvision.read(serial,hybrid,manifest.getParent());
+            try{return issueTokenIdentities(serial,email,hybrid,keys);}finally{if(identity!=null)state().activateIdentity(identity);}
+        },created->{setIdentity(created);refreshSaved();status.setText("Pending public certificates completed for the existing YubiKey keys");});
+    }
     private void generate() {
         JTextField email=new JTextField(from.getText()); JComboBox<String> mode=new JComboBox<>(new String[]{"Pure: ML-DSA-65 + ML-KEM-768","Hybrid: ML-DSA-65/ECDSA + ML-KEM-768/ECDH","Pure: ML-DSA-87 + ML-KEM-1024","Hybrid: ML-DSA-87/ECDSA P-384 + ML-KEM-1024/ECDH P-384"});
         mode.setSelectedIndex(1); JPasswordField pass=new JPasswordField();
         JPanel p=new JPanel(new GridLayout(0,1,0,8)); p.add(new JLabel("Email address"));p.add(email);p.add(mode);p.add(new JLabel("New PKCS#12 password (12+ characters)"));p.add(pass);
-        if(JOptionPane.showConfirmDialog(this,p,"Create local test identity",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+        if(JOptionPane.showConfirmDialog(this,p,"Create software identity (.p12)",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
         Path file=choose(true,"Save new identity (choose a new .p12 filename)");if(file==null)return;
         char[] password=pass.getPassword();String address=email.getText().trim();String algorithm=new String[]{Identity.PURE_SIGN,Identity.HYBRID_SIGN,Identity.PURE_87_SIGN,Identity.HYBRID_87_SIGN}[mode.getSelectedIndex()];
         job("Generating identity…",()->{try {Identity id=Identity.generate(address,algorithm);id.save(file,password);return id;}finally{Arrays.fill(password,'\0');}},id->{setIdentity(id);from.setText(address);rememberIdentity(id,file,address);});
@@ -379,10 +433,12 @@ public final class MailApp extends JFrame {
     private void load() {
         Path file=choose(false,"Load identity .p12");if(file==null)return;
         JPasswordField pass=new JPasswordField();if(JOptionPane.showConfirmDialog(this,pass,"Identity password",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
-        char[] password=pass.getPassword();job("Loading identity…",()->{try{return Identity.load(file,password);}finally{Arrays.fill(password,'\0');}},id->{setIdentity(id);rememberIdentity(id,file,file.getFileName().toString());});
+        char[] password=pass.getPassword();job("Loading identity…",()->{try{Identity loaded=Identity.load(file,password);if(loaded.signingKey()==null)throw new IOException("This file has no software signing key. Select its saved YubiKey identity instead.");return loaded;}finally{Arrays.fill(password,'\0');}},id->{setIdentity(id);rememberIdentity(id,file,file.getFileName().toString());});
     }
-    private void setIdentity(Identity id) {identity=id;
-        if(desktopState!=null){adapter=id.signingKey()==null?desktopState.adapter(false):null;kemAdapter=id.encryptionKey()==null&&id.encryptionCert()!=null?desktopState.adapter(true):null;updateBackendLabels();}
+    private String tokenAdapter(boolean kem){String selected=desktopState.adapter(kem);return selected==null?DesktopState.resources().resolve("adapters").resolve(kem?"pkcs11-kem.py":"pkcs11-mu.py").toString():selected;}
+    private void setIdentity(Identity id) {
+        try{if(desktopState!=null)desktopState.activateIdentity(id);}catch(Exception e){error(e);return;}identity=id;
+        if(desktopState!=null){adapter=id.signingKey()==null?tokenAdapter(false):null;kemAdapter=id.encryptionKey()==null&&id.encryptionCert()!=null?tokenAdapter(true):null;updateBackendLabels();}
         identityLabel.setText(id.signatureAlgorithm()+" · "+id.signingCert().getSubjectX500Principal());status.setText("Identity ready. Import a recipient certificate to encrypt.");}
     private void export(boolean signing) {
         if(identity==null){error(new IOException("Load an identity first"));return;}
@@ -483,7 +539,7 @@ public final class MailApp extends JFrame {
     private Path choose(boolean save,String title){JFileChooser c=new JFileChooser();c.setDialogTitle(title);return (save?c.showSaveDialog(this):c.showOpenDialog(this))==JFileChooser.APPROVE_OPTION?c.getSelectedFile().toPath():null;}
     private static JPanel panel(){JPanel p=new JPanel(new BorderLayout(12,12));p.setBorder(new EmptyBorder(16,8,8,8));return p;}
     private static JPanel row(String name,JComponent field){JPanel p=new JPanel(new BorderLayout(8,0));JLabel l=new JLabel(name);l.setPreferredSize(new Dimension(80,24));p.add(l,BorderLayout.WEST);p.add(field);return p;}
-    private static JPanel left(JComponent c){JPanel p=new JPanel(new FlowLayout(FlowLayout.LEFT));p.add(c);return p;}
+    private static JPanel left(JComponent... controls){JPanel p=new JPanel(new FlowLayout(FlowLayout.LEFT));for(var c:controls)p.add(c);return p;}
     private static JPanel section(String name,JLabel detail){JPanel p=new JPanel(new GridLayout(0,1,0,6));p.setBorder(new EmptyBorder(20,6,4,0));JLabel h=new JLabel(name);h.setFont(h.getFont().deriveFont(Font.BOLD,16f));p.add(h);p.add(detail);return p;}
     private static JButton button(String label,Runnable action){JButton b=new JButton(label);b.addActionListener(e->action.run());return b;}
     public static void openTokenSession(Identity id, String executable, MimeMessage verifiedMail) {

@@ -22,3 +22,6 @@ The locally packaged native provider is modified for app PIN callbacks;
 the Yubico module is modified for certificate-independent EC key metadata.
 These patches are distributed with the source repository under patches/.
 Python 3 is supplied by the Mac's existing installation, not bundled.
+
+Provisioning helper: Yubico yubikit, pinned f59e6fedb4f7a75da551ba4dea5d0c7863c8a2b4, Apache-2.0. See YUBIKIT-LICENSE.txt and native-src/provision/Cargo.lock for dependency inventory.
+Windows Python: Python Software Foundation License; embedded distribution retains LICENSE.txt. Windows Java distribution retains its legal directory.

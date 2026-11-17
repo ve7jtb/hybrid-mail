@@ -38,12 +38,12 @@ public final class ExternalKem {
         private byte[] invoke(String algorithm,PublicKey key,byte[] input)throws Exception{
             try{
                 byte[] secret=ExternalMu.invoke(path,algorithm,key,input,pin.copy(()->{TokenPresence.require(path);return TokenPin.request(algorithm);}),true);
-                if(secret.length!=32){Arrays.fill(secret,(byte)0);throw new GeneralSecurityException("Invalid token shared-secret length");}
+                if(secret.length!=(algorithm.equals("ECDH-P384")?48:32)){Arrays.fill(secret,(byte)0);throw new GeneralSecurityException("Invalid token shared-secret length");}
                 return secret;
             }catch(Exception e){clearSecrets();throw e;}
         }
-        public byte[] decapsulate(PublicKey key,byte[] ct)throws Exception{return invoke("ML-KEM-768",key,ct);}
-        public byte[] derive(PublicKey key,PublicKey peer)throws Exception{return invoke("ECDH-P256",key,peer.getEncoded());}
+        public byte[] decapsulate(PublicKey key,byte[] ct)throws Exception{return invoke(key.getAlgorithm(),key,ct);}
+        public byte[] derive(PublicKey key,PublicKey peer)throws Exception{return invoke(((java.security.interfaces.ECPublicKey)key).getParams().getCurve().getField().getFieldSize()==384?"ECDH-P384":"ECDH-P256",key,peer.getEncoded());}
     }
     public static void validatePublicKey(PublicKey key)throws Exception{
         if(key instanceof CompositePublicKey c){
@@ -57,26 +57,30 @@ public final class ExternalKem {
         }else if(!SubjectPublicKeyInfo.getInstance(key.getEncoded()).getAlgorithm().getAlgorithm().equals(NISTObjectIdentifiers.id_alg_ml_kem_768))
             throw new GeneralSecurityException("Expected ML-KEM-768 public key");
     }
-    private static PublicKey point(byte[] raw)throws Exception{
-        if(raw.length!=65||raw[0]!=4)throw new GeneralSecurityException("Expected uncompressed P-256 point");
-        var curve=org.bouncycastle.asn1.sec.SECNamedCurves.getByName("secp256r1").getCurve();
+    private static PublicKey point(byte[] raw)throws Exception{return point(raw,false);}
+    private static PublicKey point(byte[] raw,boolean strong)throws Exception{
+        if(raw.length!=(strong?97:65)||raw[0]!=4)throw new GeneralSecurityException("Expected uncompressed P-256 point");
+        var curve=org.bouncycastle.asn1.sec.SECNamedCurves.getByName(strong?"secp384r1":"secp256r1").getCurve();
         var q=curve.decodePoint(raw);
         if(q.isInfinity()||!q.isValid())throw new GeneralSecurityException("Invalid P-256 point");
-        var spki=new SubjectPublicKeyInfo(new AlgorithmIdentifier(X9ObjectIdentifiers.id_ecPublicKey,X9ObjectIdentifiers.prime256v1),raw);
+        var spki=new SubjectPublicKeyInfo(new AlgorithmIdentifier(X9ObjectIdentifiers.id_ecPublicKey,strong?org.bouncycastle.asn1.sec.SECObjectIdentifiers.secp384r1:X9ObjectIdentifiers.prime256v1),raw);
         return KeyFactory.getInstance("EC","BC").generatePublic(new X509EncodedKeySpec(spki.getEncoded()));
     }
     static byte[] recover(PublicKey pub,byte[] ciphertext,Backend backend)throws Exception{
-        validatePublicKey(pub);
+        Identity.validateEncryptionKey(pub);
         boolean hybrid=pub instanceof CompositePublicKey;
-        if(ciphertext.length!=(hybrid?1153:1088))throw new GeneralSecurityException("Invalid KEM ciphertext length");
+        boolean strong=pub.getAlgorithm().equals(Identity.PURE_1024_KEM)||pub.getAlgorithm().equals(Identity.HYBRID_1024_KEM);
+        int mlSize=strong?1568:1088, ecSize=strong?97:65;
+        if(ciphertext.length!=mlSize+(hybrid?ecSize:0))throw new GeneralSecurityException("Invalid KEM ciphertext length");
         if(!hybrid)return requireSecret(backend.decapsulate(pub,ciphertext));
         var key=(CompositePublicKey)pub;
         byte[] ml=null,ec=null;
-        byte[] traditionalCt=Arrays.copyOfRange(ciphertext,1088,1153);
-        PublicKey peer=point(traditionalCt); // validate before any PIN/device operation
+        byte[] traditionalCt=Arrays.copyOfRange(ciphertext,mlSize,mlSize+ecSize);
+        PublicKey peer=point(traditionalCt,strong); // validate before any PIN/device operation
         try{
-            ml=requireSecret(backend.decapsulate(key.getPublicKeys().get(0),Arrays.copyOf(ciphertext,1088)));
-            ec=requireSecret(backend.derive(key.getPublicKeys().get(1),peer));
+            ml=requireSecret(backend.decapsulate(key.getPublicKeys().get(0),Arrays.copyOf(ciphertext,mlSize)));
+            ec=backend.derive(key.getPublicKeys().get(1),peer);
+            if(ec==null||ec.length!=(strong?48:32))throw new GeneralSecurityException("Invalid ECDH shared-secret length");
             MessageDigest combiner=MessageDigest.getInstance("SHA3-256");
             combiner.update(ml);combiner.update(ec);combiner.update(traditionalCt);
             combiner.update(ECUtil.getUncompressedSubjectPublicKeyBytes(SubjectPublicKeyInfo.getInstance(key.getPublicKeys().get(1).getEncoded()),BouncyCastleProvider.CONFIGURATION));

@@ -150,6 +150,12 @@ Live Google OAuth and Gmail IMAP listing have been observed in the packaged app.
 
 ## Additional software signing profiles
 
-**Keys & token → Create identity…** also offers pure ML-DSA-87 and `MLDSA87-ECDSA-P384-SHA512` composite signatures (ECDSA P-384 with SHA-384). These software identities are stored in password-protected PKCS#12 files and appear in **Sign with**. Encryption uses ML-KEM-1024 or MLKEM1024-ECDH-P384-SHA3-256 respectively. Existing YubiKey provisioning/adapters remain configured for ML-DSA-65 profiles; creating these identities does not alter token keys.
+**Keys & token → Create identity…** also offers pure ML-DSA-87 and `MLDSA87-ECDSA-P384-SHA512` composite signatures (ECDSA P-384 with SHA-384). These software identities are stored in password-protected PKCS#12 files and appear in **Sign with**. Encryption uses ML-KEM-1024 or MLKEM1024-ECDH-P384-SHA3-256 respectively. Software creation does not alter token keys. A separate empty-YubiKey provisioning flow supports these profiles on-device; see the desktop guide.
 
 On macOS `build.sh` also compiles `native-src/keychain.c` using Apple clang and the Security/CoreFoundation frameworks. Xcode Command Line Tools are required. `package.sh` bundles the narrowly scoped Keychain helper.
+
+## YubiKey provisioning and Windows installers
+
+Software `.p12` identities and YubiKey identities have separate creation and selection controls. The native provisioning helper requires every user PIV slot empty, generates ML-DSA-87/ML-KEM-1024 and optional P-384 components directly on the device, and binds saved credentials to the device serial. No ykman installation is required. See [desktop provisioning details](docs/DESKTOP.md).
+
+[Windows installer builds](../../actions/workflows/windows-installers.yml) target x64 and ARM64 runners separately. The installers bundle Java, Python, OpenSSL, PKCS#11 provider/module and the native provisioning helper. Windows uses Credential Manager for OAuth refresh tokens. Build details and validation limitations: [Windows guide](docs/WINDOWS.md).

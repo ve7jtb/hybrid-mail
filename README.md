@@ -27,6 +27,8 @@ An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB a
 - Manage signing and encryption certificates, inspect SHA-256 fingerprints, export PEM/DER, and explicitly mark certificates trusted. Successfully verified incoming signers can be added to the trust store.
 - Keep **software identities in password-protected `.p12` files** separate from **YubiKey identities**, whose private keys stay on the device.
 - Remember the serial and slots for each YubiKey identity, prompt for the correct device, and show the algorithm in PIN/operation dialogs.
+- Update YubiKey certificate email addresses using the existing keys, including up to four additional email SANs.
+- Export certificates with suggested `.pem` filenames or select DER `.cer`; identity and message save dialogs default to `.p12` and `.eml`. Missing extensions are added automatically.
 
 This is an experimental interoperability application. Generated certificates are local test certificates; composite formats and OIDs follow the pinned Bouncy Castle implementation. It is not a production mail client or a claim of interoperability with every S/MIME implementation.
 
@@ -69,7 +71,7 @@ To test a saved YubiKey identity:
 3. Choose **Test selected YubiKey identity — no email**. This button appears only after selecting a YubiKey identity.
 4. Connect over USB or follow the fresh-tap prompt and hold the key at the NFC antenna through each operation. Enter the PIN first, then follow the fresh-tap prompt. A round trip normally asks for one signing PIN and one decryption PIN; each composite operation reuses its PIN for both components.
 
-**Android NFC status:** Level 3 pure and hybrid signing/decryption have passed on a physical Beta0 key with Pixel 10 / Android 17. The app resolves development firmware through Management, requests the PIN before a fresh NFC tap, and checks serial/public keys before PIN submission. The test now displays explicit hold/remove instructions and pauses between signing and decryption. Physical Android USB validation remains pending.
+**Android NFC status:** Level 3 pure and hybrid signing/decryption have passed on a physical Beta0 key with Pixel 10 / Android 17. The app resolves development firmware through Management, requests the PIN before a fresh NFC tap, and checks serial/public keys before PIN submission. The test now displays explicit hold/remove instructions and pauses between signing and decryption. Subsequent runs with that UI failed during NFC PIV selection (`Transceive failed`), before PIN submission; reliable operation with the latest flow remains under investigation. Physical Android USB validation remains pending.
 
 ## YubiKey identities
 
@@ -84,7 +86,11 @@ To test a saved YubiKey identity:
 
 Composite KEM identifiers follow [draft-ietf-lamps-cms-composite-kem-04](https://datatracker.ietf.org/doc/html/draft-ietf-lamps-cms-composite-kem-04), including MLKEM768-ECDH-P384-SHA3-256. ML-DSA categories are defined in [FIPS 204](https://csrc.nist.gov/pubs/fips/204/final); ML-KEM parameters in [FIPS 203](https://nvlpubs.nist.gov/nistpubs/fips/nist.fips.203.pdf).
 
-Keys are generated on the device with PIN policy **Always** and touch policy **Never**. Local identity records contain public certificates, serial and slot bindings, not token private keys. A missing or different device produces a connect/retry prompt. Generation is not atomic: a partial failure leaves generated keys in place and a subsequent creation attempt refuses the nonempty device. **Finish pending certificates…** can resume certificate issuance after successful key generation without generating keys again.
+Keys are generated on the device with PIN policy **Always** and touch policy **Never**. Local identity records contain public certificates, serial and slot bindings, not token private keys. A missing or different device produces a connect/retry prompt. Generation is not atomic: a partial failure leaves generated keys in place and a subsequent creation attempt refuses the nonempty device. **Finish pending certificates…** can resume certificate issuance after successful key generation without generating keys again. Select the saved `setup.properties` file; the app checks the device serial and public keys before issuing certificates. It cannot resume partial key generation. The adjacent **ⓘ** button explains this recovery flow.
+
+**Update YubiKey certificate email…** issues new local signing and encryption certificates for saved token profiles using their existing keys. Enter the primary email and up to four additional comma-separated email SANs; duplicates and invalid addresses are rejected. Old identities are preserved, PIN prompts authorize certificate signing, and no email is sent. This changes certificate identity information, not your Google account.
+
+Desktop provisioning reads the device’s actual beta firmware version through YubiKey Management before opening PIV, allowing Beta0 devices to pass detection while preserving the empty-slot checks.
 
 The packaged provisioning helper uses Yubico's Rust yubikit directly. **ykman is not required for this flow or for PKCS#11 signing/decryption.** The older optional `ykman-mu.py` adapter and Terminal setup scripts still require the Beta0 ykman CLI. See [PKCS#11 signing](docs/PKCS11.md), [KEM decryption](docs/PKCS11-KEM.md), and [external-μ protocol](docs/EXTERNAL-MU.txt).
 

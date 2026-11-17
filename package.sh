@@ -39,7 +39,7 @@ for binary in "$stage/native/bin/openssl" "$stage/native/lib/"*.dylib; do
   if otool -l "$binary" | grep -q LC_ID_DYLIB; then install_name_tool -id "@rpath/$(basename "$binary")" "$binary"; fi
   codesign --force --sign - "$binary"
 done
-jpackage --type app-image --name 'PQ Mail' --input "$stage" \
+jpackage --type app-image --name 'PQ Mail' --icon assets/pq-mail.icns --input "$stage" \
   --main-jar hybrid-mail.jar --main-class dev.hybridmail.MailApp \
   --dest "$DEST" --app-version 1.2.0 --mac-package-identifier dev.hybridmail.desktop \
   --add-modules java.desktop,java.naming,java.security.jgss,java.security.sasl,java.net.http,jdk.httpserver,jdk.crypto.ec,jdk.unsupported

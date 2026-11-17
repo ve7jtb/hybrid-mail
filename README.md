@@ -1,5 +1,7 @@
 # PQ Mail
 
+<img src="assets/pq-mail.png" alt="PQ Mail: PQ shield, lime envelope and YubiKey on a dark teal background" width="160" />
+
 PQ Mail is an experimental post-quantum S/MIME mail application for **desktop and Android**, built with **Jakarta Mail, Eclipse Angus Mail, and Bouncy Castle**. Desktop token operations use bundled **PKCS#11** adapters; Android uses **YubiKit 3.3.0** directly. It supports software identities and keys generated and used on a PQC Ready YubiKey. Formerly **Hybrid Mail**, the project now lives at [ve7jtb/pq-mail](https://github.com/ve7jtb/pq-mail).
 
 ## Android preview

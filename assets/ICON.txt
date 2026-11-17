@@ -1,0 +1,18 @@
+PQ Mail icon
+Created with the built-in image-generation tool, using the user's YubiKey 6 photograph as a visual reference. The original photograph is not included in the project.
+
+Final design prompt: Preserve the blue rounded-square tile and white envelope. Replace the generic security key with a faithful stylized YubiKey 6: broad flat black rectangular body, modest rounded corners, stepped shoulders, short black neck and silver USB-C plug. At the opposite end, a keyring hole with thin gold lining. Use a black circular touch disk with a gold outlined lowercase y and pale gold-green center, not a solid gold button. Place the whole key diagonally over the envelope, keyring end upper right and USB-C lower left. Subtle teal rim light. No photo background or extra text. Transparent exterior.
+
+pq-mail.png: master artwork
+pq-mail.icns: macOS icon
+pq-mail.ico: Windows icon
+Android launcher PNGs are in android/app/src/main/res/mipmap-*.
+YubiKey and Yubico marks belong to Yubico; this app is an independent experimental project.
+
+Final refinement prompt (built-in image editor): Rotate only the gold y emblem approximately 38 degrees clockwise to align with the key body, arms toward the keyring and stem toward USB-C. Preserve the remaining icon and transparency.
+
+Final refinements (built-in image editor): Add bold PQ at upper left above the envelope. Change the blue tile to Yubico-style lime green (approximately #9ACA3C midtone), and PQ to dark charcoal. Preserve the white envelope, YubiKey 6, rotated gold y, and transparent exterior.
+
+Final shield edit (built-in image editor): Replace bare upper-left PQ lettering with a compact charcoal shield containing lime-green PQ. Keep the green tile, white envelope, YubiKey 6 and aligned gold y unchanged; preserve transparency.
+
+Approved final palette (built-in image editor): Use the supplied palette reference only for colors. Dark petrol teal rounded-square background (approximately #00566B), light lime green envelope (approximately #9ACA3C), charcoal shield with lime PQ. Preserve the YubiKey 6, gold y aligned to its angle, geometry, and transparent exterior.

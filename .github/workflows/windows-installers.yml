@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['src/**', 'adapters/**', 'native-src/**', 'patches/**', 'scripts/**', 'assets/**', '.github/workflows/windows-installers.yml']
+    paths: ['src/**', 'adapters/**', 'native-src/**', 'patches/**', 'scripts/**', 'assets/**', '.gitattributes', '.github/workflows/windows-installers.yml']
 permissions:
   contents: read
 jobs:

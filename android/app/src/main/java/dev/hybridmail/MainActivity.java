@@ -1,0 +1,199 @@
+package dev.hybridmail;
+
+import android.app.*;
+import android.content.*;
+import android.net.Uri;
+import android.os.Bundle;
+import android.text.InputType;
+import android.view.*;
+import android.widget.*;
+import com.yubico.yubikit.android.YubiKitManager;
+import com.yubico.yubikit.android.transport.usb.UsbConfiguration;
+import com.yubico.yubikit.android.transport.nfc.NfcConfiguration;
+import com.yubico.yubikit.core.YubiKeyDevice;
+import com.yubico.yubikit.core.smartcard.SmartCardConnection;
+import com.yubico.yubikit.piv.*;
+import java.io.*;
+import java.nio.file.*;
+import java.security.*;
+import java.security.cert.X509Certificate;
+import java.util.*;
+import java.util.concurrent.*;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+
+/** Native Android preview. All cryptography/network work runs off the UI thread. */
+public final class MainActivity extends Activity {
+    private final ExecutorService worker=Executors.newSingleThreadExecutor();
+    private volatile YubiKeyDevice device;
+    private YubiKitManager manager;
+    private AndroidStore store;
+    private LinearLayout page;
+    private TextView status;
+    private Identity identity;
+    private AndroidStore.Entry selected;
+    private X509Certificate recipient;
+    private byte[] outgoing;
+    private volatile boolean busy;
+    private volatile CompletableFuture<char[]> pendingPin;
+    private IoAction documentAction;
+    private byte[] exportBytes;
+    private String from="",to="",subject="",body="";
+    interface Work { void run()throws Exception; }
+    interface IoAction { void accept(Uri uri)throws Exception; }
+    @Override public void onCreate(Bundle saved) {
+        super.onCreate(saved);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        Security.removeProvider("BC");Security.insertProviderAt(new BouncyCastleProvider(),1);MailEngine.init();
+        try {store=new AndroidStore(this);manager=new YubiKitManager(this);
+            manager.startUsbDiscovery(new UsbConfiguration().handlePermissions(true),this::discovered);
+            home();
+        }catch(Exception e){error(e);}
+    }
+    @Override protected void onResume(){super.onResume();if(manager!=null)try{manager.startNfcDiscovery(new NfcConfiguration().timeout(15000),this,this::discovered);}catch(Exception ignored){}}
+    @Override protected void onPause(){if(manager!=null)manager.stopNfcDiscovery(this);super.onPause();}
+    @Override protected void onDestroy(){if(manager!=null){manager.stopUsbDiscovery();manager.stopNfcDiscovery(this);}if(pendingPin!=null)pendingPin.cancel(true);worker.shutdownNow();identity=null;super.onDestroy();}
+    private void discovered(YubiKeyDevice key){device=key;runOnUiThread(()->notice("YubiKey detected over "+key.getTransport()+". Keep it connected during the operation."));}
+    private void page(String title){
+        var scroll=new ScrollView(this);page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setPadding(32,24,32,32);scroll.addView(page);setContentView(scroll);
+        if(android.os.Build.VERSION.SDK_INT>=30)scroll.setOnApplyWindowInsetsListener((v,insets)->{var bars=insets.getInsets(WindowInsets.Type.systemBars());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);return insets;});
+        TextView heading=new TextView(this);heading.setText(title);heading.setTextSize(26);page.addView(heading);
+        status=new TextView(this);status.setPadding(0,12,0,16);page.addView(status);
+        if(!title.equals("PQ Mail"))button("Home",this::home);
+    }
+    private void text(String s){TextView t=new TextView(this);t.setText(s);t.setTextIsSelectable(true);t.setPadding(0,12,0,12);page.addView(t);}
+    private EditText field(LinearLayout p,String hint,String value,boolean secret){EditText e=new EditText(this);e.setHint(hint);e.setText(value);e.setSingleLine(true);if(secret)e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);p.addView(e);return e;}
+    private EditText field(String hint,String value){return field(page,hint,value,false);}
+    private void button(String label,Runnable action){Button b=new Button(this);b.setText(label);b.setAllCaps(false);b.setOnClickListener(v->{if(busy){notice("An operation is still running");return;}action.run();});page.addView(b);}
+    private void notice(String s){if(status!=null)status.setText(s);}
+    private void error(Throwable e){Throwable last=e;while(last.getCause()!=null)last=last.getCause();String message=last.getMessage();new AlertDialog.Builder(this).setTitle("PQ Mail").setMessage(message==null?last.getClass().getSimpleName():message).setPositiveButton("OK",null).show();}
+    private void work(String message,Work action){if(busy)return;busy=true;notice(message);worker.execute(()->{try{action.run();}catch(Exception e){runOnUiThread(()->error(e));}finally{busy=false;runOnUiThread(()->notice("Ready"));}});}
+    private void home(){page("PQ Mail");text("Android preview • S/MIME with software keys or YubiKey USB/NFC\n"+(identity==null?"Select an identity to begin.":identity.signatureAlgorithm()+"\n"+(selected.serial()==0?"Software identity unlocked":"YubiKey "+selected.serial())));
+        button("Identities & certificates",this::identities);button("Compose signed mail",this::compose);button("Open and verify / decrypt .eml",()->pick(uri->openMessage(read(uri))));button("IMAP inbox & SMTP",this::account);
+        button("Lock software identity",()->{identity=null;selected=null;outgoing=null;home();});
+    }
+    private void identities(){page("Identities & certificates");
+        button("Create software .p12 — four keys",()->identityForm(false));
+        button("Import software .p12",()->pick(uri->{byte[] data=read(uri);runOnUiThread(()->password("Unlock imported .p12",p->importBundle(data,p)));}));
+        button("Use existing YubiKey keys — issue certificates",()->identityForm(true));
+        button("Import existing YubiKey certificate pair",this::importTokenCertificates);
+        text("YubiKey: existing slots 9c (ML-DSA), 9a (ECDSA), 9d (ML-KEM), 82 (ECDH). This Android preview never generates or replaces token keys. Certificates are saved locally; private keys stay on the YubiKey.");
+        try{for(var entry:store.entries())button(entry.toString(),()->select(entry));}catch(Exception e){error(e);}
+        if(identity!=null){button("Export signing certificate",()->exportCert(identity.signingCert(),"signing.cer"));button("Export encryption certificate",()->exportCert(identity.encryptionCert(),"encryption.cer"));
+            if(selected.serial()==0)button("Export encrypted software .p12",()->export(readPath(store.root.resolve(selected.bundle())),"identity.p12","application/x-pkcs12"));
+            else button("Test selected YubiKey identity — no email",()->work("Signing and decrypting test message. Keep YubiKey connected…",this::hardwareTest));
+        }
+    }
+    private void importTokenCertificates(){
+        new AlertDialog.Builder(this).setTitle("Import YubiKey certificates").setMessage("First choose the signing certificate, then its encryption certificate (PEM or DER). Connect the matching YubiKey. The app verifies all public keys and remembers its serial; no PIN or private operation is needed.").setNegativeButton("Cancel",null).setPositiveButton("Choose signing certificate",(d,w)->pick(signUri->{
+            var factory=java.security.cert.CertificateFactory.getInstance("X.509","BC");
+            var sc=(X509Certificate)factory.generateCertificate(new ByteArrayInputStream(read(signUri)));sc.checkValidity();
+            runOnUiThread(()->new AlertDialog.Builder(this).setMessage("Now choose the encryption certificate").setPositiveButton("Choose",(a,b)->pick(encUri->{
+                var ec=(X509Certificate)factory.generateCertificate(new ByteArrayInputStream(read(encUri)));ec.checkValidity();Identity.validateEncryptionKey(ec.getPublicKey());
+                if(sc.getKeyUsage()==null||!sc.getKeyUsage()[0]||ec.getKeyUsage()==null||ec.getKeyUsage().length<3||!ec.getKeyUsage()[2])throw new GeneralSecurityException("Certificate key usage is incorrect");
+                var id=new Identity(sc,null,ec,null,null);int serial;
+                try(var connection=requireDevice().openConnection(SmartCardConnection.class)){
+                    var piv=new PivSession(connection);serial=piv.getSerialNumber();
+                    for(var e:YubiBackend.keys(id).entrySet())if(!MessageDigest.isEqual(e.getValue().getEncoded(),YubiBackend.publicKey(piv,e.getKey()).getEncoded()))throw new GeneralSecurityException("Certificate does not match YubiKey slot "+e.getKey());
+                }
+                store.addToken(sc.getSubjectX500Principal()+" • "+id.signatureAlgorithm(),serial,id);runOnUiThread(this::identities);
+            })).setNegativeButton("Cancel",null).show());
+        })).show();
+    }
+    private void hardwareTest()throws Exception{
+        String email=null;for(var san:identity.signingCert().getSubjectAlternativeNames())if(Integer.valueOf(1).equals(san.get(0))&&Identity.matchesEmail(identity.encryptionCert(),(String)san.get(1))){email=(String)san.get(1);break;}
+        if(email==null)throw new GeneralSecurityException("Signing and encryption certificates need a shared email SAN");
+        String transport=requireDevice().getTransport().toString();
+        var message=MailEngine.compose(identity,email,email,"PQ Mail Android hardware test","YubiKey signing and decryption verified",identity.encryptionCert(),backend());
+        var opened=MailEngine.open(message,identity,identity.signingCert(),backend());
+        if(!opened.encrypted()||!opened.pinned()||!opened.text().equals("YubiKey signing and decryption verified"))throw new GeneralSecurityException("Round trip failed");
+        String report="PASS "+transport+"\n"+identity.signatureAlgorithm()+"\n"+identity.encryptionCert().getPublicKey().getAlgorithm()+"\nSignature verified and message decrypted. No email sent; no token keys changed.";
+        getSharedPreferences("hardware-tests",0).edit().putString("last",report).apply();
+        runOnUiThread(()->new AlertDialog.Builder(this).setTitle("YubiKey test passed").setMessage(report).setPositiveButton("OK",null).show());
+    }
+    private void identityForm(boolean token){page(token?"Existing YubiKey identity":"Create software identity");
+        EditText email=field("Primary email address",from);EditText extras=field("Up to four additional emails, comma separated","");
+        Spinner profile=new Spinner(this);profile.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,TokenProfile.values()));page.addView(profile);
+        text("Each profile has pure PQ and hybrid views of the same four keys. Level names refer to the ML-DSA security category; ML-KEM-768 is category 3.");
+        button(token?"Read connected key and create certificates":"Create encrypted .p12",()->{
+            String mail=email.getText().toString().trim(),extra=extras.getText().toString();TokenProfile p=(TokenProfile)profile.getSelectedItem();
+            if(token)work("Read YubiKey, then sign four certificates. Hold NFC key in place.",()->createToken(mail,extra,p));
+            else password("New .p12 password (12+ characters)",pass->{
+                try{var ids=Identity.generateSoftwareProfile(mail,p,Identity.additionalEmails(mail,extra));String id=UUID.randomUUID().toString();Path path=store.root.resolve(id+".p12");ids.get(1).save(path,pass,ids.get(0));
+                    var e=new AndroidStore.Entry(id,mail+" • "+p.code,path.getFileName().toString(),0,"","");store.add(e);identity=ids.get(1);selected=e;from=mail;runOnUiThread(()->{home();export(readPath(path),"identity.p12","application/x-pkcs12");});
+                }finally{Arrays.fill(pass,'\0');}
+            });
+        });
+    }
+    private byte[] readPath(Path p){try{return Files.readAllBytes(p);}catch(Exception e){throw new IllegalStateException(e);}}
+    private void createToken(String email,String extra,TokenProfile profile)throws Exception {
+        List<String> sans=Identity.additionalEmails(email,extra);int serial;Map<Slot,PublicKey> keys=new EnumMap<>(Slot.class);
+        try(var connection=requireDevice().openConnection(SmartCardConnection.class)){
+            var piv=new PivSession(connection);serial=piv.getSerialNumber();
+            for(Slot slot:List.of(Slot.SIGNATURE,Slot.AUTHENTICATION,Slot.KEY_MANAGEMENT,Slot.RETIRED1))keys.put(slot,YubiBackend.publicKey(piv,slot));
+        }
+        var backend=new YubiBackend(this::requireDevice,this::requestPin,serial,keys);
+        Identity pure=Identity.forTokenProfile(email,profile,keys.get(Slot.SIGNATURE),null,keys.get(Slot.KEY_MANAGEMENT),null,backend,sans);
+        Identity hybrid=Identity.forTokenProfile(email,profile,keys.get(Slot.SIGNATURE),keys.get(Slot.AUTHENTICATION),keys.get(Slot.KEY_MANAGEMENT),keys.get(Slot.RETIRED1),backend,sans);
+        store.addToken(email+" • "+profile.code+" pure",serial,pure);store.addToken(email+" • "+profile.code+" hybrid",serial,hybrid);
+        runOnUiThread(this::identities);
+    }
+    private YubiKeyDevice requireDevice()throws Exception{var d=device;if(d==null)throw new IOException("Connect your YubiKey over USB or hold it against NFC, then retry. No PIN was sent.");return d;}
+    private YubiBackend backend(){return new YubiBackend(this::requireDevice,label->requestPin(identity.signatureAlgorithm()+" / "+label),selected.serial(),YubiBackend.keys(identity));}
+    private char[] requestPin(String algorithm)throws Exception {
+        CompletableFuture<char[]> result=new CompletableFuture<>();pendingPin=result;
+        runOnUiThread(()->{
+            EditText input=new EditText(this);input.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+            AlertDialog dialog=new AlertDialog.Builder(this).setTitle("YubiKey PIN • "+algorithm).setMessage("PIN is reused for this operation's components, then cleared. Keep the key connected; touch only if its policy requires it.").setView(input).setNegativeButton("Cancel",(d,w)->result.cancel(false)).setPositiveButton("Continue",null).create();
+            dialog.setOnCancelListener(d->result.cancel(false));dialog.setOnShowListener(d->{input.requestFocus();dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);dialog.getButton(-1).setOnClickListener(v->{
+                char[] pin=new char[input.length()];input.getText().getChars(0,input.length(),pin,0);boolean valid=pin.length>=6&&pin.length<=8;for(char c:pin)valid&=c>=32&&c<=126;
+                if(!valid){Arrays.fill(pin,'\0');input.setError("Use a 6–8 character ASCII PIV PIN");return;}
+                input.getText().clear();if(!result.complete(pin))Arrays.fill(pin,'\0');dialog.dismiss();
+            });});dialog.show();
+            result.whenComplete((p,e)->runOnUiThread(()->{input.getText().clear();dialog.dismiss();}));
+        });
+        try{return result.get(180,TimeUnit.SECONDS);}finally{pendingPin=null;if(!result.isDone())result.cancel(false);}
+    }
+    interface PasswordAction{void accept(char[] password)throws Exception;}
+    private void password(String title,PasswordAction action){EditText input=new EditText(this);input.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        new AlertDialog.Builder(this).setTitle(title).setView(input).setNegativeButton("Cancel",(d,w)->input.getText().clear()).setPositiveButton("Continue",(d,w)->{
+            char[] pass=new char[input.length()];input.getText().getChars(0,input.length(),pass,0);input.getText().clear();work("Processing encrypted identity…",()->{try{action.accept(pass);}finally{Arrays.fill(pass,'\0');}});
+        }).show();
+    }
+    private void importBundle(byte[] bytes,char[] pass)throws Exception {
+        String id=UUID.randomUUID().toString();Path p=store.root.resolve(id+".p12");Files.write(p,bytes);
+        try{List<Identity> loaded=Identity.loadProfiles(p,pass);if(loaded.stream().anyMatch(i->i.signingKey()==null||i.encryptionKey()==null))throw new GeneralSecurityException("Import software bundles with both private keys; use YubiKey identity creation for token keys");
+            var e=new AndroidStore.Entry(id,"Imported "+loaded.get(loaded.size()-1).signatureAlgorithm(),p.getFileName().toString(),0,"","");store.add(e);runOnUiThread(()->chooseView(e,loaded));
+        }catch(Exception e){Files.deleteIfExists(p);throw e;}
+    }
+    private void select(AndroidStore.Entry e){if(e.serial()!=0)work("Loading public certificates…",()->{identity=store.loadToken(e);selected=e;runOnUiThread(this::home);});
+        else password("Unlock software .p12",pass->{var ids=Identity.loadProfiles(store.root.resolve(e.bundle()),pass);runOnUiThread(()->chooseView(e,ids));});}
+    private void chooseView(AndroidStore.Entry e,List<Identity> ids){String[] labels=ids.stream().map(Identity::signatureAlgorithm).toArray(String[]::new);
+        new AlertDialog.Builder(this).setTitle("Outgoing identity profile").setItems(labels,(d,n)->{identity=ids.get(n);selected=e;try{for(var san:identity.signingCert().getSubjectAlternativeNames())if(Integer.valueOf(1).equals(san.get(0))){from=(String)san.get(1);break;}}catch(Exception ignored){}home();}).show();}
+    private void compose(){if(identity==null){error(new Exception("Select an identity first"));return;}outgoing=null;page("Compose signed mail");text(identity.signatureAlgorithm()+" • "+(selected.serial()==0?"software":"YubiKey "+selected.serial()));
+        EditText f=field("From",from),t=field("To",to),s=field("Subject",subject),b=field("Message",body);b.setSingleLine(false);b.setMinLines(5);
+        CheckBox encrypt=new CheckBox(this);encrypt.setText("Encrypt with recipient certificate");page.addView(encrypt);
+        text(recipient==null?"No recipient certificate loaded":recipient.getSubjectX500Principal()+"\n"+recipient.getPublicKey().getAlgorithm());
+        button("Import recipient encryption certificate",()->{from=f.getText().toString();to=t.getText().toString();subject=s.getText().toString();body=b.getText().toString();pick(uri->{byte[] data=read(uri);var cert=(X509Certificate)java.security.cert.CertificateFactory.getInstance("X.509","BC").generateCertificate(new ByteArrayInputStream(data));Identity.validateEncryptionKey(cert.getPublicKey());recipient=cert;runOnUiThread(this::compose);});});
+        button("Sign and prepare .eml",()->{from=f.getText().toString().trim();to=t.getText().toString().trim();subject=s.getText().toString();body=b.getText().toString();boolean enc=encrypt.isChecked();if(enc&&recipient==null){error(new Exception("Import recipient encryption certificate first"));return;}
+            work("Signing "+identity.signatureAlgorithm()+ (enc?" and encrypting…":"…"),()->{outgoing=MailEngine.encode(MailEngine.compose(identity,from,to,subject,body,enc?recipient:null,selected.serial()==0?null:backend()));runOnUiThread(()->export(outgoing,"message.eml","message/rfc822"));});});
+    }
+    private void openMessage(byte[] bytes)throws Exception {
+        var result=MailEngine.open(MailEngine.parse(bytes),identity,null,selected!=null&&selected.serial()!=0?backend():null);
+        runOnUiThread(()->{page("Verified S/MIME message");text("Signature valid • "+result.signatureAlgorithm()+"\n"+(result.encrypted()?"Decrypted":"Unencrypted")+"\nSender address "+(result.fromMatches()?"matches certificate":"DOES NOT match certificate")+"\n"+(store.trusted(result.fingerprint())?"Trusted fingerprint":"Untrusted fingerprint")+"\n"+result.fingerprint());text(result.text());
+            button("Trust this signer fingerprint",()->new AlertDialog.Builder(this).setTitle("Trust signer?").setMessage("Compare this SHA-256 fingerprint through a trusted channel before accepting:\n"+result.fingerprint()).setNegativeButton("Cancel",null).setPositiveButton("Trust",(d,w)->{try{store.trust(result.signerCertificate());notice("Fingerprint saved as trusted");}catch(Exception e){error(e);}}).show());});
+    }
+    private void account(){page("IMAP inbox & SMTP");var prefs=getSharedPreferences("mail",0);
+        EditText user=field("Account username",prefs.getString("user",from)),imap=field("IMAP TLS host (port 993)",prefs.getString("imap","")),smtp=field("SMTP STARTTLS host (port 587)",prefs.getString("smtp",""));
+        EditText pass=field(page,"App password (not saved)","",true);text("TLS is required. Gmail requires an app password where permitted; Google OAuth sign-in is not included in this Android preview.");
+        button("Load 10 most recent messages",()->{String u=user.getText().toString(),h=imap.getText().toString(),credential=pass.getText().toString();pass.getText().clear();prefs.edit().putString("user",u).putString("imap",h).putString("smtp",smtp.getText().toString()).apply();
+            work("Connecting to IMAP…",()->{try(var inbox=ImapInbox.connect(h,993,u,credential,false)){var entries=inbox.latest();List<byte[]> messages=new ArrayList<>();for(var entry:entries)messages.add(MailEngine.encode(inbox.message(entry.uid())));runOnUiThread(()->{page("Recent inbox");for(int i=0;i<entries.size();i++){int n=i;var e=entries.get(i);button(e.sender()+"\n"+e.subject(),()->work("Verifying message…",()->openMessage(messages.get(n))));}});}});});
+        button("Send prepared message via SMTP",()->{if(outgoing==null){error(new Exception("Compose and prepare a message first"));return;}String h=smtp.getText().toString(),u=user.getText().toString();
+            new AlertDialog.Builder(this).setTitle("Send email now?").setMessage("Send the prepared signed message to "+to+" through "+h+"?").setNegativeButton("Cancel",null).setPositiveButton("Send",(d,w)->{String credential=pass.getText().toString();pass.getText().clear();work("Sending SMTP…",()->{MailEngine.send(MailEngine.parse(outgoing),h,587,u,credential,false);runOnUiThread(()->new AlertDialog.Builder(this).setMessage("Message sent").setPositiveButton("OK",null).show());});}).show();});
+    }
+    private void pick(IoAction action){documentAction=action;Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(i,1);}
+    private byte[] read(Uri uri)throws Exception {try(var in=getContentResolver().openInputStream(uri);var out=new ByteArrayOutputStream()){if(in==null)throw new IOException("Cannot open file");byte[] block=new byte[8192];int n;while((n=in.read(block))!=-1){if(out.size()+n>MailEngine.MAX_MESSAGE)throw new IOException("File exceeds 20 MiB");out.write(block,0,n);}return out.toByteArray();}}
+    private void exportCert(X509Certificate cert,String name){try{export(cert.getEncoded(),name,"application/pkix-cert");}catch(Exception e){error(e);}}
+    private void export(byte[] bytes,String name,String mime){exportBytes=bytes;startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType(mime).addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,name),2);}
+    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null){exportBytes=null;documentAction=null;return;}Uri uri=data.getData();if(request==1){IoAction action=documentAction;documentAction=null;work("Opening file…",()->action.accept(uri));}else if(request==2){byte[] bytes=exportBytes;exportBytes=null;work("Saving file…",()->{try(var out=getContentResolver().openOutputStream(uri,"wt")){if(out==null)throw new IOException("Cannot save file");out.write(bytes);}});}}
+}

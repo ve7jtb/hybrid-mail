@@ -2,6 +2,10 @@
 
 PQ Mail is a desktop application for experimenting with post-quantum S/MIME using **Jakarta Mail, Eclipse Angus Mail, Bouncy Castle, and YubiKey PKCS#11**. It supports software identities and keys generated and used on a PQC Ready YubiKey. Formerly **Hybrid Mail**, the project now lives at [ve7jtb/pq-mail](https://github.com/ve7jtb/pq-mail).
 
+## Android preview
+
+An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB and NFC**, with the same three software `.p12`, pure PQ, and hybrid profiles. It includes local S/MIME, IMAPS/SMTP, and public-only YubiKey identities. See the Android guide for build instructions, hardware testing, and preview limitations; Google OAuth and token provisioning remain desktop features.
+
 ## What the app does
 
 - Compose signed text messages, optionally encrypt them, and save/open `.eml` files.

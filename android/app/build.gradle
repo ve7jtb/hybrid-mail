@@ -1,0 +1,44 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'dev.hybridmail'
+    compileSdk 37
+    defaultConfig {
+        applicationId 'org.pqmail.android'
+        minSdk 26
+        targetSdk 37
+        versionCode 1
+        versionName '0.1.0-preview'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
+    }
+    sourceSets.main.java.srcDir "$buildDir/generated/shared"
+    packaging.resources {
+        excludes += ['META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'META-INF/LICENSE*', 'META-INF/NOTICE*', 'META-INF/versions/**', 'META-INF/INDEX.LIST', 'META-INF/DEPENDENCIES', 'module-info.class']
+        merges += ['META-INF/services/*', 'META-INF/mailcap', 'META-INF/javamail.providers', 'META-INF/javamail.default.providers', 'META-INF/javamail.default.address.map']
+    }
+    buildTypes { release { minifyEnabled false } }
+}
+tasks.register('prepareShared', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'python3', 'prepare.py'
+    inputs.dir rootProject.file('../src/dev/hybridmail')
+    inputs.dir rootProject.file('../lib')
+    inputs.file rootProject.file('prepare.py')
+    outputs.dir "$buildDir/generated/shared"
+    outputs.dir "$buildDir/android-libs"
+}
+tasks.named('preBuild').configure { dependsOn 'prepareShared' }
+dependencies {
+    implementation fileTree(dir: "$buildDir/android-libs", include: ['*.jar'])
+    implementation 'com.yubico.yubikit:android:3.3.0'
+    implementation 'com.yubico.yubikit:piv:3.3.0'
+    implementation 'jakarta.activation:jakarta.activation-api:2.1.3'
+    implementation 'org.eclipse.angus:angus-activation:2.0.2'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+}

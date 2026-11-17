@@ -73,3 +73,5 @@ Provisioning several slots is not atomic. Failure leaves any successfully create
 No ykman installation is needed for the packaged creation flow. It uses the bundled native Yubico yubikit helper and PKCS#11 adapters. The older Terminal scripts and optional ykman signer still require ykman. Building the helper from source requires Rust 1.88 or newer and the platform PC/SC development libraries: run `scripts/build-provision.sh` before packaging.
 
 Software and YubiKey creation accept up to four additional comma-separated email addresses. All signing and encryption certificates, pure and hybrid, include the primary address plus these `rfc822Name` Subject Alternative Names. The subject CN remains the primary email. Duplicate or invalid addresses are rejected. Pending YubiKey setup metadata preserves the additional addresses for certificate issuance retries.
+
+New YubiKey creation detects the inserted device and checks all user PIV slots before opening the form. The detected serial is display-only. Missing, busy, nonempty or multiple devices stop the flow; the same serial is checked again before provisioning.

@@ -43,6 +43,20 @@ fn generate(card:&mut impl Card,profile:&str,mut save:impl FnMut(Slot,Vec<u8>)->
 }
 fn main_inner()->Result<()> {
  let args:Vec<String>=env::args().collect();
+ if args.len()==2&&args[1]=="detect" {
+  let mut found=None;
+  for reader in list_readers().map_err(|_|"Cannot enumerate smart card readers")? {
+   let conn=PcscSmartCardConnection::new(&reader,true).map_err(|_|"Cannot access an inserted smart card; close other token applications and insert only the intended YubiKey")?;
+   let Ok(mut piv)=PivSession::new(conn) else {continue};
+   let Ok(serial)=piv.get_serial() else {continue};
+   if found.is_some(){return Err("Multiple YubiKeys detected; insert only the key to provision".into());}
+   found=Some((serial,piv));
+  }
+  let (serial,mut card)=found.ok_or("No accessible YubiKey detected; insert the key to provision")?;
+  if card.version().0<6{return Err("PQC YubiKey firmware 6 or later is required".into());}
+  require_empty(&mut card)?;
+  println!("{serial}");return Ok(());
+ }
  if args.len()!=3&&args.len()!=5{return Err("Expected check SERIAL or create SERIAL pure|hybrid OUTPUT".into());}
  let create=args[1]=="create";let read=args[1]=="read";if !create&&!read&&args[1]!="check"{return Err("Invalid operation".into());}
  let serial:u32=args[2].parse().map_err(|_|"Invalid device serial")?;

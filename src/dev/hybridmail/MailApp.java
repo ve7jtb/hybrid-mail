@@ -346,14 +346,17 @@ public final class MailApp extends JFrame {
         }catch(Exception e){error(e);}
     }
     private void provisionYubiKey(){
+        job("Detecting inserted YubiKey and checking all PIV slots…",TokenProvision::detectEmpty,this::provisionDetectedYubiKey);
+    }
+    private void provisionDetectedYubiKey(String number){
         try{
-            JTextField serial=new JTextField(state().get("token.serial","")),email=new JTextField(from.getText()),extraEmails=new JTextField();
+            JTextField email=new JTextField(from.getText()),extraEmails=new JTextField();
             JComboBox<TokenProfile> profile=new JComboBox<>(TokenProfile.values());profile.setSelectedItem(TokenProfile.LEVEL5);
-            JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("Target YubiKey serial"));form.add(serial);form.add(new JLabel("Certificate email address"));form.add(email);form.add(new JLabel("Additional email addresses (up to 4, comma-separated)"));form.add(extraEmails);form.add(new JLabel("Security profile (all options create four keys and both pure/hybrid identities)"));form.add(profile);
+            JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("Inserted YubiKey serial: "+number+" (all user PIV slots empty)"));form.add(new JLabel("Certificate email address"));form.add(email);form.add(new JLabel("Additional email addresses (up to 4, comma-separated)"));form.add(extraEmails);form.add(new JLabel("Security profile (all options create four keys and both pure/hybrid identities)"));form.add(profile);
             form.add(new JLabel("Requires all 24 user PIV slots empty. Factory attestation is excluded."));
             form.add(new JLabel("No reset, import, deletion or replacement of existing keys is performed."));
             if(JOptionPane.showConfirmDialog(this,form,"Create YubiKey identity",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
-            String number=serial.getText().trim(),address=email.getText().trim();new jakarta.mail.internet.InternetAddress(address,true).validate();TokenProfile selected=(TokenProfile)profile.getSelectedItem();var extra=Identity.additionalEmails(address,extraEmails.getText());
+            String address=email.getText().trim();new jakarta.mail.internet.InternetAddress(address,true).validate();TokenProfile selected=(TokenProfile)profile.getSelectedItem();var extra=Identity.additionalEmails(address,extraEmails.getText());
             job("Checking every PIV slot on YubiKey "+number+"…",()->{TokenProvision.check(number);return true;},ok->provisionCredentials(number,address,selected,extra));
         }catch(Exception e){error(e);}
     }

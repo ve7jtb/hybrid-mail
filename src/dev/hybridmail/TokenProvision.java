@@ -11,10 +11,11 @@ import com.google.gson.*;
 final class TokenProvision {
     static Path helper(){Path p=DesktopState.resources().resolve(DesktopState.windows()?"native/bin/hybrid-mail-provision.exe":"native/bin/hybrid-mail-provision");return Files.isExecutable(p)?p:DesktopState.resources().resolve("native-src/provision/target/release/hybrid-mail-provision");}
     static String run(String serial,String operation,String profile,Path folder,char[] pin,char[] management)throws Exception{
-        if(!serial.matches("[0-9]+"))throw new IOException("Enter the intended YubiKey serial");
+        if(!operation.equals("detect")&&!serial.matches("[0-9]+"))throw new IOException("Enter the intended YubiKey serial");
         boolean create=operation.equals("create");
-        List<String> command=new ArrayList<>(List.of(helper().toString(),operation,serial));
-        if(!operation.equals("check"))command.addAll(List.of(profile,folder.toString()));
+        List<String> command=new ArrayList<>(List.of(helper().toString(),operation));
+        if(!operation.equals("detect"))command.add(serial);
+        if(operation.equals("create")||operation.equals("read"))command.addAll(List.of(profile,folder.toString()));
         Process process=new ProcessBuilder(command).start();var pool=Executors.newFixedThreadPool(2);
         try{
             var out=pool.submit(()->process.getInputStream().readNBytes(32769));var err=pool.submit(()->process.getErrorStream().readNBytes(2049));
@@ -23,6 +24,10 @@ final class TokenProvision {
             byte[] output=out.get(1,TimeUnit.SECONDS);if(output.length>32768)throw new IOException("Invalid provisioning output");
             if(process.exitValue()!=0)throw new IOException(new String(err.get(1,TimeUnit.SECONDS),StandardCharsets.UTF_8).trim());return new String(output,StandardCharsets.UTF_8);
         }finally{if(pin!=null)Arrays.fill(pin,'\0');if(management!=null)Arrays.fill(management,'\0');process.destroyForcibly();pool.shutdownNow();}
+    }
+    static String detectEmpty()throws Exception{
+        String serial=run("","detect","",null,null,null).trim();
+        if(!serial.matches("[0-9]+"))throw new IOException("Cannot identify the inserted YubiKey");return serial;
     }
     static void check(String serial)throws Exception{if(!run(serial,"check","level5",null,null,null).trim().equals("EMPTY"))throw new IOException("Could not establish empty YubiKey state");}
     static Map<String,PublicKey> create(String serial,TokenProfile profile,Path folder,char[] pin,char[] management)throws Exception{

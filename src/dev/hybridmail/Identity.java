@@ -177,11 +177,12 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         };
     }
     /** Reissue local demo certificates for the same keys and a new mailbox address. */
-    public Identity reissue(String email,ExternalMu.Backend backend)throws Exception{
-        new jakarta.mail.internet.InternetAddress(email,true).validate();
-        X509Certificate signing=cert(email,signingCert.getPublicKey(),signer(backend),true);
+    public Identity reissue(String email,ExternalMu.Backend backend)throws Exception{return reissue(email,backend,List.of());}
+    public Identity reissue(String email,ExternalMu.Backend backend,List<String> extra)throws Exception{
+        extra=additionalEmails(email,String.join(",",extra));
+        X509Certificate signing=cert(email,signingCert.getPublicKey(),signer(backend),true,extra);
         signing.verify(signingCert.getPublicKey(),"BC");
-        X509Certificate encryption=encryptionCert==null?null:cert(email,encryptionCert.getPublicKey(),signer(backend),false);
+        X509Certificate encryption=encryptionCert==null?null:cert(email,encryptionCert.getPublicKey(),signer(backend),false,extra);
         if(encryption!=null)encryption.verify(signing.getPublicKey(),"BC");
         return new Identity(signing,signingKey,encryption,encryptionKey,traditionalKey);
     }

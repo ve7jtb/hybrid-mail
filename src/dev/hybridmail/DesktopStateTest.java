@@ -19,8 +19,14 @@ public final class DesktopStateTest {
             check(reopened.get("token.serial","").equals("test-device")&&reopened.get("selected.identity","").equals(id),"device configuration and selection persist");
             state.saveCertificate("recipient",token.encryptionCert());state.saveCertificate("pinned",token.signingCert());
             check(state.certificate("recipient").equals(token.encryptionCert())&&state.certificate("pinned").equals(token.signingCert()),"recipient and pinned certificates persist");
-            Identity renewed=software.reissue("new-mailbox@example.test",null);
+            Identity renewed=software.reissue("new-mailbox@example.test",null,List.of("alias1@example.test","alias2@example.test","alias3@example.test","alias4@example.test"));
             check(Identity.matchesEmail(renewed.signingCert(),"new-mailbox@example.test")&&Identity.matchesEmail(renewed.encryptionCert(),"new-mailbox@example.test")&&Arrays.equals(renewed.signingCert().getPublicKey().getEncoded(),software.signingCert().getPublicKey().getEncoded())&&Arrays.equals(renewed.encryptionCert().getPublicKey().getEncoded(),software.encryptionCert().getPublicKey().getEncoded()),"certificate email update preserves both keys and updates both SANs");
+            for(var cert:List.of(renewed.signingCert(),renewed.encryptionCert())){
+                check(cert.getSubjectAlternativeNames().size()==5,"reissued certificate contains primary and four extra SANs");
+                for(int n=1;n<=4;n++)check(Identity.matchesEmail(cert,"alias"+n+"@example.test"),"reissued SAN alias matches");
+            }
+            try{software.reissue("new@example.test",null,List.of("NEW@example.test"));throw new AssertionError("duplicate SAN accepted");}catch(IllegalArgumentException expected){}
+            try{software.reissue("new@example.test",null,List.of("a@example.test","b@example.test","c@example.test","d@example.test","e@example.test"));throw new AssertionError("fifth extra SAN accepted");}catch(IllegalArgumentException expected){}
             renewed.signingCert().verify(renewed.signingCert().getPublicKey(),"BC");renewed.encryptionCert().verify(renewed.signingCert().getPublicKey(),"BC");
             Path original=dir.resolve("software.p12");software.save(original,password);
             state.remember(software,"Software test",original);

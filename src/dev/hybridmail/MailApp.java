@@ -245,7 +245,7 @@ public final class MailApp extends JFrame {
         p.add(left(button("Export selected signing certificate…",()->export(true)),button("Export selected encryption certificate…",()->export(false))));
         JPanel settings=new JPanel(new FlowLayout(FlowLayout.LEFT));
         settings.add(button("YubiKey configuration…",this::configureYubiKey));
-        settings.add(button("Update token certificate email…",this::reissueTokenCertificates));
+        settings.add(button("Update YubiKey certificate email…",this::reissueTokenCertificates));
         settings.add(button("Show saved identity files",()->{try{Desktop.getDesktop().open(state().directory().toFile());}catch(Exception e){error(e);}}));p.add(settings);
         p.add(Box.createVerticalStrut(24));
         p.add(new JLabel("Generated identities are local test identities. Exchange certificate fingerprints out of band."));
@@ -332,10 +332,12 @@ public final class MailApp extends JFrame {
     private void reissueTokenCertificates(){
         try{
             DesktopState settings=state();JTextField email=new JTextField(settings.get("google.email",from.getText()),30);
-            JPanel prompt=new JPanel(new GridLayout(0,1,0,8));prompt.add(new JLabel("New email for your saved token certificate profiles"));prompt.add(email);
+            JTextField extraEmails=new JTextField(30);
+            JPanel prompt=new JPanel(new GridLayout(0,1,0,8));prompt.add(new JLabel("Primary email address for your YubiKey certificates"));prompt.add(email);
+            prompt.add(new JLabel("Additional subject alternative email addresses (up to 4, comma-separated)"));prompt.add(extraEmails);
             prompt.add(new JLabel("Reuses existing keys and preserves old identities. Two PIN prompts per profile."));
-            if(JOptionPane.showConfirmDialog(this,prompt,"Update local test certificates",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
-            String address=email.getText().trim();new jakarta.mail.internet.InternetAddress(address,true).validate();
+            if(JOptionPane.showConfirmDialog(this,prompt,"Update YubiKey certificate email",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+            String address=email.getText().trim();var extra=Identity.additionalEmails(address,extraEmails.getText());
             String executable=settings.adapter(false);if(executable==null)throw new IOException("Configure a token signing adapter first");
             var profiles=new java.util.LinkedHashMap<String,Identity>();
             for(var saved:settings.selectableIdentities())if(!saved.passwordRequired()){Identity old=settings.loadIdentity(saved.id(),null);profiles.put(old.signatureAlgorithm(),old);}
@@ -343,7 +345,7 @@ public final class MailApp extends JFrame {
             job("Signing new certificates with existing token keys…",()->{
                 var updated=new java.util.ArrayList<Identity>();
                 for(Identity old:profiles.values()){
-                    Identity renewed=old.reissue(address,ExternalMu.executable(executable));
+                    Identity renewed=old.reissue(address,ExternalMu.executable(executable),extra);
                     settings.remember(renewed,address+" · "+renewed.signatureAlgorithm(),null);updated.add(renewed);
                 }
                 return updated.getLast();

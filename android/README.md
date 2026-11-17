@@ -79,8 +79,16 @@ Tests generate temporary software keys only. They cover all profiles, `.p12` rel
 
 ## Current physical-device status
 
-Level 3 signing/decryption passed on the desktop through PKCS#11, and the resulting pure/hybrid public certificate pairs were copied and byte-verified in the Android app. The initial NFC SELECT PIV `0x6A82` error was traced to PIV being disabled over NFC. After enabling it, Android reported “Permission denial: Tag”. The app now waits for a fresh NFC discovery for every operation instead of retaining a tag handle, clears pending discovery/PIN prompts when paused, and skips Android's NDEF probe. It records timestamped pass/fail results separately for each signing profile. Physical NFC round trips with this fix still await confirmation; physical Android USB testing remains pending. No key reset or reprovisioning is required.
+Level 3 pure and hybrid signing/decryption have passed on a physical Beta0 YubiKey over NFC using Pixel 10 / Android 17. Saved results confirm both signing and decryption used NFC, the signatures verified, and the messages decrypted. Desktop PKCS#11 round trips also passed. Physical Android USB testing remains pending.
 
-The next saved NFC attempts passed application selection but stopped before PIN entry at YubiKit’s serial-number firmware check. Development firmware resolution now opens the Management session when PIV reports the development placeholder, obtains the device’s version qualifier, and reopens PIV on the same connection. The temporary SDK override is cleared afterward; serial and public-key matching remain mandatory. The regression test for this path passes; a physical NFC retry is still required.
+The NFC flow resolves Beta firmware qualifiers through the device's Management session, collects the PIN before opening a fresh NFC connection, verifies the serial/public keys before submitting the PIN, and clears the PIN after each operation. Earlier disabled-PIV and stale-tag errors were resolved during testing.
 
-To avoid an idle NFC connection while typing, token operations now collect the PIN **before** requesting a fresh NFC tap. Keep the key away during PIN entry, then tap only at **Connect your YubiKey** and hold until completion. The serial and all bound public keys are verified before VERIFY/PIN submission. Cancellation or mismatch clears the cached PIN without submitting it. This change addresses an observed stale-tag failure during PIN entry; physical retesting remains necessary.
+During the local round-trip test:
+
+1. Enter the signing PIN with the NFC key away from the phone.
+2. At **Connect your YubiKey**, tap and hold. **Hold your YubiKey in place** stays visible during the operation.
+3. At **Signing complete — remove your key**, remove the NFC key. Choose **Continue to decryption** when ready.
+4. Enter the decryption PIN, then re-tap when prompted and hold until completion.
+5. **Test complete — remove your key** confirms both operations finished. No email is sent.
+
+The new stage/removal dialogs have passed a UI startup smoke test; the recorded physical NFC passes precede this wording/transition update. Timestamped results remain stored separately for each signing profile, including failures.

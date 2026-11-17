@@ -11,7 +11,7 @@ An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB a
 | Capability | Desktop | Android preview |
 |---|---|---|
 | Software `.p12`, Level 2/3/5, pure and hybrid | Yes | Yes |
-| YubiKey signing and decryption | Bundled PKCS#11 | Direct YubiKit USB/NFC; physical Android validation pending |
+| YubiKey signing and decryption | Bundled PKCS#11 | Direct YubiKit; Level 3 NFC verified, physical USB testing pending |
 | Generate four keys on an empty YubiKey | Yes | No; use existing keys |
 | Signed mail with optional encryption; `.eml` files | Yes | Yes |
 | Ten-message IMAPS inbox; SMTP STARTTLS | Yes | Yes |
@@ -69,7 +69,7 @@ To test a saved YubiKey identity:
 3. Choose **Test selected YubiKey identity — no email**. This button appears only after selecting a YubiKey identity.
 4. Connect over USB or follow the fresh-tap prompt and hold the key at the NFC antenna through each operation. Enter the PIN first, then follow the fresh-tap prompt. A round trip normally asks for one signing PIN and one decryption PIN; each composite operation reuses its PIN for both components.
 
-**Android NFC status:** the initial SELECT PIV `0x6A82` error was traced to PIV being disabled in the key's NFC application configuration. Enabling PIV over NFC addressed that configuration issue. A subsequent Android “Permission denial: Tag” failure exposed reuse of a previously discovered NFC handle. The app now waits for a fresh tap for each operation, discards handles across operations/app pauses, and records timestamped per-profile results. Physical pure/hybrid NFC round trips still need confirmation with this update; Android USB validation remains pending. No key reset or regeneration is needed.
+**Android NFC status:** Level 3 pure and hybrid signing/decryption have passed on a physical Beta0 key with Pixel 10 / Android 17. The app resolves development firmware through Management, requests the PIN before a fresh NFC tap, and checks serial/public keys before PIN submission. The test now displays explicit hold/remove instructions and pauses between signing and decryption. Physical Android USB validation remains pending.
 
 ## YubiKey identities
 
@@ -142,8 +142,8 @@ The display name and repository changed to PQ Mail. Existing settings, identity 
 
 ## Validation and limitations
 
-- **Current Level 3 hardware:** physical Beta0 tests passed on macOS through PKCS#11 for ML-DSA-65 / ML-KEM-768 and MLDSA65-ECDSA-P384-SHA512 / MLKEM768-ECDH-P384-SHA3-256. All four keys were generated on-device with PIN Always / Touch Never. Both signed-and-encrypted S/MIME round trips passed. The new pure/hybrid public certificate pairs were copied into Android and independently read back byte-for-byte. This transfer does not establish NFC operation.
-- **Android software and adapter tests:** five instrumented test groups passed on Pixel 10 / Android 17, covering all six profiles, encrypted `.p12` reload, wrong-password rejection, tampering, UI startup, and actual YubiKit PIV code exercised with a simulated APDU card. Desktop PQ Mail decrypted and verified 12 Android-generated messages and loaded the corresponding `.p12` bundles. Physical NFC is blocked by the issue above; physical Android USB testing is pending.
+- **Current Level 3 hardware:** physical Beta0 tests passed on macOS through PKCS#11 for ML-DSA-65 / ML-KEM-768 and MLDSA65-ECDSA-P384-SHA512 / MLKEM768-ECDH-P384-SHA3-256. All four keys were generated on-device with PIN Always / Touch Never. Both signed-and-encrypted S/MIME round trips passed. The new pure/hybrid public certificate pairs were copied into Android and independently read back byte-for-byte. Subsequent Android NFC round trips passed for both profiles.
+- **Android software and adapter tests:** five instrumented test groups passed on Pixel 10 / Android 17, covering all six profiles, encrypted `.p12` reload, wrong-password rejection, tampering, UI startup, and actual YubiKit PIV code exercised with a simulated APDU card. Desktop PQ Mail decrypted and verified 12 Android-generated messages and loaded the corresponding `.p12` bundles. Physical Level 3 NFC round trips also passed; physical Android USB testing is pending.
 - **Earlier hardware tests:** physical Beta0 hardware tests passed for pure ML-DSA-65 and composite MLDSA65-RSA3072-PSS-SHA512 signing through PKCS#11, and pure ML-KEM-768 / hybrid MLKEM768-ECDH-P256 decryption. Saved messages were independently reopened and verified. The earlier ykman external-μ signing demo also passed.
 - Automated tests cover software profiles, simulated external signing/decryption including all three provisioning levels in pure and hybrid modes, serialization, tampering, key matching, PIN cache cleanup, identity bindings, and provisioning refusal/partial failures. Simulators do not establish physical-device support. Level 2 and Level 5 physical hardware round trips remain unverified; the normal provisioning UI requires an empty compatible key.
 - Gmail OAuth, Keychain restoration after restart, and the ten-message IMAP inbox have been observed in the Mac app. Live SMTP delivery, third-party interoperability, Windows hardware use and a production security audit are not established by these tests.

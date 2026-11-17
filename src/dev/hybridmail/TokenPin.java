@@ -46,13 +46,13 @@ public final class TokenPin {
         for(char c:pin)if(c<32||c>126)return false;
         return true;
     }
-    public static AutoCloseable progress(){
+    public static AutoCloseable progress(String algorithm){
         if(GraphicsEnvironment.isHeadless())return ()->{};
         JDialog[] dialog={null};
         SwingUtilities.invokeLater(()->{
-            JDialog d=new JDialog((Frame)null,"YubiKey operation",false);dialog[0]=d;
+            JDialog d=new JDialog((Frame)null,"YubiKey operation — "+algorithm,false);dialog[0]=d;
             d.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-            JLabel label=new JLabel("Working… touch only if the key’s policy requires it.");
+            JLabel label=new JLabel(algorithm+" · working… touch only if the key’s policy requires it.");
             label.setBorder(BorderFactory.createEmptyBorder(20,25,20,25));d.add(label);d.pack();d.setLocationRelativeTo(null);d.setVisible(true);
         });
         return ()->SwingUtilities.invokeLater(()->{if(dialog[0]!=null)dialog[0].dispose();});

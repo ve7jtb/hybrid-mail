@@ -28,6 +28,16 @@ public final class DesktopStateTest {
             check(restored.signingKey()!=null&&restored.encryptionKey()!=null,"encrypted software identity restores with password");
             check(!Files.readString(state.directory().resolve("settings.properties")).contains(new String(password)),"identity password absent from settings");
             try{state.loadIdentity(id,"wrong".toCharArray());throw new AssertionError("wrong password accepted");}catch(java.io.IOException expected){System.out.println("PASS wrong saved identity password rejected");}
+            var signingContact=state.rememberContact(software.signingCert(),"desktop@example.test","signing");
+            var encryptionContact=state.rememberContact(software.encryptionCert(),"desktop@example.test","encryption");
+            check(new DesktopState(state.directory()).contacts().size()==2&&state.contactCertificate(encryptionContact).equals(software.encryptionCert()),"signing and encryption contacts persist separately");
+            state.rememberContact(software.signingCert(),"desktop@example.test","signing");check(state.contacts().size()==2,"duplicate certificate import is idempotent");
+            try{state.rememberContact(software.encryptionCert(),"wrong@example.test","encryption");throw new AssertionError("wrong email accepted");}catch(java.io.IOException expected){System.out.println("PASS contact email mismatch rejected");}
+            try{state.rememberContact(software.signingCert(),"desktop@example.test","encryption");throw new AssertionError("wrong key usage accepted");}catch(java.io.IOException expected){System.out.println("PASS signing-only certificate rejected for encryption");}
+            state.removeContact(signingContact);check(state.contacts().size()==1&&Files.isDirectory(state.directory().resolve("removed-contacts")),"contact removal preserves recoverable public certificate");
+            state.saveGoogleClient(new GoogleOAuth.Client("test.apps.googleusercontent.com","test-client-secret"));
+            var client=GoogleOAuth.Client.read(state.directory().resolve("google-client.json"));
+            check(client.id().equals("test.apps.googleusercontent.com")&&client.secret().equals("test-client-secret")&&!Files.readString(state.directory().resolve("settings.properties")).contains("test-client-secret"),"manual OAuth client round trip in separate owner-only config");
             state.activate();ProcessBuilder process=DesktopState.process("/tmp/adapter path.py");
             check(process.command().equals(List.of("/usr/bin/python3","/tmp/adapter path.py"))&&process.environment().get("PYTHONDONTWRITEBYTECODE").equals("1")&&process.environment().get("PKCS11_SERIAL").equals("test-device"),"desktop adapters use explicit interpreter and saved config without shell");
         }finally{Arrays.fill(password,'\0');try(var paths=Files.walk(dir)){for(Path p:paths.sorted(Comparator.reverseOrder()).toList())Files.delete(p);}}

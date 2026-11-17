@@ -11,6 +11,15 @@ import javax.swing.border.EmptyBorder;
 import jakarta.mail.internet.MimeMessage;
 
 public final class MailApp extends JFrame {
+    private java.util.List<DesktopState.Contact> certificateContacts=java.util.List.of();
+    private final javax.swing.table.DefaultTableModel certificateModel=new javax.swing.table.DefaultTableModel(new String[]{"Email","Purpose","Algorithm","SHA-256 fingerprint"},0){public boolean isCellEditable(int row,int column){return false;}};
+    private final JTable certificateTable=new JTable(certificateModel);
+    private boolean syncingOutgoing;
+    private final JComboBox<DesktopState.SavedIdentity> outgoingIdentity=new JComboBox<>();
+    private record EncryptionChoice(String email,X509Certificate certificate){
+        public String toString(){try{return email+" · "+certificate.getPublicKey().getAlgorithm()+" · "+Identity.fingerprint(certificate).substring(0,23);}catch(Exception e){return email;}}
+    }
+    private final JComboBox<EncryptionChoice> outgoingEncryption=new JComboBox<>();
     private Identity identity;
     private ImapInbox inbox;
     private GoogleOAuth.Token googleToken;
@@ -27,7 +36,7 @@ public final class MailApp extends JFrame {
     private final JLabel kemLabel=new JLabel("Decryption: software");
     private final JTextField from = new JTextField("alice@example.test"), to = new JTextField("bob@example.test"), subject = new JTextField("A private conversation");
     private final JTextArea body = new JTextArea("Hello,\n\nThis message is signed using post-quantum cryptography.\n"), reader = new JTextArea();
-    private final JCheckBox encrypt = new JCheckBox("Encrypt for recipient", true);
+    private final JCheckBox encrypt = new JCheckBox("Also encrypt for recipient (optional)", false);
     private final JLabel identityLabel = new JLabel("No identity loaded"), recipientLabel = new JLabel("No recipient certificate"), tokenLabel = new JLabel("Signing: software"), pinLabel = new JLabel("No signer certificate pinned");
     private final JLabel status = new JLabel("Create or load an identity to begin. No network connection is made on startup.");
     private final JTabbedPane tabs = new JTabbedPane();
@@ -37,18 +46,22 @@ public final class MailApp extends JFrame {
         JPanel root = new JPanel(new BorderLayout(0,18)); root.setBorder(new EmptyBorder(22,28,18,28)); setContentPane(root);
         JPanel heading = new JPanel(new BorderLayout()); JLabel title = new JLabel("Hybrid Mail"); title.setFont(title.getFont().deriveFont(Font.BOLD, 30f));
         heading.add(title, BorderLayout.NORTH); heading.add(new JLabel("ML-DSA & composite S/MIME  /  local development build"), BorderLayout.SOUTH); root.add(heading,BorderLayout.NORTH);
-        tabs.addTab("Compose", composePanel()); tabs.addTab("Read & verify", readPanel()); tabs.addTab("Keys & token", keysPanel()); tabs.addTab("Inbox",inboxPanel()); root.add(tabs);
+        tabs.addTab("Compose", composePanel()); tabs.addTab("Read & verify", readPanel()); tabs.addTab("Keys & token", keysPanel()); tabs.addTab("Inbox",inboxPanel()); tabs.addTab("Certificates",certificatesPanel()); root.add(tabs);
         status.setBorder(new EmptyBorder(10,0,0,0)); root.add(status, BorderLayout.SOUTH);
         body.setLineWrap(true); body.setWrapStyleWord(true); body.setFont(new Font(Font.SANS_SERIF,Font.PLAIN,16)); body.setMargin(new Insets(16,16,16,16));
         reader.setEditable(false); reader.setLineWrap(true); reader.setWrapStyleWord(true); reader.setFont(new Font(Font.MONOSPACED,Font.PLAIN,13)); reader.setMargin(new Insets(16,16,16,16));
     }
     private JPanel composePanel() {
         JPanel p = panel(); JPanel fields = new JPanel(new GridLayout(0,1,0,8));
-        fields.add(row("From",from)); fields.add(row("To",to)); fields.add(row("Subject",subject)); fields.add(encrypt); p.add(fields,BorderLayout.NORTH);
+        fields.add(row("From",from)); fields.add(row("To",to)); fields.add(row("Subject",subject));
+        fields.add(row("Sign with",outgoingIdentity));fields.add(encrypt);fields.add(row("Encrypt to",outgoingEncryption));
+        outgoingIdentity.addActionListener(e->{if(!syncingOutgoing){var chosen=(DesktopState.SavedIdentity)outgoingIdentity.getSelectedItem();if(chosen!=null)openSaved(chosen);}});
+        outgoingEncryption.setEnabled(encrypt.isSelected());encrypt.addActionListener(e->outgoingEncryption.setEnabled(encrypt.isSelected()));
+        outgoingEncryption.addActionListener(e->{if(!syncingOutgoing){var chosen=(EncryptionChoice)outgoingEncryption.getSelectedItem();if(chosen!=null){recipient=chosen.certificate();to.setText(chosen.email());recipientLabel.setText(chosen.email()+" · "+recipient.getPublicKey().getAlgorithm());try{state().saveCertificate("recipient",recipient);}catch(Exception error){error(error);}}}}); fields.add(new JLabel("All outgoing messages are signed. Enable encryption only when you have the recipient’s encryption certificate.")); p.add(fields,BorderLayout.NORTH);
         p.add(new JScrollPane(body));
-        JPanel bottom = new JPanel(new BorderLayout()); bottom.add(new JLabel("Body is protected. Outer From / To / Subject headers are not signed or encrypted."),BorderLayout.NORTH);
+        JPanel bottom = new JPanel(new BorderLayout()); bottom.add(new JLabel("Body is signed; encryption is optional. Outer From / To / Subject headers are unprotected."),BorderLayout.NORTH);
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        actions.add(button("Save signed .eml…", () -> compose(false))); actions.add(button("Send via SMTP…", () -> compose(true)));
+        actions.add(button("Recipient certificates…",()->tabs.setSelectedIndex(4))); actions.add(button("Save signed .eml…", () -> compose(false))); actions.add(button("Send via SMTP…", () -> compose(true)));
         bottom.add(actions, BorderLayout.SOUTH); p.add(bottom,BorderLayout.SOUTH); return p;
     }
     private JPanel readPanel() {
@@ -71,6 +84,7 @@ public final class MailApp extends JFrame {
         actions.add(button("Disconnect",this::disconnectInbox));top.add(actions);
         JPanel google=new JPanel(new FlowLayout(FlowLayout.LEFT));
         google.add(button("Import Google OAuth client…",this::importGoogleClient));
+        google.add(button("Enter Google client credentials…",this::enterGoogleClient));
         google.add(button("Sign in with Google…",this::signInGoogle));
         google.add(button("Sign out of Google",this::signOutGoogle));top.add(google);p.add(top,BorderLayout.NORTH);
         inboxTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);inboxTable.setRowHeight(30);inboxTable.setAutoCreateRowSorter(true);
@@ -114,6 +128,16 @@ public final class MailApp extends JFrame {
         Path path=choose(false,"Import Google Desktop OAuth client JSON");if(path==null)return;
         try{GoogleOAuth.Client.read(path);state().importGoogleClient(path);googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved locally; not uploaded");}catch(Exception e){error(e);}
     }
+    private void enterGoogleClient(){
+        JTextField clientId=new JTextField(42);JPasswordField secret=new JPasswordField(42);
+        JPanel fields=new JPanel(new GridLayout(0,1,0,8));fields.add(new JLabel("Use the client ID and secret from a Google Desktop app OAuth client."));
+        fields.add(row("Client ID",clientId));fields.add(row("Client secret",secret));
+        fields.add(new JLabel("Saved only in this Mac's Hybrid Mail configuration; not uploaded to GitHub."));
+        if(JOptionPane.showConfirmDialog(this,fields,"Google Desktop client credentials",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)!=JOptionPane.OK_OPTION){secret.setText("");return;}
+        char[] value=secret.getPassword();secret.setText("");
+        try{state().saveGoogleClient(new GoogleOAuth.Client(clientId.getText().trim(),new String(value).trim()));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved locally. Choose Sign in with Google.");}
+        catch(Exception e){error(e);}finally{Arrays.fill(value,'\0');}
+    }
     private void signInGoogle(){
         try{
             GoogleOAuth.Client client=GoogleOAuth.Client.read(state().directory().resolve("google-client.json"));
@@ -134,6 +158,48 @@ public final class MailApp extends JFrame {
     private void signOutGoogle(){if(googleToken!=null)googleToken.close();googleToken=null;googleEmail=null;googleLabel.setText("Google: signed out");disconnectInbox();status.setText("Local Google session cleared. You can revoke app access in your Google account.");}
     private Account googleAccount(boolean smtp){
         try{if(googleToken==null||!googleToken.valid())throw new IOException("Sign in with Google from the Inbox tab first");return new Account(smtp?"smtp.gmail.com":"imap.gmail.com",smtp?587:993,googleEmail,googleToken.credential(),true);}catch(Exception e){error(e);tabs.setSelectedIndex(3);return null;}
+    }
+    private JPanel certificatesPanel(){
+        JPanel p=panel();JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT));
+        actions.add(button("Import signing certificate…",()->importCert(true)));
+        actions.add(button("Import encryption certificate…",()->importCert(false)));
+        actions.add(button("Refresh",this::refreshContacts));p.add(actions,BorderLayout.NORTH);
+        certificateTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);certificateTable.setAutoCreateRowSorter(true);certificateTable.setRowHeight(30);
+        certificateTable.setDefaultRenderer(Object.class,new javax.swing.table.DefaultTableCellRenderer(){public Component getTableCellRendererComponent(JTable t,Object value,boolean selected,boolean focus,int row,int column){putClientProperty("html.disable",Boolean.TRUE);return super.getTableCellRendererComponent(t,value,selected,focus,row,column);}});
+        certificateTable.getColumnModel().getColumn(0).setPreferredWidth(200);certificateTable.getColumnModel().getColumn(3).setPreferredWidth(350);p.add(new JScrollPane(certificateTable));
+        JPanel bottom=new JPanel(new GridLayout(0,1));JPanel controls=new JPanel(new FlowLayout(FlowLayout.LEFT));
+        controls.add(button("Details…",this::contactDetails));controls.add(button("Use selected certificate",this::useContact));controls.add(button("Export…",this::exportContact));controls.add(button("Remove",this::removeContact));bottom.add(controls);
+        bottom.add(new JLabel("Signing certificates are exact trust pins. Encryption certificates protect mail to their matching email address."));p.add(bottom,BorderLayout.SOUTH);return p;
+    }
+    private DesktopState.Contact selectedContact(){int row=certificateTable.getSelectedRow();return row<0?null:certificateContacts.get(certificateTable.convertRowIndexToModel(row));}
+    private void refreshContacts(){
+        try{certificateContacts=state().contacts();certificateModel.setRowCount(0);for(var contact:certificateContacts){var certificate=state().contactCertificate(contact);certificateModel.addRow(new Object[]{contact.email(),contact.role(),certificate.getPublicKey().getAlgorithm(),Identity.fingerprint(certificate)});}refreshOutgoingEncryption();}catch(Exception e){error(e);}
+    }
+    private void contactDetails(){
+        var contact=selectedContact();if(contact==null)return;
+        try{var certificate=state().contactCertificate(contact);JTextArea text=new JTextArea("Email: "+contact.email()+"\nPurpose: "+contact.role()+"\nSubject: "+certificate.getSubjectX500Principal()+"\nIssuer: "+certificate.getIssuerX500Principal()+"\nSAN: "+certificate.getSubjectAlternativeNames()+"\nAlgorithm: "+certificate.getPublicKey().getAlgorithm()+"\nValid: "+certificate.getNotBefore()+" through "+certificate.getNotAfter()+"\n\nSHA-256: "+Identity.fingerprint(certificate),12,65);text.setEditable(false);text.setLineWrap(true);text.setWrapStyleWord(true);JOptionPane.showMessageDialog(this,new JScrollPane(text),"Certificate details",JOptionPane.PLAIN_MESSAGE);}catch(Exception e){error(e);}
+    }
+    private void useContact(){
+        var contact=selectedContact();if(contact==null)return;
+        try{applyContact(contact,state().contactCertificate(contact));}catch(Exception e){error(e);}
+    }
+    private void applyContact(DesktopState.Contact contact,X509Certificate certificate)throws Exception{
+        certificate.checkValidity();
+        if(contact.role().equals("encryption")){recipient=certificate;recipientLabel.setText(contact.email()+" · "+certificate.getPublicKey().getAlgorithm());to.setText(contact.email());encrypt.setSelected(true);state().saveCertificate("recipient",certificate);refreshOutgoingEncryption();tabs.setSelectedIndex(0);status.setText("Encryption enabled for "+contact.email());}
+        else{pinnedSigner=certificate;pinLabel.setText(contact.email()+" · "+certificate.getPublicKey().getAlgorithm());state().saveCertificate("pinned",certificate);status.setText("Selected signing certificate pinned for verification");}
+    }
+    private void exportContact(){
+        var contact=selectedContact();if(contact==null)return;Path target=choose(true,"Export certificate (.pem or .cer)");if(target==null)return;
+        try{var certificate=state().contactCertificate(contact);Files.write(target,target.toString().toLowerCase().endsWith(".pem")?DesktopState.pem(certificate):certificate.getEncoded(),StandardOpenOption.CREATE_NEW);status.setText("Certificate exported");}catch(Exception e){error(e);}
+    }
+    private void removeContact(){
+        var contact=selectedContact();if(contact==null)return;
+        if(JOptionPane.showConfirmDialog(this,"Remove "+contact.role()+" certificate for "+contact.email()+" from the saved contact list?","Remove certificate",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+        try{var certificate=state().contactCertificate(contact);state().removeContact(contact);
+            if(certificate.equals(recipient)){recipient=null;recipientLabel.setText("No recipient certificate");state().clearCertificate("recipient");}
+            if(certificate.equals(pinnedSigner)){pinnedSigner=null;pinLabel.setText("No signer certificate pinned");state().clearCertificate("pinned");}
+            refreshContacts();status.setText("Removed from contacts; public certificate retained under removed-contacts");
+        }catch(Exception e){error(e);}
     }
     private JPanel keysPanel() {
         JPanel outer = panel(); JPanel p = new JPanel(); p.setLayout(new BoxLayout(p,BoxLayout.Y_AXIS)); outer.add(new JScrollPane(p),BorderLayout.CENTER);
@@ -185,9 +251,27 @@ public final class MailApp extends JFrame {
         try{state().set(kem?"decrypt.adapter":"sign.adapter",value);state().save();}catch(Exception e){error(e);}
     }
     private void refreshSaved(){
-        savedIdentities.removeAllItems();if(desktopState==null)return;
-        String selected=desktopState.get("selected.identity","");
-        for(var saved:desktopState.identities()){savedIdentities.addItem(saved);if(saved.id().equals(selected))savedIdentities.setSelectedItem(saved);}
+        syncingOutgoing=true;
+        try{savedIdentities.removeAllItems();outgoingIdentity.removeAllItems();if(desktopState==null)return;
+            String selected=desktopState.get("selected.identity","");
+            for(var saved:desktopState.identities()){savedIdentities.addItem(saved);outgoingIdentity.addItem(saved);if(saved.id().equals(selected)){savedIdentities.setSelectedItem(saved);outgoingIdentity.setSelectedItem(saved);}}
+        }finally{syncingOutgoing=false;}
+    }
+    private static String certificateEmail(X509Certificate certificate)throws Exception{
+        var names=certificate.getSubjectAlternativeNames();if(names!=null)for(var name:names)if(Integer.valueOf(1).equals(name.get(0)))return name.get(1).toString();return "(no email SAN)";
+    }
+    private void refreshOutgoingEncryption()throws Exception{
+        syncingOutgoing=true;
+        try{
+            outgoingEncryption.removeAllItems();boolean selected=false;
+            for(var contact:state().contacts())if(contact.role().equals("encryption")){
+                var certificate=state().contactCertificate(contact);var choice=new EncryptionChoice(contact.email(),certificate);outgoingEncryption.addItem(choice);
+                if(certificate.equals(recipient)){outgoingEncryption.setSelectedItem(choice);selected=true;}
+            }
+            if(recipient!=null&&!selected){var choice=new EncryptionChoice(certificateEmail(recipient),recipient);outgoingEncryption.addItem(choice);outgoingEncryption.setSelectedItem(choice);}
+            else if(recipient==null)outgoingEncryption.setSelectedIndex(-1);
+            outgoingEncryption.setEnabled(encrypt.isSelected());
+        }finally{syncingOutgoing=false;}
     }
     private void rememberIdentity(Identity id,Path original,String name){
         try{state().remember(id,name,original);setIdentity(id);refreshSaved();status.setText("Identity saved on this Mac.");}catch(Exception e){error(e);}
@@ -197,19 +281,19 @@ public final class MailApp extends JFrame {
         char[] password=new char[0];
         if(saved.passwordRequired()){
             JPasswordField field=new JPasswordField();
-            if(JOptionPane.showConfirmDialog(this,field,"Saved identity password",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+            if(JOptionPane.showConfirmDialog(this,field,"Saved identity password",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){field.setText("");refreshSaved();return;}
             password=field.getPassword();field.setText("");
         }
         char[] secret=password;
-        job("Opening saved identity…",()->{try{return state().loadIdentity(saved.id(),secret);}finally{Arrays.fill(secret,'\0');}},id->{
-            setIdentity(id);try{state().set("selected.identity",saved.id());state().save();}catch(Exception e){error(e);}
+        job("Opening saved identity…",()->{try{return state().loadIdentity(saved.id(),secret);}catch(Exception e){SwingUtilities.invokeLater(this::refreshSaved);throw e;}finally{Arrays.fill(secret,'\0');}},id->{
+            setIdentity(id);try{state().set("selected.identity",saved.id());state().save();refreshSaved();if(!Identity.matchesEmail(id.signingCert(),from.getText().trim()))from.setText(certificateEmail(id.signingCert()));}catch(Exception e){error(e);}
             status.setText("Saved identity ready. PIN requested only for token operations.");
         });
     }
     private void restoreDesktop(){
         try{
-            state();refreshSaved();adapter=desktopState.adapter(false);kemAdapter=desktopState.adapter(true);updateBackendLabels();
-            recipient=desktopState.certificate("recipient");pinnedSigner=desktopState.certificate("pinned");
+            state();refreshSaved();refreshContacts();adapter=desktopState.adapter(false);kemAdapter=desktopState.adapter(true);updateBackendLabels();
+            recipient=desktopState.certificate("recipient");pinnedSigner=desktopState.certificate("pinned");refreshOutgoingEncryption();
             if(recipient!=null)recipientLabel.setText(recipient.getPublicKey().getAlgorithm()+" · "+recipient.getSubjectX500Principal());
             if(pinnedSigner!=null)pinLabel.setText(pinnedSigner.getSubjectX500Principal().toString());
             from.setText(desktopState.get("mail.from",from.getText()));to.setText(desktopState.get("mail.to",to.getText()));
@@ -263,6 +347,7 @@ public final class MailApp extends JFrame {
                 setIdentity(renewed);refreshSaved();from.setText(address);to.setText(address);recipient=renewed.encryptionCert();pinnedSigner=renewed.signingCert();
                 try{settings.set("mail.from",address);settings.set("mail.to",address);settings.saveCertificate("pinned",pinnedSigner);if(recipient!=null)settings.saveCertificate("recipient",recipient);settings.save();}catch(Exception e){error(e);}
                 pinLabel.setText(pinnedSigner.getSubjectX500Principal().toString());if(recipient!=null)recipientLabel.setText(recipient.getPublicKey().getAlgorithm()+" · "+recipient.getSubjectX500Principal());
+                try{refreshOutgoingEncryption();}catch(Exception e){error(e);}
                 status.setText("New email certificates saved (DER and PEM). Token keys unchanged. No email sent.");
             });
         }catch(Exception e){error(e);}
@@ -290,22 +375,27 @@ public final class MailApp extends JFrame {
         Path file=choose(true,"Export public certificate (.pem or .cer)");if(file==null)return;
         job("Exporting certificate…",()->{Files.write(file,file.getFileName().toString().toLowerCase().endsWith(".pem")?DesktopState.pem(c):c.getEncoded(),StandardOpenOption.CREATE_NEW);return "Certificate exported";},status::setText);
     }
-    private void importCert(boolean pin) {
-        Path file=choose(false,pin?"Pin sender signing certificate":"Import recipient encryption certificate");if(file==null)return;
-        job("Reading certificate…",()->Identity.readCertificate(file),cert->{
-            try {
-                String fp=Identity.fingerprint(cert);
-                JTextArea detail=new JTextArea(cert.getSubjectX500Principal()+"\n"+cert.getPublicKey().getAlgorithm()+"\n\nSHA-256 fingerprint:\n"+fp+"\n\nConfirm this fingerprint with the owner before trusting it.");detail.setEditable(false);detail.setLineWrap(true);detail.setWrapStyleWord(true);detail.setColumns(60);detail.setRows(8);
+    private void importCert(boolean pin){
+        Path file=choose(false,pin?"Import signing certificate (.pem or .cer)":"Import encryption certificate (.pem or .cer)");if(file==null)return;
+        job("Reading certificate…",()->Identity.readCertificate(file),certificate->{
+            try{
+                var emails=new java.util.ArrayList<String>();var sans=certificate.getSubjectAlternativeNames();
+                if(sans!=null)for(var san:sans)if(Integer.valueOf(1).equals(san.get(0)))emails.add(san.get(1).toString());
+                if(emails.isEmpty())throw new IOException("Certificate has no email Subject Alternative Name");
+                String email=emails.size()==1?emails.getFirst():(String)JOptionPane.showInputDialog(this,"Choose the contact mailbox","Certificate email",JOptionPane.PLAIN_MESSAGE,null,emails.toArray(),emails.getFirst());if(email==null)return;
+                JTextArea detail=new JTextArea("Email: "+email+"\nPurpose: "+(pin?"signature verification":"encryption")+"\nSubject: "+certificate.getSubjectX500Principal()+"\nAlgorithm: "+certificate.getPublicKey().getAlgorithm()+"\nValid until: "+certificate.getNotAfter()+"\n\nSHA-256 fingerprint:\n"+Identity.fingerprint(certificate)+"\n\nConfirm this fingerprint with the owner before trusting it.",10,65);detail.setEditable(false);detail.setLineWrap(true);detail.setWrapStyleWord(true);
                 if(JOptionPane.showConfirmDialog(this,new JScrollPane(detail),"Save and trust this certificate?",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
-                if(pin){pinnedSigner=cert;pinLabel.setText(cert.getSubjectX500Principal().toString());}
-                else{recipient=cert;recipientLabel.setText(cert.getPublicKey().getAlgorithm()+" · "+cert.getSubjectX500Principal());}
-                state().saveCertificate(pin?"pinned":"recipient",cert);
-            } catch(Exception e){error(e);}
+                var contact=state().rememberContact(certificate,email,pin?"signing":"encryption");refreshContacts();applyContact(contact,certificate);
+            }catch(Exception e){error(e);}
         });
     }
     private void compose(boolean send) {
         if(identity==null){error(new IOException("Create or load an identity first"));tabs.setSelectedIndex(2);return;}
         if(encrypt.isSelected()&&recipient==null){error(new IOException("Import recipient encryption certificate first"));tabs.setSelectedIndex(2);return;}
+        try{
+            if(!Identity.matchesEmail(identity.signingCert(),from.getText().trim()))throw new IOException("From address does not match your signing certificate");
+            if(encrypt.isSelected()&&!Identity.matchesEmail(recipient,to.getText().trim())){tabs.setSelectedIndex(4);throw new IOException("Choose an encryption certificate matching the To address, or turn off optional encryption to send signed-only mail");}
+        }catch(Exception e){error(e);return;}
         Path file=send?null:choose(true,"Save signed S/MIME message (.eml)");if(!send&&file==null)return;
         Account a=send?account(true):null;if(send&&a==null)return;
         Identity id=identity; X509Certificate r=encrypt.isSelected()?recipient:null; ExternalMu.Backend backend=adapter==null?null:ExternalMu.executable(adapter);

@@ -98,3 +98,16 @@ No test emails were sent.
 - Token presence: absent/wrong/matching serial and enumeration errors, cleanup,
   insertion Retry/Cancel and no prompt on module errors: PASS.
   Python adapter/provisioning test total is now 40.
+- Packaged-app certificate reissue: four new mailbox certificates signed through
+  PKCS#11, independently verified; signing and encryption public keys unchanged.
+- Manual Google client entry persists separately from ordinary preferences: PASS.
+
+Latest desktop validation
+- Live Google OAuth sign-in and Gmail IMAP listing observed in the packaged app.
+- Certificate manager: separate signing/encryption persistence, duplicate imports,
+  wrong-email and wrong-key-usage rejection, recoverable removal: PASS.
+- Packaged UI: saved certificate list, details/SAN/fingerprint view and optional
+  encryption default verified. Own identity remains separate from contacts.
+- SMTP delivery not independently verified by this test run.
+- Compose signing and encryption selectors exercised with pure/hybrid profiles.
+  Token progress dialog labels include the actual component algorithm.

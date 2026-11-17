@@ -81,6 +81,45 @@ public final class DesktopState {
         if(!Set.of("recipient","pinned").contains(role))throw new IllegalArgumentException("Invalid certificate role");
         Path path=directory.resolve(role+".cer");return Files.exists(path)?Identity.readCertificate(path):null;
     }
+    public record Contact(String id,String email,String role){}
+    public List<Contact> contacts(){
+        List<Contact> contacts=new ArrayList<>();
+        for(String id:get("contacts","").split(","))if(id.matches("[a-f0-9]{64}"))contacts.add(new Contact(id,get("contact."+id+".email",""),get("contact."+id+".role","")));
+        return List.copyOf(contacts);
+    }
+    public X509Certificate contactCertificate(Contact contact)throws Exception{
+        if(!contacts().contains(contact))throw new IOException("Unknown certificate contact");
+        return Identity.readCertificate(directory.resolve("contacts").resolve(contact.id()).resolve("certificate.cer"));
+    }
+    public Contact rememberContact(X509Certificate certificate,String email,String role)throws Exception{
+        if(!Set.of("signing","encryption").contains(role))throw new IOException("Choose signing or encryption");
+        new jakarta.mail.internet.InternetAddress(email,true).validate();
+        if(!Identity.matchesEmail(certificate,email))throw new IOException("Certificate email SAN does not match the contact address");
+        certificate.checkValidity();boolean[] usage=certificate.getKeyUsage();int bit=role.equals("signing")?0:2;
+        if(usage==null||usage.length<=bit||!usage[bit])throw new IOException("Certificate does not permit "+role);
+        if(role.equals("encryption"))ExternalKem.validatePublicKey(certificate.getPublicKey());
+        MessageDigest digest=MessageDigest.getInstance("SHA-256");digest.update(certificate.getEncoded());digest.update(("\n"+email.toLowerCase(Locale.ROOT)+"\n"+role).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String id=HexFormat.of().formatHex(digest.digest());Path folder=directory.resolve("contacts").resolve(id);
+        write(folder.resolve("certificate.cer"),certificate.getEncoded());write(folder.resolve("certificate.pem"),pem(certificate));
+        var ids=new LinkedHashSet<String>();for(var contact:contacts())ids.add(contact.id());ids.add(id);
+        set("contacts",String.join(",",ids));set("contact."+id+".email",email);set("contact."+id+".role",role);save();return new Contact(id,email,role);
+    }
+    public void removeContact(Contact contact)throws Exception{
+        if(!contacts().contains(contact))throw new IOException("Unknown certificate contact");
+        Path trash=directory.resolve("removed-contacts");Files.createDirectories(trash);Files.setPosixFilePermissions(trash,PosixFilePermissions.fromString("rwx------"));
+        Files.move(directory.resolve("contacts").resolve(contact.id()),trash.resolve(contact.id()+"-"+System.currentTimeMillis()));
+        var ids=new ArrayList<String>();for(var old:contacts())if(!old.id().equals(contact.id()))ids.add(old.id());
+        set("contacts",String.join(",",ids));set("contact."+contact.id()+".email",null);set("contact."+contact.id()+".role",null);save();
+    }
+    public void clearCertificate(String role)throws IOException{
+        if(!Set.of("recipient","pinned").contains(role))throw new IllegalArgumentException("Invalid certificate role");
+        Files.deleteIfExists(directory.resolve(role+".cer"));
+    }
+    public void saveGoogleClient(GoogleOAuth.Client client)throws IOException{
+        var installed=new com.google.gson.JsonObject();installed.addProperty("client_id",client.id());installed.addProperty("client_secret",client.secret());
+        var root=new com.google.gson.JsonObject();root.add("installed",installed);
+        write(directory.resolve("google-client.json"),root.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     public void importGoogleClient(Path source)throws IOException{
         GoogleOAuth.Client.read(source);
         write(directory.resolve("google-client.json"),Files.readAllBytes(source));

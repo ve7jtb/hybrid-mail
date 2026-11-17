@@ -28,7 +28,9 @@ Try without a server
      Read & verify → Open .eml. The app authenticates/decrypts, checks the
      signature, and distinguishes pinned versus untrusted signing certificates.
   You can also send to yourself using one identity and its encryption certificate.
-  Signing only: uncheck Encrypt for recipient. Files are never overwritten.
+  Signing-only is the default; optionally enable encryption for the recipient.
+  Manage saved signing/encryption contacts in the Certificates tab.
+  Export destinations are never overwritten.
 
 Mail transport
   SMTP: authenticated submission with required STARTTLS, default port 587.
@@ -36,8 +38,8 @@ Mail transport
   Double-click a row to fetch its body; refresh updates headers.
   Server hostname checks and connection/read/write timeouts are enabled.
   Host, port and username are saved; account passwords are not saved.
-  These transport paths are implemented but have not been tested against a live
-  account. No email was sent during development. Password and Google Desktop OAuth
+  Google OAuth and IMAP inbox listing were observed with a live account.
+  Live SMTP delivery has not been independently verified. Password and Google Desktop OAuth
   authentication are supported. SMTP implicit TLS/465 is not offered.
 
 Scope and trust

@@ -19,6 +19,10 @@ public final class GoogleOAuth {
     static final URI AUTH=URI.create("https://accounts.google.com/o/oauth2/v2/auth");
     static final URI TOKEN=URI.create("https://oauth2.googleapis.com/token");
     public record Client(String id,String secret){
+        public Client{
+            if(id==null||!id.matches("[A-Za-z0-9_-]+\\.apps\\.googleusercontent\\.com")||id.length()>512)throw new IllegalArgumentException("Enter the full Google client ID ending in .apps.googleusercontent.com");
+            if(secret==null||secret.length()>1024)throw new IllegalArgumentException("Invalid client secret");
+        }
         public String toString(){return "Google Desktop OAuth client";}
         public static Client read(Path path)throws IOException{
             if(Files.size(path)>64*1024)throw new IOException("OAuth client file is too large");

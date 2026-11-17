@@ -182,7 +182,7 @@ public final class ExternalMu {
             if(pinDialog)builder.environment().put("HYBRID_MAIL_PIN_STDIN","1");
             Process p;
             try { p=builder.start(); } catch(Exception e){if(pin!=null)Arrays.fill(pin,'\0');throw e;}
-            AutoCloseable progress=pinDialog?TokenPin.progress():()->{};
+            AutoCloseable progress=pinDialog?TokenPin.progress(algorithm):()->{};
             ExecutorService pool = Executors.newFixedThreadPool(2);
             try {
                 Future<byte[]> errors=pool.submit(()->p.getErrorStream().readNBytes(2048));

@@ -230,7 +230,18 @@ public final class MailApp extends JFrame {
         p.add(section("2  YubiKey identities",new JLabel("Private keys stay on the bound YubiKey. Each identity remembers its serial and slots.")));
         JPanel hardware=new JPanel(new FlowLayout(FlowLayout.LEFT));hardware.add(yubikeyIdentities);
         hardware.add(button("Select YubiKey identity",()->openSaved((DesktopState.SavedIdentity)yubikeyIdentities.getSelectedItem())));p.add(hardware);
-        p.add(left(button("Create identity on empty YubiKey…",this::provisionYubiKey),button("Finish pending certificates…",this::finishTokenCertificates)));
+        JButton pendingHelp=button("ⓘ",()->JOptionPane.showMessageDialog(this,
+            "Use this if YubiKey key generation completed, but certificate creation was interrupted\n"
+            +"(for example, you cancelled a PIN dialog).\n\n"
+            +"Choose setup.properties from the saved token-setups folder. PQ Mail checks the\n"
+            +"YubiKey serial and public keys, then creates the pure and hybrid signing and\n"
+            +"encryption certificates and saves the identities. You may be asked for your PIN.\n\n"
+            +"This does not generate, replace, or delete keys. It cannot resume partial key generation.\n"
+            +"You do not need it after a successful identity creation.",
+            "About finishing pending certificates",JOptionPane.INFORMATION_MESSAGE));
+        pendingHelp.setToolTipText("Help: when to finish pending certificates");
+        pendingHelp.getAccessibleContext().setAccessibleName("Help about finishing pending certificates");
+        p.add(left(button("Create identity on empty YubiKey…",this::provisionYubiKey),button("Finish pending certificates…",this::finishTokenCertificates),pendingHelp));
         p.add(left(button("Export selected signing certificate…",()->export(true)),button("Export selected encryption certificate…",()->export(false))));
         JPanel settings=new JPanel(new FlowLayout(FlowLayout.LEFT));
         settings.add(button("YubiKey configuration…",this::configureYubiKey));

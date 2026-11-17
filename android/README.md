@@ -35,7 +35,7 @@ For YubiKeys:
 
 Fixed token slot mapping matches the desktop default: **9c ML-DSA, 9a ECDSA, 9d ML-KEM, 82 ECDH**. Legacy RSA composite token profiles and custom slot maps are not supported in this Android preview. Pure ML certificates can be imported without an ECDSA key.
 
-Keep NFC contact through the entire operation, including PIN entry. Removal, cancellation, a rejected PIN, or a transport error aborts the operation; no PIN retry occurs automatically. Reconnect/re-tap before retrying. Touch is required only if the key's existing policy requires it. Multiple YubiKeys are not auto-selected by serial: the most recently discovered key is checked, and a mismatch fails closed.
+Wait for **Connect your YubiKey**, remove the key from NFC range, then tap and hold through PIN entry and the operation. Repeat the fresh tap when prompted for the next operation (signing and decryption use separate taps). Removal, cancellation, a rejected PIN, or a transport error aborts the operation; no PIN retry occurs automatically. Reconnect/re-tap before retrying. Touch is required only if the key's existing policy requires it. Multiple YubiKeys are not auto-selected by serial: the most recently discovered key is checked, and a mismatch fails closed.
 
 ## Storage and scope
 
@@ -79,4 +79,4 @@ Tests generate temporary software keys only. They cover all profiles, `.p12` rel
 
 ## Current physical-device status
 
-Level 3 signing/decryption passed on the desktop through PKCS#11, and the resulting pure/hybrid public certificate pairs were copied and byte-verified in the Android app. A subsequent Beta0 NFC attempt returned `0x6A82` before PIN entry; the failing PIV initialization/metadata command is under investigation. NFC is not yet hardware-validated. Physical Android USB testing remains pending. Do not reset or reprovision a key in response to this error.
+Level 3 signing/decryption passed on the desktop through PKCS#11, and the resulting pure/hybrid public certificate pairs were copied and byte-verified in the Android app. The initial NFC SELECT PIV `0x6A82` error was traced to PIV being disabled over NFC. After enabling it, Android reported “Permission denial: Tag”. The app now waits for a fresh NFC discovery for every operation instead of retaining a tag handle, clears pending discovery/PIN prompts when paused, and skips Android's NDEF probe. It records timestamped pass/fail results separately for each signing profile. Physical NFC round trips with this fix still await confirmation; physical Android USB testing remains pending. No key reset or reprovisioning is required.

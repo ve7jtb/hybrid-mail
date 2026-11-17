@@ -24,7 +24,8 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
 /** Native Android preview. All cryptography/network work runs off the UI thread. */
 public final class MainActivity extends Activity {
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
-    private volatile YubiKeyDevice device;
+    private final FreshDeviceGate deviceGate=new FreshDeviceGate();
+    private volatile String lastTransport="unknown";
     private YubiKitManager manager;
     private AndroidStore store;
     private LinearLayout page;
@@ -49,10 +50,10 @@ public final class MainActivity extends Activity {
             home();
         }catch(Exception e){error(e);}
     }
-    @Override protected void onResume(){super.onResume();if(manager!=null)try{manager.startNfcDiscovery(new NfcConfiguration().timeout(15000),this,this::discovered);}catch(Exception ignored){}}
-    @Override protected void onPause(){if(manager!=null)manager.stopNfcDiscovery(this);super.onPause();}
+    @Override protected void onResume(){super.onResume();if(manager!=null)try{manager.startNfcDiscovery(new NfcConfiguration().skipNdefCheck(true).timeout(15000),this,this::discovered);}catch(Exception ignored){}}
+    @Override protected void onPause(){if(manager!=null)manager.stopNfcDiscovery(this);deviceGate.cancel();if(pendingPin!=null)pendingPin.cancel(false);super.onPause();}
     @Override protected void onDestroy(){if(manager!=null){manager.stopUsbDiscovery();manager.stopNfcDiscovery(this);}if(pendingPin!=null)pendingPin.cancel(true);worker.shutdownNow();identity=null;super.onDestroy();}
-    private void discovered(YubiKeyDevice key){device=key;runOnUiThread(()->notice("YubiKey detected over "+key.getTransport()+". Keep it connected during the operation."));}
+    private void discovered(YubiKeyDevice key){deviceGate.discovered(key);runOnUiThread(()->notice("YubiKey detected over "+key.getTransport()+". Keep it connected during the operation."));}
     private void page(String title){
         var scroll=new ScrollView(this);page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setPadding(32,24,32,32);scroll.addView(page);setContentView(scroll);
         if(android.os.Build.VERSION.SDK_INT>=30)scroll.setOnApplyWindowInsetsListener((v,insets)->{var bars=insets.getInsets(WindowInsets.Type.systemBars());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);return insets;});
@@ -102,13 +103,20 @@ public final class MainActivity extends Activity {
     private void hardwareTest()throws Exception{
         String email=null;for(var san:identity.signingCert().getSubjectAlternativeNames())if(Integer.valueOf(1).equals(san.get(0))&&Identity.matchesEmail(identity.encryptionCert(),(String)san.get(1))){email=(String)san.get(1);break;}
         if(email==null)throw new GeneralSecurityException("Signing and encryption certificates need a shared email SAN");
-        String transport=requireDevice().getTransport().toString();
+        String stage="signing";String signingTransport="unknown";
+        try{
         var message=MailEngine.compose(identity,email,email,"PQ Mail Android hardware test","YubiKey signing and decryption verified",identity.encryptionCert(),backend());
+        signingTransport=lastTransport;stage="decryption";
         var opened=MailEngine.open(message,identity,identity.signingCert(),backend());
         if(!opened.encrypted()||!opened.pinned()||!opened.text().equals("YubiKey signing and decryption verified"))throw new GeneralSecurityException("Round trip failed");
-        String report="PASS "+transport+"\n"+identity.signatureAlgorithm()+"\n"+identity.encryptionCert().getPublicKey().getAlgorithm()+"\nSignature verified and message decrypted. No email sent; no token keys changed.";
-        getSharedPreferences("hardware-tests",0).edit().putString("last",report).apply();
+        String report="PASS signing="+signingTransport+" decryption="+lastTransport+"\n"+identity.signatureAlgorithm()+"\n"+identity.encryptionCert().getPublicKey().getAlgorithm()+"\nSignature verified and message decrypted. No email sent; no token keys changed.";
+        saveHardwareResult(report);
         runOnUiThread(()->new AlertDialog.Builder(this).setTitle("YubiKey test passed").setMessage(report).setPositiveButton("OK",null).show());
+        }catch(Exception e){Throwable cause=e;while(cause.getCause()!=null&&!(cause instanceof PivDiagnostic))cause=cause.getCause();saveHardwareResult("FAIL "+stage+" / "+lastTransport+"\n"+identity.signatureAlgorithm()+"\n"+cause.getClass().getSimpleName()+": "+cause.getMessage());throw e;}
+    }
+    private void saveHardwareResult(String report)throws IOException{
+        String stamped=java.time.Instant.now()+"\n"+report;
+        if(!getSharedPreferences("hardware-tests",0).edit().putString("last",stamped).putString("profile."+identity.signatureAlgorithm(),stamped).commit())throw new IOException("Cannot save hardware-test result");
     }
     private void identityForm(boolean token){page(token?"Existing YubiKey identity":"Create software identity");
         EditText email=field("Primary email address",from);EditText extras=field("Up to four additional emails, comma separated","");
@@ -137,7 +145,19 @@ public final class MainActivity extends Activity {
         store.addToken(email+" • "+profile.code+" pure",serial,pure);store.addToken(email+" • "+profile.code+" hybrid",serial,hybrid);
         runOnUiThread(this::identities);
     }
-    private YubiKeyDevice requireDevice()throws Exception{var d=device;if(d==null)throw new IOException("Connect your YubiKey over USB or hold it against NFC, then retry. No PIN was sent.");return d;}
+    private YubiKeyDevice requireDevice()throws Exception{
+        var result=deviceGate.request();
+        if(!result.isDone())runOnUiThread(()->{
+            if(result.isDone())return;
+            var dialog=new AlertDialog.Builder(this).setTitle("Connect your YubiKey")
+                .setMessage("For NFC, move the key away, then tap and hold it against the phone. A fresh tap is required for each signing or decryption operation. Keep it in place through PIN entry. You can also connect over USB.")
+                .setNegativeButton("Cancel",(d,w)->deviceGate.cancel()).create();
+            dialog.setOnCancelListener(d->deviceGate.cancel());dialog.show();
+            result.whenComplete((d,e)->runOnUiThread(dialog::dismiss));
+        });
+        try{var key=result.get(120,TimeUnit.SECONDS);lastTransport=key.getTransport().toString();return key;}
+        finally{deviceGate.cancel();}
+    }
     private YubiBackend backend(){return new YubiBackend(this::requireDevice,label->requestPin(identity.signatureAlgorithm()+" / "+label),selected.serial(),YubiBackend.keys(identity));}
     private char[] requestPin(String algorithm)throws Exception {
         CompletableFuture<char[]> result=new CompletableFuture<>();pendingPin=result;

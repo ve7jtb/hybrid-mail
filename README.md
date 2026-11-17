@@ -67,9 +67,9 @@ To test a saved YubiKey identity:
 1. Open **Identities & certificates** and tap the saved pure or hybrid identity. Selection returns to Home.
 2. Open **Identities & certificates** again and scroll below the certificate export buttons.
 3. Choose **Test selected YubiKey identity — no email**. This button appears only after selecting a YubiKey identity.
-4. Connect over USB or hold the key at the NFC antenna through the operation. A round trip normally asks for one signing PIN and one decryption PIN; each composite operation reuses its PIN for both components.
+4. Connect over USB or follow the fresh-tap prompt and hold the key at the NFC antenna through each operation. A round trip normally asks for one signing PIN and one decryption PIN; each composite operation reuses its PIN for both components.
 
-**Known Android NFC issue:** a physical Beta0 test currently returns APDU status `0x6A82` before the PIN prompt. The failing initialization/metadata command is still being investigated. Do not treat NFC as hardware-validated or reset/reprovision a key to resolve this error. Android physical USB testing also remains pending. The successful desktop PKCS#11 tests do not establish Android transport compatibility.
+**Android NFC status:** the initial SELECT PIV `0x6A82` error was traced to PIV being disabled in the key's NFC application configuration. Enabling PIV over NFC addressed that configuration issue. A subsequent Android “Permission denial: Tag” failure exposed reuse of a previously discovered NFC handle. The app now waits for a fresh tap for each operation, discards handles across operations/app pauses, and records timestamped per-profile results. Physical pure/hybrid NFC round trips still need confirmation with this update; Android USB validation remains pending. No key reset or regeneration is needed.
 
 ## YubiKey identities
 

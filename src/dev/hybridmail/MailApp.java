@@ -80,6 +80,19 @@ public final class MailApp extends JFrame {
         trustIncoming.setEnabled(false);trustIncoming.addActionListener(e->trustIncomingSigner());actions.add(trustIncoming);
         p.add(actions,BorderLayout.NORTH); return p;
     }
+    private void googleAdvancedSettings(){
+        JDialog dialog=new JDialog(this,"Advanced settings — Google OAuth",true);
+        JPanel settings=new JPanel(new BorderLayout(12,12));settings.setBorder(BorderFactory.createEmptyBorder(16,16,16,16));
+        settings.add(new JLabel("<html>PQ Mail’s shared Google client is the default; no client registration is needed.<br>Custom clients are optional for developers and organizations.<br>Changing clients requires signing in again.</html>"),BorderLayout.NORTH);
+        JPanel google=new JPanel(new GridLayout(0,1,0,8));
+        google.add(button("Use PQ Mail Google client",()->{try{GoogleSession.saveClient(GoogleOAuth.bundledClient());if(googleToken!=null){googleToken.close();googleToken=null;}googleLabel.setText("PQ Mail Google client · testing: registered testers only");status.setText("Choose Sign in with Google. Your previous custom registration is no longer selected.");}catch(Exception e){error(e);}}));
+        google.add(button("Import Google OAuth client…",this::importGoogleClient));
+        google.add(button("Enter Google client credentials…",this::enterGoogleClient));
+google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStore()+" with disposable data…",()->{String value=java.util.UUID.randomUUID().toString();try{MacKeychain.put("self-test",value);if(!value.equals(MacKeychain.get("self-test")))throw new IOException("Keychain round trip failed");}finally{MacKeychain.delete("self-test");}return true;},ok->status.setText("PASS "+credentialStore()+" write/read/delete; no Google credentials used"))));
+        settings.add(google,BorderLayout.CENTER);
+        settings.add(left(button("Close",dialog::dispose)),BorderLayout.SOUTH);
+        dialog.setContentPane(settings);dialog.pack();dialog.setLocationRelativeTo(this);dialog.setVisible(true);
+    }
     private JPanel inboxPanel(){
         JPanel p=panel();JPanel top=new JPanel(new GridLayout(0,1,0,6));
         top.add(inboxLabel);top.add(googleLabel);
@@ -91,11 +104,10 @@ public final class MailApp extends JFrame {
         smimeInboxOnly.setEnabled(false);smimeInboxOnly.addActionListener(e->{if(inbox instanceof GmailApi api){api.setSmimeOnly(smimeInboxOnly.isSelected());refreshInbox();}});actions.add(smimeInboxOnly);
         actions.add(button("Disconnect",this::disconnectInbox));top.add(actions);
         JPanel google=new JPanel(new FlowLayout(FlowLayout.LEFT));
-        google.add(button("Use PQ Mail Google client",()->{try{GoogleSession.saveClient(GoogleOAuth.bundledClient());if(googleToken!=null){googleToken.close();googleToken=null;}googleLabel.setText("PQ Mail Google client · testing: registered testers only");status.setText("Choose Sign in with Google. Your previous custom registration is no longer selected.");}catch(Exception e){error(e);}}));
-        google.add(button("Import Google OAuth client…",this::importGoogleClient));
-        google.add(button("Enter Google client credentials…",this::enterGoogleClient));
         google.add(button("Sign in with Google…",this::signInGoogle));
-        google.add(button("Sign out of Google",this::signOutGoogle));google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStore()+" with disposable data…",()->{String value=java.util.UUID.randomUUID().toString();try{MacKeychain.put("self-test",value);if(!value.equals(MacKeychain.get("self-test")))throw new IOException("Keychain round trip failed");}finally{MacKeychain.delete("self-test");}return true;},ok->status.setText("PASS "+credentialStore()+" write/read/delete; no Google credentials used"))));top.add(google);p.add(top,BorderLayout.NORTH);
+        google.add(button("Sign out of Google",this::signOutGoogle));
+        google.add(button("Advanced settings…",this::googleAdvancedSettings));
+        top.add(google);p.add(top,BorderLayout.NORTH);
         inboxTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);inboxTable.setRowHeight(30);inboxTable.setAutoCreateRowSorter(true);
         // Mail headers are untrusted; disable Swing's implicit HTML renderer.
         inboxTable.setDefaultRenderer(Object.class,new javax.swing.table.DefaultTableCellRenderer(){

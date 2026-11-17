@@ -26,6 +26,8 @@ final class GoogleSession {
         String saved=MacKeychain.get("google-session",authenticate);if(saved==null)throw new IOException("Sign in with Google once to save your session in Mac Keychain");
         JsonObject j;try{j=JsonParser.parseString(saved).getAsJsonObject();if(!j.has("scope")||!GoogleOAuth.SCOPE.equals(j.get("scope").getAsString()))throw new IOException("Sign in again to authorize Gmail read-only and send access. Previous IMAP/SMTP sessions are not reused.");if(!client.id().equals(j.get("client").getAsString())||!email.equalsIgnoreCase(j.get("email").getAsString()))throw new IOException("Saved Google session belongs to another client or account. Sign in again.");}catch(RuntimeException e){throw new IOException("Saved Google session is invalid. Sign in again.");}
         GoogleOAuth.Token token=GoogleOAuth.refresh(client,j.get("refresh").getAsString());
-        try{save(client,email,token);return token;}catch(Exception e){token.close();throw e;}
+        // Google normally retains the same refresh token. Rewriting the protected
+        // item would ask for user presence a second time with a new helper process.
+        try{if(!java.util.Objects.equals(j.get("refresh").getAsString(),token.refreshToken()))save(client,email,token);return token;}catch(Exception e){token.close();throw e;}
     }
 }

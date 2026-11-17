@@ -15,6 +15,9 @@ Copy-Item build/native/openssl/*.dll "$stage/native/lib"
 $pythonArch=if($Architecture -eq 'arm64'){'arm64'}else{'amd64'}
 Invoke-WebRequest "https://www.python.org/ftp/python/3.13.9/python-3.13.9-embed-$pythonArch.zip" -OutFile build/python.zip
 Expand-Archive build/python.zip "$stage/native/python" -Force
+# App-local VC runtime also supports the native helpers and PKCS#11 DLL.
+Get-ChildItem "$stage/native/python" -Filter 'vcruntime*.dll' | Copy-Item -Destination "$stage/native/bin"
+Get-ChildItem "$stage/native/python" -Filter 'vcruntime*.dll' | Copy-Item -Destination "$stage/native/lib"
 # Embedded Python's stdlib is sufficient for all adapters.
 $env:PATH="$stage/native/bin;$env:PATH"
 & "$stage/native/bin/openssl.exe" version; Checked
@@ -22,7 +25,7 @@ $env:PKCS11_PROVIDER_MODULE="$stage/native/lib/ykcs11.dll"
 & "$stage/native/bin/openssl.exe" list -providers -provider default -provider "$stage/native/lib/pkcs11.dll"; Checked
 & "$stage/native/python/python.exe" -m py_compile adapters/pkcs11-mu.py adapters/pkcs11-kem.py adapters/pkcs11-presence.py; Checked
 foreach($test in @('SelfTest','TokenIdentityTest','TokenKemTest','Token87Test','SoftwareProfilesTest','GmailApiTest')) {
- & "$env:JAVA_HOME/bin/java.exe" '-Djava.awt.headless=true' -cp 'build/hybrid-mail.jar;lib/*' "dev.hybridmail.$test"; Checked
+ & "$env:JAVA_HOME/bin/java.exe" '-Djava.awt.headless=true' -cp "$stage/*" "dev.hybridmail.$test"; Checked
 }
 # Isolated native credential-store test; never accesses an actual OAuth credential.
 $helper="$stage/native/bin/hybrid-mail-credentials.exe"

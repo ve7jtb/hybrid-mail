@@ -86,10 +86,10 @@ public final class SelfTest {
             }
             // A real subprocess exercises the adapter protocol, using software only.
             Path keyFile=dir.resolve("simulator.pk8");Files.write(keyFile,alice[0].signingKey().getEncoded());
-            Path executable=dir.resolve("adapter");
-            String java=Path.of(System.getProperty("java.home"),"bin","java").toString();
+            Path executable=dir.resolve("adapter.py");
+            String java=Path.of(System.getProperty("java.home"),"bin",DesktopState.windows()?"java.exe":"java").toString();
             String cp=Arrays.stream(System.getProperty("java.class.path").split(File.pathSeparator)).map(p->Path.of(p).toAbsolutePath().toString()).reduce((a,b)->a+File.pathSeparator+b).orElseThrow();
-            Files.writeString(executable,"#!/bin/sh\nexec "+quote(java)+" -cp "+quote(cp)+" dev.hybridmail.TestMuAdapter "+quote(keyFile.toString())+"\n");executable.toFile().setExecutable(true,true);
+            Files.writeString(executable,"import subprocess, sys\nsys.exit(subprocess.call("+new com.google.gson.Gson().toJson(List.of(java,"-cp",cp,"dev.hybridmail.TestMuAdapter",keyFile.toString()))+"))\n");
             var wire=MailEngine.compose(alice[0],"alice@example.test","bob@example.test","Process",text,null,ExternalMu.executable(executable.toString()));
             check(MailEngine.open(wire,null,alice[0].signingCert()).pinned(),"external executable protocol round-trip");
             System.out.println("SUCCESS: "+checks+" checks; no mail sent, no hardware used.");

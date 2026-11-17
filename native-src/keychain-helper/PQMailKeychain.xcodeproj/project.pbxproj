@@ -1,0 +1,15 @@
+// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+A00000000000000000000001 = {isa = PBXProject; attributes = {LastUpgradeCheck = 1600; TargetAttributes = {A00000000000000000000002 = {ProvisioningStyle = Automatic; SystemCapabilities = {com.apple.Keychain = {enabled = 1;};};};};}; buildConfigurationList = A00000000000000000000003; compatibilityVersion = "Xcode 14.0"; mainGroup = A00000000000000000000004; productRefGroup = A00000000000000000000005; projectDirPath = ""; targets = (A00000000000000000000002,);};
+A00000000000000000000002 = {isa = PBXNativeTarget; buildConfigurationList = A00000000000000000000006; buildPhases = (A00000000000000000000007,); buildRules = (); dependencies = (); name = PQMailKeychain; productName = PQMailKeychain; productReference = A00000000000000000000008; productType = "com.apple.product-type.application";};
+A00000000000000000000003 = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000009,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+A00000000000000000000004 = {isa = PBXGroup; children = (A0000000000000000000000A,A00000000000000000000005,); sourceTree = "<group>";};
+A00000000000000000000005 = {isa = PBXGroup; children = (A00000000000000000000008,); name = Products; sourceTree = "<group>";};
+A00000000000000000000006 = {isa = XCConfigurationList; buildConfigurations = (A0000000000000000000000B,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+A00000000000000000000007 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A0000000000000000000000C,); runOnlyForDeploymentPostprocessing = 0;};
+A00000000000000000000008 = {isa = PBXFileReference; explicitFileType = wrapper.application; path = PQMailKeychain.app; sourceTree = BUILT_PRODUCTS_DIR;};
+A00000000000000000000009 = {isa = XCBuildConfiguration; buildSettings = {SDKROOT = macosx; MACOSX_DEPLOYMENT_TARGET = 13.0;}; name = Release;};
+A0000000000000000000000A = {isa = PBXFileReference; explicitFileType = sourcecode.c.objc; path = ../keychain.c; sourceTree = "<group>";};
+A0000000000000000000000B = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_OBJC_ARC = YES; CODE_SIGN_STYLE = Automatic; CODE_SIGN_IDENTITY = "Apple Development"; CODE_SIGN_ENTITLEMENTS = Keychain.entitlements; DEVELOPMENT_TEAM = ""; ENABLE_HARDENED_RUNTIME = YES; INFOPLIST_FILE = Info.plist; PRODUCT_BUNDLE_IDENTIFIER = io.github.ve7jtb.pqmail.keychain; PRODUCT_NAME = "$(TARGET_NAME)"; OTHER_LDFLAGS = ("-framework",Security,"-framework",Foundation,"-framework",LocalAuthentication,);}; name = Release;};
+A0000000000000000000000C = {isa = PBXBuildFile; fileRef = A0000000000000000000000A;};
+}; rootObject = A00000000000000000000001; }

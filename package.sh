@@ -43,6 +43,15 @@ jpackage --type app-image --name 'PQ Mail' --icon assets/pq-mail.icns --input "$
   --main-jar hybrid-mail.jar --main-class dev.hybridmail.MailApp \
   --dest "$DEST" --app-version 1.2.0 --mac-package-identifier dev.hybridmail.desktop \
   --add-modules java.desktop,java.naming,java.security.jgss,java.security.sasl,java.net.http,jdk.httpserver,jdk.crypto.ec,jdk.unsupported
-codesign --force --deep --sign - "$DEST/PQ Mail.app"
+if [[ -n "${PQ_MAIL_APPLE_TEAM:-}" ]]; then
+  : "${PQ_MAIL_SIGNING_IDENTITY:?Set PQ_MAIL_SIGNING_IDENTITY to your signing certificate identity}"
+  ./scripts/build-keychain-helper.sh
+  mkdir -p "$DEST/PQ Mail.app/Contents/Helpers"
+  ditto build/keychain-derived/Build/Products/Release/PQMailKeychain.app "$DEST/PQ Mail.app/Contents/Helpers/PQMailKeychain.app"
+  # Preserve the helper's profile and entitlements; never deep re-sign it ad hoc.
+  codesign --force --sign "$PQ_MAIL_SIGNING_IDENTITY" "$DEST/PQ Mail.app"
+else
+  codesign --force --deep --sign - "$DEST/PQ Mail.app"
+fi
 codesign --verify --deep --strict "$DEST/PQ Mail.app"
 echo "Ready: $DEST/PQ Mail.app"

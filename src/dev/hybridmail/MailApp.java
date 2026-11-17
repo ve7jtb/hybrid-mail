@@ -85,16 +85,22 @@ public final class MailApp extends JFrame {
         JPanel settings=new JPanel(new BorderLayout(12,12));settings.setBorder(BorderFactory.createEmptyBorder(16,16,16,16));
         settings.add(new JLabel("<html>PQ Mail’s shared Google client is the default; no client registration is needed.<br>Custom clients are optional for developers and organizations.<br>Changing clients requires signing in again.</html>"),BorderLayout.NORTH);
         JPanel google=new JPanel(new GridLayout(0,1,0,8));
-        google.add(button("Use PQ Mail Google client",()->{try{GoogleSession.saveClient(GoogleOAuth.bundledClient());if(googleToken!=null){googleToken.close();googleToken=null;}googleLabel.setText("PQ Mail Google client · testing: registered testers only");status.setText("Choose Sign in with Google. Your previous custom registration is no longer selected.");}catch(Exception e){error(e);}}));
+        google.add(button("Use PQ Mail Google client",()->{try{GoogleSession.saveClient(GoogleOAuth.bundledClient(),state());if(googleToken!=null){googleToken.close();googleToken=null;}googleLabel.setText("PQ Mail Google client · testing: registered testers only");status.setText("Choose Sign in with Google. Your previous custom registration is no longer selected.");}catch(Exception e){error(e);}}));
         google.add(button("Import Google OAuth client…",this::importGoogleClient));
         google.add(button("Enter Google client credentials…",this::enterGoogleClient));
 google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStore()+" with disposable data…",()->{String value=java.util.UUID.randomUUID().toString();try{MacKeychain.put("self-test",value);if(!value.equals(MacKeychain.get("self-test")))throw new IOException("Keychain round trip failed");}finally{MacKeychain.delete("self-test");}return true;},ok->status.setText("PASS "+credentialStore()+" write/read/delete; no Google credentials used"))));
         if(System.getProperty("os.name").startsWith("Mac")){
-            JCheckBox authenticate=new JCheckBox("Use Touch ID or Mac password when restoring Google session");
+            JCheckBox authenticate=new JCheckBox("Protect Google OAuth refresh token with Touch ID or Mac password");
             try{authenticate.setSelected(Boolean.parseBoolean(state().get("google.authenticateRestore","false")));}catch(Exception e){error(e);}
-            authenticate.addActionListener(e->{try{state().set("google.authenticateRestore",Boolean.toString(authenticate.isSelected()));state().save();}catch(Exception failure){authenticate.setSelected(!authenticate.isSelected());error(failure);}});
+            authenticate.addActionListener(e->{boolean enabled=authenticate.isSelected();authenticate.setEnabled(false);
+                new SwingWorker<Boolean,Void>(){
+                    protected Boolean doInBackground()throws Exception{MacKeychain.protectSession(enabled);return enabled;}
+                    protected void done(){try{boolean value=get();MailApp.this.state().set("google.authenticateRestore",Boolean.toString(value));MailApp.this.state().save();status.setText("Google OAuth refresh token protection updated. Applies to the next session restore.");}catch(Exception failure){authenticate.setSelected(!enabled);error(failure);}finally{authenticate.setEnabled(true);}}
+                }.execute();
+            });
+            authenticate.setEnabled(MacKeychain.protectedHelperAvailable());
             google.add(authenticate);
-            google.add(new JLabel("<html>macOS chooses Touch ID or password. Applies to the next session restore.<br>Your login Keychain may still request separate access permission.</html>"));
+            google.add(new JLabel("<html>macOS chooses Touch ID or password. Applies to the next session restore.<br>Keychain requires authentication before releasing your Google OAuth refresh token.</html>"));
         }
         settings.add(google,BorderLayout.CENTER);
         settings.add(left(button("Close",dialog::dispose)),BorderLayout.SOUTH);
@@ -158,7 +164,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     }
     private void importGoogleClient(){
         Path path=choose(false,"Import Google Desktop OAuth client JSON");if(path==null)return;
-        try{GoogleOAuth.Client.read(path);GoogleSession.saveClient(GoogleOAuth.Client.read(path));Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in "+credentialStore()+"; not uploaded");}catch(Exception e){error(e);}
+        try{GoogleOAuth.Client.read(path);GoogleSession.saveClient(GoogleOAuth.Client.read(path),state());Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in "+credentialStore()+"; not uploaded");}catch(Exception e){error(e);}
     }
     private void enterGoogleClient(){
         JTextField clientId=new JTextField(42);JPasswordField secret=new JPasswordField(42);
@@ -167,7 +173,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         fields.add(new JLabel("Custom client saved only in "+credentialStore()+"; not uploaded to GitHub."));
         if(JOptionPane.showConfirmDialog(this,fields,"Google Desktop client credentials",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)!=JOptionPane.OK_OPTION){secret.setText("");return;}
         char[] value=secret.getPassword();secret.setText("");
-        try{GoogleSession.saveClient(new GoogleOAuth.Client(clientId.getText().trim(),new String(value).trim()));Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in "+credentialStore()+". Choose Sign in with Google.");}
+        try{GoogleSession.saveClient(new GoogleOAuth.Client(clientId.getText().trim(),new String(value).trim()),state());Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in "+credentialStore()+". Choose Sign in with Google.");}
         catch(Exception e){error(e);}finally{Arrays.fill(value,'\0');}
     }
     private static String credentialStore(){return DesktopState.windows()?"Windows Credential Manager":"Mac Keychain";}
@@ -191,7 +197,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     private void signOutGoogle(){
         if(googleToken!=null)googleToken.close();googleToken=null;googleEmail=null;disconnectInbox();
         googleLabel.setText("Google: signed out locally · removing saved session…");
-        job("Removing Google session from "+credentialStore()+"…",()->{MacKeychain.delete("google-session");return true;},ok->{googleLabel.setText("Google: signed out");status.setText("Google refresh token removed from Keychain. Client configuration retained; access can also be revoked at Google.");});
+        job("Removing Google session from "+credentialStore()+"…",()->{MacKeychain.deleteProtectedSession();MacKeychain.delete("google-session");return true;},ok->{googleLabel.setText("Google: signed out");status.setText("Google refresh token removed from Keychain. Client configuration retained; access can also be revoked at Google.");});
     }
     private GoogleOAuth.Token restoreGoogleSession()throws Exception{
         JDialog progress=new JDialog(this,"Google session",true);progress.add(new JLabel("  Restoring Google sign-in from "+credentialStore()+"…  "));progress.pack();progress.setLocationRelativeTo(this);progress.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);

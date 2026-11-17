@@ -30,7 +30,7 @@ For YubiKeys:
 1. Use a PQ-capable YubiKey already provisioned with the desired profile. This preview **does not generate, reset, replace, or delete token keys**.
 2. Plug it into USB (approve Android's USB permission), or enable NFC and hold it at the phone's NFC antenna while PQ Mail is in the foreground.
 3. Choose **Use existing YubiKey keys — issue certificates**, select the matching profile and email/SANs, and complete four PIN dialogs. This creates new local certificates for the existing keys. Alternatively, use **Import existing YubiKey certificate pair** twice to retain your existing pure and hybrid certificates.
-4. Select a saved YubiKey identity. Its serial and public keys must match the inserted device before a PIN is submitted.
+4. Select a saved YubiKey identity; selection returns to Home. Open **Identities & certificates** again and scroll below the export buttons to find the test button. Its serial and public keys must match the inserted device before a PIN is submitted.
 5. Choose **Test selected YubiKey identity — no email**. Expect one PIN dialog for signing and one for decryption, including hybrid mode. A successful result names the transport and both algorithms. Repeat with the other identity and then the other transport.
 
 Fixed token slot mapping matches the desktop default: **9c ML-DSA, 9a ECDSA, 9d ML-KEM, 82 ECDH**. Legacy RSA composite token profiles and custom slot maps are not supported in this Android preview. Pure ML certificates can be imported without an ECDSA key.
@@ -76,3 +76,7 @@ adb shell am start -n org.pqmail.android/dev.hybridmail.MainActivity
 ```
 
 Tests generate temporary software keys only. They cover all profiles, `.p12` reload/wrong-password rejection, signed/encrypted mail, authenticated-ciphertext tamper rejection, external interfaces, and the actual YubiKit PIV APDU implementation with a simulated card. They verify serial/key mismatch rejection before PIN entry, one prompt per composite operation, clearing cached PIN arrays, and no automatic retry after a PIN failure. **Simulated-card tests are not physical USB/NFC certification.** The on-screen YubiKey test is provided for hardware validation.
+
+## Current physical-device status
+
+Level 3 signing/decryption passed on the desktop through PKCS#11, and the resulting pure/hybrid public certificate pairs were copied and byte-verified in the Android app. A subsequent Beta0 NFC attempt returned `0x6A82` before PIN entry; the failing PIV initialization/metadata command is under investigation. NFC is not yet hardware-validated. Physical Android USB testing remains pending. Do not reset or reprovision a key in response to this error.

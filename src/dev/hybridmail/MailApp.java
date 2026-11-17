@@ -40,7 +40,7 @@ public final class MailApp extends JFrame {
     private final JTextField from = new JTextField("alice@example.test"), to = new JTextField("bob@example.test"), subject = new JTextField("A private conversation");
     private final JTextArea body = new JTextArea("Hello,\n\nThis message is signed using post-quantum cryptography.\n"), reader = new JTextArea();
     private final JCheckBox encrypt = new JCheckBox("Also encrypt for recipient (optional)", false);
-    private final JLabel identityLabel = new JLabel("No identity loaded"), recipientLabel = new JLabel("No recipient certificate"), tokenLabel = new JLabel("Signing: software"), pinLabel = new JLabel("No signer certificate pinned");
+    private final JLabel identityLabel = new JLabel("No identity loaded"), recipientLabel = new JLabel("No recipient certificate"), tokenLabel = new JLabel("Signing: software");
     private final JLabel status = new JLabel("Create or load an identity to begin. No network connection is made on startup.");
     private final JTabbedPane tabs = new JTabbedPane();
     public MailApp() {
@@ -204,7 +204,7 @@ public final class MailApp extends JFrame {
     private void applyContact(DesktopState.Contact contact,X509Certificate certificate)throws Exception{
         certificate.checkValidity();
         if(contact.role().equals("encryption")){recipient=certificate;recipientLabel.setText(contact.email()+" · "+certificate.getPublicKey().getAlgorithm());to.setText(contact.email());encrypt.setSelected(true);state().saveCertificate("recipient",certificate);refreshOutgoingEncryption();tabs.setSelectedIndex(0);status.setText("Encryption enabled for "+contact.email());}
-        else{pinnedSigner=certificate;pinLabel.setText(contact.email()+" · "+certificate.getPublicKey().getAlgorithm());state().saveCertificate("pinned",certificate);status.setText(state().isTrusted(certificate,"signing")?"Trusted signing certificate selected":"Signing certificate selected but not trusted; use Mark trusted in Certificates");}
+        else{pinnedSigner=certificate;state().saveCertificate("pinned",certificate);status.setText(state().isTrusted(certificate,"signing")?"Trusted signing certificate selected":"Signing certificate selected but not trusted; use Mark trusted in Certificates");}
     }
     private void exportContact(){
         var contact=selectedContact();if(contact==null)return;Path target=choose(true,"Export certificate (.pem or .cer)");if(target==null)return;
@@ -215,7 +215,7 @@ public final class MailApp extends JFrame {
         if(JOptionPane.showConfirmDialog(this,"Remove "+contact.role()+" certificate for "+contact.email()+" from the saved contact list?","Remove certificate",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
         try{var certificate=state().contactCertificate(contact);state().removeContact(contact);
             if(certificate.equals(recipient)){recipient=null;recipientLabel.setText("No recipient certificate");state().clearCertificate("recipient");}
-            if(certificate.equals(pinnedSigner)){pinnedSigner=null;pinLabel.setText("No signer certificate pinned");state().clearCertificate("pinned");}
+            if(certificate.equals(pinnedSigner)){pinnedSigner=null;state().clearCertificate("pinned");}
             refreshContacts();refreshReadTrust();status.setText("Removed from contacts; public certificate retained under removed-contacts");
         }catch(Exception e){error(e);}
     }
@@ -229,13 +229,11 @@ public final class MailApp extends JFrame {
         keys.add(button("Export signing certificate…",()->export(true))); keys.add(button("Export encryption certificate…",()->export(false))); p.add(keys);
         p.add(section("2  Recipient encryption certificate",recipientLabel));
         p.add(left(button("Import recipient certificate…", () -> importCert(false))));
-        p.add(section("3  Pinned signer for verification",pinLabel));
-        p.add(left(button("Pin signer certificate…", () -> importCert(true))));
         JPanel settings=new JPanel(new FlowLayout(FlowLayout.LEFT));
         settings.add(button("YubiKey configuration…",this::configureYubiKey));
         settings.add(button("Update token certificate email…",this::reissueTokenCertificates));
         settings.add(button("Show saved identity files",()->{try{Desktop.getDesktop().open(state().directory().toFile());}catch(Exception e){error(e);}}));p.add(settings);
-        p.add(section("4  Token signing",tokenLabel));
+        p.add(section("3  Token signing",tokenLabel));
         JPanel token = new JPanel(new FlowLayout(FlowLayout.LEFT)); token.add(button("Choose adapter executable…",()->{
             Path path=choose(false,"Choose trusted external-mu adapter executable"); if(path==null)return;
             if(!Files.isExecutable(path)){error(new IOException("Select an executable adapter"));return;}
@@ -244,7 +242,7 @@ public final class MailApp extends JFrame {
         p.add(new JLabel("YubiKey settings and identities are saved on this Mac. PINs are not saved."));
         p.add(Box.createVerticalStrut(12));
         p.add(new JLabel("PKCS#11: PIN dialog in app. ykman: launch from Terminal for PIN prompts."));
-        p.add(section("5  Token decryption",kemLabel));
+        p.add(section("4  Token decryption",kemLabel));
         JPanel kem=new JPanel(new FlowLayout(FlowLayout.LEFT));
         kem.add(button("Choose PKCS#11 KEM adapter…",()->{
             Path path=choose(false,"Choose trusted PKCS#11 KEM adapter executable");if(path==null)return;
@@ -313,7 +311,6 @@ public final class MailApp extends JFrame {
             state();if(!desktopState.get("google.email","").isBlank())googleLabel.setText("Google: connect to restore saved Keychain session");desktopState.migrateTrust();refreshSaved();refreshContacts();adapter=desktopState.adapter(false);kemAdapter=desktopState.adapter(true);updateBackendLabels();
             recipient=desktopState.certificate("recipient");pinnedSigner=desktopState.certificate("pinned");refreshOutgoingEncryption();
             if(recipient!=null)recipientLabel.setText(recipient.getPublicKey().getAlgorithm()+" · "+recipient.getSubjectX500Principal());
-            if(pinnedSigner!=null)pinLabel.setText(pinnedSigner.getSubjectX500Principal().toString());
             from.setText(desktopState.get("mail.from",from.getText()));to.setText(desktopState.get("mail.to",to.getText()));
             if(savedIdentities.getSelectedItem()!=null)openSaved((DesktopState.SavedIdentity)savedIdentities.getSelectedItem());
             else status.setText("Configure your YubiKey and import an identity to begin.");
@@ -364,7 +361,7 @@ public final class MailApp extends JFrame {
             },renewed->{
                 setIdentity(renewed);refreshSaved();from.setText(address);to.setText(address);recipient=renewed.encryptionCert();pinnedSigner=renewed.signingCert();
                 try{settings.set("mail.from",address);settings.set("mail.to",address);settings.saveCertificate("pinned",pinnedSigner);if(recipient!=null)settings.saveCertificate("recipient",recipient);settings.save();}catch(Exception e){error(e);}
-                pinLabel.setText(pinnedSigner.getSubjectX500Principal().toString());if(recipient!=null)recipientLabel.setText(recipient.getPublicKey().getAlgorithm()+" · "+recipient.getSubjectX500Principal());
+                if(recipient!=null)recipientLabel.setText(recipient.getPublicKey().getAlgorithm()+" · "+recipient.getSubjectX500Principal());
                 try{refreshOutgoingEncryption();}catch(Exception e){error(e);}
                 status.setText("New email certificates saved (DER and PEM). Token keys unchanged. No email sent.");
             });
@@ -496,7 +493,7 @@ public final class MailApp extends JFrame {
                 MailApp app = new MailApp();
                 app.setIdentity(id); app.adapter = executable;
                 app.tokenLabel.setText((executable.contains("pkcs11") ? "PKCS#11" : "ykman") + " adapter · " + (executable.contains("pkcs11") ? "PIN dialog + touch" : "PIN/touch in Terminal"));
-                app.pinnedSigner = id.signingCert(); app.pinLabel.setText("Pinned local Beta0 test signing certificate");
+                app.pinnedSigner = id.signingCert();
                 app.from.setText("beta0@example.test"); app.to.setText("recipient@example.test"); app.encrypt.setSelected(false);
                 app.showMessage(app.display(verifiedMail, id, id.signingCert()));
                 app.setVisible(true);
@@ -510,7 +507,7 @@ public final class MailApp extends JFrame {
                 MailApp app=new MailApp();app.setIdentity(id);app.adapter=signAdapter;app.kemAdapter=decryptAdapter;
                 app.tokenLabel.setText("PKCS#11 signing · PIN dialog");app.kemLabel.setText("PKCS#11 ML-KEM + ECDH decryption · one PIN per message");
                 app.recipient=id.encryptionCert();app.recipientLabel.setText(id.encryptionCert().getPublicKey().getAlgorithm());
-                app.pinnedSigner=id.signingCert();app.pinLabel.setText("Pinned local test signer");
+                app.pinnedSigner=id.signingCert();
                 app.from.setText("beta0@example.test");app.to.setText("beta0@example.test");app.encrypt.setSelected(true);
                 app.showMessage("SIGNATURE VALID · "+checked.signatureAlgorithm()+"\nToken-backed authenticated decryption succeeded\n\n"+checked.text());
                 app.setVisible(true);

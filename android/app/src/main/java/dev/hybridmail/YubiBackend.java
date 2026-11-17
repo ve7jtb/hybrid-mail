@@ -52,16 +52,16 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
             session=PivSessions.open(connection);
             stage="Reading PIV serial number";
             if(session.getSerialNumber()!=serial)throw new GeneralSecurityException("Wrong YubiKey. Insert serial "+serial);
-            // Check ALL bound public keys before requesting or submitting a PIN.
+            // Check ALL bound public keys before submitting a PIN.
             for(var e:expected.entrySet()){stage="Reading public-key metadata for slot "+e.getKey();if(!MessageDigest.isEqual(e.getValue().getEncoded(),publicKey(session,e.getKey()).getEncoded()))
                 throw new GeneralSecurityException("YubiKey slot "+e.getKey()+" does not match this identity");}
-        }catch(Exception e){String detail=connection instanceof PivDiagnostic.Connection c?c.detail():"connection unavailable";clearSecrets();throw new PivDiagnostic(stage+" failed before PIN entry.\n"+detail+"\n"+e.getMessage(),e);}
+        }catch(Exception e){String detail=connection instanceof PivDiagnostic.Connection c?c.detail():"connection unavailable";clearSecrets();throw new PivDiagnostic(stage+" failed before PIN submission.\n"+detail+"\n"+e.getMessage(),e);}
     }
     private KeyType authorize(Slot slot,PublicKey key,String label)throws Exception {
-        connect();
         PublicKey bound=expected.get(slot);
         if(bound==null||!MessageDigest.isEqual(bound.getEncoded(),key.getEncoded()))throw new GeneralSecurityException("Unbound token key");
         if(pin==null)pin=pins.get(label);
+        connect(); // No NFC session is left idle while the user enters the PIN.
         // PIN_ALWAYS requires VERIFY for each component. Never retry a rejected PIN.
         session.verifyPin(pin);
         return session.getSlotMetadata(slot).getKeyType();

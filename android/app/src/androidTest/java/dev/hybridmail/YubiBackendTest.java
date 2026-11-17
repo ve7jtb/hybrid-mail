@@ -80,18 +80,24 @@ public class YubiBackendTest {
  }
  @Test public void unavailablePivShowsHeaderWithoutPin()throws Exception{
   Card card=new Card(TokenProfile.LEVEL2){public byte[] sendAndReceive(byte[] apdu)throws IOException{if((apdu[1]&255)==0xa4)return new byte[]{0x6a,(byte)0x82};return super.sendAndReceive(apdu);}};
-  var backend=new YubiBackend(()->card,label->{fail("PIN requested before PIV selection");return null;},12345,card.publicKeys());
+  var backend=new YubiBackend(()->card,label->"123456".toCharArray(),12345,card.publicKeys());
   try{backend.sign(card.publicKeys().get(Slot.SIGNATURE),new byte[64]);fail("Expected PIV selection error");}
   catch(PivDiagnostic e){assertTrue(e.getMessage().contains("Selecting and initializing PIV"));assertTrue(e.getMessage().contains("INS=A4"));assertTrue(e.getMessage().contains("SW=6A82"));}
   assertEquals(0,card.verifies);assertEquals(0,card.privateOps);assertEquals(1,card.closes);
  }
+ @Test public void pinCollectedBeforeConnectionAndClearedWhenCancelled()throws Exception{
+  Card card=new Card(TokenProfile.LEVEL2);char[] pin="123456".toCharArray();boolean[] requested={false};
+  var backend=new YubiBackend(()->{assertTrue(requested[0]);throw new java.util.concurrent.CancellationException("Tap cancelled");},label->{requested[0]=true;return pin;},12345,card.publicKeys());
+  try{backend.sign(card.publicKeys().get(Slot.SIGNATURE),new byte[64]);fail();}catch(PivDiagnostic expected){}
+  assertArrayEquals(new char[6],pin);assertEquals(0,card.verifies);
+ }
  @Test public void wrongSerialMismatchAndRejectedPinFailClosed()throws Exception{
   Card card=new Card(TokenProfile.LEVEL2);int[] prompts={0};YubiBackend.PinSource pins=label->{prompts[0]++;return "123456".toCharArray();};
   var key=card.keys.get(Slot.SIGNATURE).getPublic();var wrongSerial=new YubiBackend(()->card,pins,999,card.publicKeys());
-  try{wrongSerial.sign(key,new byte[64]);fail();}catch(GeneralSecurityException expected){}assertEquals(0,prompts[0]);assertEquals(0,card.verifies);
+  try{wrongSerial.sign(key,new byte[64]);fail();}catch(GeneralSecurityException expected){}assertEquals(1,prompts[0]);assertEquals(0,card.verifies);
   var bound=card.publicKeys();bound.put(Slot.SIGNATURE,KeyPairGenerator.getInstance("ML-DSA-44","BC").generateKeyPair().getPublic());
-  try{new YubiBackend(()->card,pins,12345,bound).sign(key,new byte[64]);fail();}catch(GeneralSecurityException expected){}assertEquals(0,prompts[0]);
+  try{new YubiBackend(()->card,pins,12345,bound).sign(bound.get(Slot.SIGNATURE),new byte[64]);fail();}catch(GeneralSecurityException expected){}assertEquals(2,prompts[0]);
   card.rejectPin=true;try{new YubiBackend(()->card,pins,12345,card.publicKeys()).sign(key,new byte[64]);fail();}catch(com.yubico.yubikit.core.application.InvalidPinException expected){}
-  assertEquals(1,prompts[0]);assertEquals(1,card.verifies);assertEquals(0,card.privateOps);
+  assertEquals(3,prompts[0]);assertEquals(1,card.verifies);assertEquals(0,card.privateOps);
  }
 }

@@ -150,7 +150,7 @@ public final class MainActivity extends Activity {
         if(!result.isDone())runOnUiThread(()->{
             if(result.isDone())return;
             var dialog=new AlertDialog.Builder(this).setTitle("Connect your YubiKey")
-                .setMessage("For NFC, move the key away, then tap and hold it against the phone. A fresh tap is required for each signing or decryption operation. Keep it in place through PIN entry. You can also connect over USB.")
+                .setMessage("For NFC, move the key away, then tap and hold it against the phone. A fresh tap is required for each signing or decryption operation. Keep it in place until the operation finishes. You can also connect over USB.")
                 .setNegativeButton("Cancel",(d,w)->deviceGate.cancel()).create();
             dialog.setOnCancelListener(d->deviceGate.cancel());dialog.show();
             result.whenComplete((d,e)->runOnUiThread(dialog::dismiss));
@@ -164,7 +164,7 @@ public final class MainActivity extends Activity {
         runOnUiThread(()->{
             EditText input=new EditText(this);input.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
             input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
-            AlertDialog dialog=new AlertDialog.Builder(this).setTitle("YubiKey PIN • "+algorithm).setMessage("PIN is reused for this operation's components, then cleared. Keep the key connected; touch only if its policy requires it.").setView(input).setNegativeButton("Cancel",(d,w)->result.cancel(false)).setPositiveButton("Continue",null).create();
+            AlertDialog dialog=new AlertDialog.Builder(this).setTitle("YubiKey PIN • "+algorithm).setMessage("Enter the PIN first. For NFC, keep the key away until the next tap prompt. The app checks the key’s serial and public keys before sending the PIN. It reuses the PIN for this operation’s components, then clears it.").setView(input).setNegativeButton("Cancel",(d,w)->result.cancel(false)).setPositiveButton("Continue",null).create();
             dialog.setOnCancelListener(d->result.cancel(false));dialog.setOnShowListener(d->{input.requestFocus();dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);dialog.getButton(-1).setOnClickListener(v->{
                 char[] pin=new char[input.length()];input.getText().getChars(0,input.length(),pin,0);boolean valid=pin.length>=6&&pin.length<=8;for(char c:pin)valid&=c>=32&&c<=126;
                 if(!valid){Arrays.fill(pin,'\0');input.setError("Use a 6–8 character ASCII PIV PIN");return;}

@@ -54,6 +54,6 @@ References: [Google desktop OAuth](https://developers.google.com/identity/protoc
 
 ## ML-DSA-87 software identities
 
-Choose **Keys & token → Create identity…** and select pure ML-DSA-87 or hybrid ML-DSA-87/ECDSA P-384. Save a new password-protected `.p12` file. The identity is remembered and selectable for outgoing messages. These profiles use the existing ML-KEM-768 encryption profiles and do not generate or replace YubiKey keys.
+Choose **Keys & token → Create identity…** and select pure ML-DSA-87 or hybrid ML-DSA-87/ECDSA P-384. Save a new password-protected `.p12` file. The identity is remembered and selectable for outgoing messages. Pure ML-DSA-87 pairs with ML-KEM-1024; the P-384 composite signature pairs with MLKEM1024-ECDH-P384-SHA3-256. These software profiles and do not generate or replace YubiKey keys.
 
 Validation: native Keychain write/read/delete passed in the packaged app. After user consent, the app was fully quit and relaunched; Connect Gmail restored its refresh token from Keychain and loaded the inbox without browser authorization. Pure ML-DSA-87 and composite ML-DSA-87/P-384 certificate, PKCS#12, signed-only and encrypted S/MIME round trips passed.

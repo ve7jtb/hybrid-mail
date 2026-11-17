@@ -23,6 +23,8 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
     public static final String HYBRID_RSA_SIGN = "MLDSA65-RSA3072-PSS-SHA512";
     public static final String PURE_87_SIGN = "ML-DSA-87";
     public static final String HYBRID_87_SIGN = "MLDSA87-ECDSA-P384-SHA512";
+    public static final String PURE_1024_KEM = "ML-KEM-1024";
+    public static final String HYBRID_1024_KEM = "MLKEM1024-ECDH-P384-SHA3-256";
     public static final String PURE_KEM = "ML-KEM-768";
     public static final String HYBRID_KEM = "MLKEM768-ECDH-P256-SHA3-256";
     public String signatureAlgorithm() {
@@ -36,7 +38,8 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         if(!Set.of(PURE_SIGN,HYBRID_SIGN,HYBRID_RSA_SIGN,PURE_87_SIGN,HYBRID_87_SIGN).contains(alg))throw new GeneralSecurityException("Unsupported signing profile");
         boolean hybrid=alg.startsWith("MLDSA");
         KeyPair s=KeyPairGenerator.getInstance(alg,"BC").generateKeyPair();
-        KeyPair k=KeyPairGenerator.getInstance(hybrid?HYBRID_KEM:PURE_KEM,"BC").generateKeyPair();
+        String kem=alg.equals(PURE_87_SIGN)?PURE_1024_KEM:alg.equals(HYBRID_87_SIGN)?HYBRID_1024_KEM:hybrid?HYBRID_KEM:PURE_KEM;
+        KeyPair k=KeyPairGenerator.getInstance(kem,"BC").generateKeyPair();
         X509Certificate sc = cert(email, s.getPublic(), s.getPrivate(), alg, true);
         X509Certificate kc = cert(email, k.getPublic(), s.getPrivate(), alg, false);
         return new Identity(sc, s.getPrivate(), kc, k.getPrivate(), null);
@@ -161,6 +164,19 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
             throw new GeneralSecurityException("Unsupported signing key: " + a);
         return new Identity(sc, (PrivateKey)ks.getKey("sign", password), (X509Certificate)ks.getCertificate("encrypt"),
             (PrivateKey)ks.getKey("encrypt", password), (PrivateKey)ks.getKey("traditional", password));
+    }
+    /** Supported software/public recipient profiles; token recovery keeps its narrower validation. */
+    public static void validateEncryptionKey(PublicKey key)throws Exception{
+        var spki=SubjectPublicKeyInfo.getInstance(key.getEncoded());
+        if(spki.getAlgorithm().getAlgorithm().equals(org.bouncycastle.asn1.nist.NISTObjectIdentifiers.id_alg_ml_kem_1024))return;
+        if(key instanceof CompositePublicKey c && c.getAlgorithmIdentifier().getAlgorithm().equals(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLKEM1024_ECDH_P384_SHA3_256)){
+            if(c.getPublicKeys().size()!=2 || !SubjectPublicKeyInfo.getInstance(c.getPublicKeys().get(0).getEncoded()).getAlgorithm().getAlgorithm().equals(org.bouncycastle.asn1.nist.NISTObjectIdentifiers.id_alg_ml_kem_1024))throw new GeneralSecurityException("Expected ML-KEM-1024 component");
+            var ec=SubjectPublicKeyInfo.getInstance(c.getPublicKeys().get(1).getEncoded());
+            if(!ec.getAlgorithm().getAlgorithm().equals(org.bouncycastle.asn1.x9.X9ObjectIdentifiers.id_ecPublicKey)||!org.bouncycastle.asn1.sec.SECObjectIdentifiers.secp384r1.equals(ec.getAlgorithm().getParameters()))throw new GeneralSecurityException("Expected named P-384 component");
+            var point=org.bouncycastle.asn1.sec.SECNamedCurves.getByName("secp384r1").getCurve().decodePoint(ec.getPublicKeyData().getBytes());
+            if(point.isInfinity()||!point.isValid())throw new GeneralSecurityException("Invalid P-384 point");return;
+        }
+        ExternalKem.validatePublicKey(key);
     }
     public static X509Certificate readCertificate(Path file) throws Exception {
         try (InputStream in = Files.newInputStream(file)) {

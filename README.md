@@ -150,6 +150,6 @@ Live Google OAuth and Gmail IMAP listing have been observed in the packaged app.
 
 ## Additional software signing profiles
 
-**Keys & token → Create identity…** also offers pure ML-DSA-87 and `MLDSA87-ECDSA-P384-SHA512` composite signatures (ECDSA P-384 with SHA-384). These software identities are stored in password-protected PKCS#12 files and appear in **Sign with**. Encryption remains ML-KEM-768 or ML-KEM-768/ECDH P-256 respectively. Existing YubiKey provisioning/adapters remain configured for ML-DSA-65 profiles; creating these identities does not alter token keys.
+**Keys & token → Create identity…** also offers pure ML-DSA-87 and `MLDSA87-ECDSA-P384-SHA512` composite signatures (ECDSA P-384 with SHA-384). These software identities are stored in password-protected PKCS#12 files and appear in **Sign with**. Encryption uses ML-KEM-1024 or MLKEM1024-ECDH-P384-SHA3-256 respectively. Existing YubiKey provisioning/adapters remain configured for ML-DSA-65 profiles; creating these identities does not alter token keys.
 
 On macOS `build.sh` also compiles `native-src/keychain.c` using Apple clang and the Security/CoreFoundation frameworks. Xcode Command Line Tools are required. `package.sh` bundles the narrowly scoped Keychain helper.

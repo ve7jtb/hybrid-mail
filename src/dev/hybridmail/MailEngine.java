@@ -43,9 +43,7 @@ public final class MailEngine {
             if (!Identity.matchesEmail(recipient, receiver.getAddress())) throw new GeneralSecurityException("Recipient address does not match encryption certificate");
             boolean[] usage = recipient.getKeyUsage();
             if (usage == null || usage.length <= 2 || !usage[2]) throw new GeneralSecurityException("Certificate lacks keyEncipherment usage");
-            String a = recipient.getPublicKey().getAlgorithm();
-            if (!a.equalsIgnoreCase(Identity.PURE_KEM) && !a.equalsIgnoreCase(Identity.HYBRID_KEM))
-                throw new GeneralSecurityException("Unsupported recipient KEM: " + a);
+            Identity.validateEncryptionKey(recipient.getPublicKey());
             SMIMEAuthEnvelopedGenerator eg = new SMIMEAuthEnvelopedGenerator();
             eg.addRecipientInfoGenerator(new JceKEMRecipientInfoGenerator(recipient, CMSAlgorithm.AES256_WRAP)
                 .setKDF(CMSAlgorithm.SHA256_HKDF).setProvider("BC"));

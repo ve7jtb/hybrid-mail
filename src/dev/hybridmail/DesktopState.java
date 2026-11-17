@@ -112,7 +112,7 @@ public final class DesktopState {
         if(!Identity.matchesEmail(certificate,email))throw new IOException("Certificate email SAN does not match the contact address");
         certificate.checkValidity();boolean[] usage=certificate.getKeyUsage();int bit=role.equals("signing")?0:2;
         if(usage==null||usage.length<=bit||!usage[bit])throw new IOException("Certificate does not permit "+role);
-        if(role.equals("encryption"))ExternalKem.validatePublicKey(certificate.getPublicKey());
+        if(role.equals("encryption"))Identity.validateEncryptionKey(certificate.getPublicKey());
         MessageDigest digest=MessageDigest.getInstance("SHA-256");digest.update(certificate.getEncoded());digest.update(("\n"+email.toLowerCase(Locale.ROOT)+"\n"+role).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         String id=HexFormat.of().formatHex(digest.digest());Path folder=directory.resolve("contacts").resolve(id);
         write(folder.resolve("certificate.cer"),certificate.getEncoded());write(folder.resolve("certificate.pem"),pem(certificate));

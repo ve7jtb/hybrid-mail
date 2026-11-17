@@ -371,7 +371,7 @@ public final class MailApp extends JFrame {
         }catch(Exception e){error(e);}
     }
     private void generate() {
-        JTextField email=new JTextField(from.getText()); JComboBox<String> mode=new JComboBox<>(new String[]{"Pure: ML-DSA-65 + ML-KEM-768","Hybrid: ML-DSA-65/ECDSA + ML-KEM-768/ECDH","Pure: ML-DSA-87 + ML-KEM-768","Hybrid: ML-DSA-87/ECDSA P-384 + ML-KEM-768/ECDH"});
+        JTextField email=new JTextField(from.getText()); JComboBox<String> mode=new JComboBox<>(new String[]{"Pure: ML-DSA-65 + ML-KEM-768","Hybrid: ML-DSA-65/ECDSA + ML-KEM-768/ECDH","Pure: ML-DSA-87 + ML-KEM-1024","Hybrid: ML-DSA-87/ECDSA P-384 + ML-KEM-1024/ECDH P-384"});
         mode.setSelectedIndex(1); JPasswordField pass=new JPasswordField();
         JPanel p=new JPanel(new GridLayout(0,1,0,8)); p.add(new JLabel("Email address"));p.add(email);p.add(mode);p.add(new JLabel("New PKCS#12 password (12+ characters)"));p.add(pass);
         if(JOptionPane.showConfirmDialog(this,p,"Create local test identity",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;

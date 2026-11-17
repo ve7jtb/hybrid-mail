@@ -57,6 +57,9 @@ public final class DesktopStateTest {
                 Path strongFile=dir.resolve(algorithm+".p12");strong.save(strongFile,password);strong=Identity.load(strongFile,password);
                 check(strong.signatureAlgorithm().equals(algorithm),"ML-DSA-87 profile survives PKCS12 round trip: "+algorithm);
                 strong.signingCert().verify(strong.signingCert().getPublicKey(),"BC");
+                check(strong.encryptionCert().getPublicKey().getAlgorithm().equals(algorithm.equals(Identity.PURE_87_SIGN)?Identity.PURE_1024_KEM:Identity.HYBRID_1024_KEM),"ML-DSA-87 uses matching ML-KEM-1024 profile");
+                var strongContact=state.rememberContact(strong.encryptionCert(),"strong@example.test","encryption");
+                check(state.contactCertificate(strongContact).equals(strong.encryptionCert()),"ML-KEM-1024 recipient certificate import");
                 for(boolean encrypt:new boolean[]{false,true}){
                     var message=MailEngine.compose(strong,"strong@example.test","strong@example.test","87 test","Strong signature",encrypt?strong.encryptionCert():null,null);
                     var opened=MailEngine.open(message,strong,strong.signingCert());

@@ -200,6 +200,7 @@ public final class DesktopState {
         return builder;
     }
     public String adapter(boolean kem){
+        if(!kem)return resources().resolve("adapters/pkcs11-mu.py").toString();
         String mode=get(kem?"decrypt.adapter":"sign.adapter","pkcs11");
         if(mode.equals("software"))return null;
         return mode.equals("pkcs11")?resources().resolve("adapters").resolve(kem?"pkcs11-kem.py":"pkcs11-mu.py").toString():mode;

@@ -41,7 +41,7 @@ public final class MailApp extends JFrame {
     private final JTextField from = new JTextField("alice@example.test"), to = new JTextField("bob@example.test"), subject = new JTextField("A private conversation");
     private final JTextArea body = new JTextArea("Hello,\n\nThis message is signed using post-quantum cryptography.\n"), reader = new JTextArea();
     private final JCheckBox encrypt = new JCheckBox("Also encrypt for recipient (optional)", false);
-    private final JLabel identityLabel = new JLabel("No identity loaded"), recipientLabel = new JLabel("No recipient certificate"), tokenLabel = new JLabel("Signing: software");
+    private final JLabel identityLabel = new JLabel("No identity loaded"), recipientLabel = new JLabel("No recipient certificate");
     private final JLabel status = new JLabel("Create or load an identity to begin. No network connection is made on startup.");
     private final JTabbedPane tabs = new JTabbedPane();
     public MailApp() {
@@ -237,16 +237,7 @@ public final class MailApp extends JFrame {
         settings.add(button("YubiKey configuration…",this::configureYubiKey));
         settings.add(button("Update token certificate email…",this::reissueTokenCertificates));
         settings.add(button("Show saved identity files",()->{try{Desktop.getDesktop().open(state().directory().toFile());}catch(Exception e){error(e);}}));p.add(settings);
-        p.add(section("3  Token signing",tokenLabel));
-        JPanel token = new JPanel(new FlowLayout(FlowLayout.LEFT)); token.add(button("Choose adapter executable…",()->{
-            Path path=choose(false,"Choose trusted external-mu adapter executable"); if(path==null)return;
-            if(!Files.isExecutable(path)){error(new IOException("Select an executable adapter"));return;}
-            adapter=path.toAbsolutePath().toString(); saveAdapter(false,adapter); tokenLabel.setText("External adapter: " + path.getFileName() + " (hardware not detected)");
-        })); p.add(token);
-        p.add(new JLabel("YubiKey settings and identities are saved on this Mac. PINs are not saved."));
-        p.add(Box.createVerticalStrut(12));
-        p.add(new JLabel("PKCS#11: PIN dialog in app. ykman: launch from Terminal for PIN prompts."));
-        p.add(section("4  Token decryption",kemLabel));
+        p.add(section("3  Token decryption",kemLabel));
         JPanel kem=new JPanel(new FlowLayout(FlowLayout.LEFT));
         kem.add(button("Choose PKCS#11 KEM adapter…",()->{
             Path path=choose(false,"Choose trusted PKCS#11 KEM adapter executable");if(path==null)return;
@@ -264,7 +255,6 @@ public final class MailApp extends JFrame {
         if(desktopState==null){desktopState=DesktopState.open();desktopState.activate();}return desktopState;
     }
     private void updateBackendLabels(){
-        tokenLabel.setText(adapter==null?"Signing: software":"Token signing · app PIN dialog");
         kemLabel.setText(kemAdapter==null?"Decryption: software":"Token decryption · app PIN dialog");
     }
     private void saveAdapter(boolean kem,String value){
@@ -547,8 +537,7 @@ public final class MailApp extends JFrame {
             try {
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
                 MailApp app = new MailApp();
-                app.setIdentity(id); app.adapter = executable;
-                app.tokenLabel.setText((executable.contains("pkcs11") ? "PKCS#11" : "ykman") + " adapter · " + (executable.contains("pkcs11") ? "PIN dialog + touch" : "PIN/touch in Terminal"));
+                app.setIdentity(id); app.adapter = app.tokenAdapter(false);
                 app.pinnedSigner = id.signingCert();
                 app.from.setText("beta0@example.test"); app.to.setText("recipient@example.test"); app.encrypt.setSelected(false);
                 app.showMessage(app.display(verifiedMail, id, id.signingCert()));
@@ -560,8 +549,8 @@ public final class MailApp extends JFrame {
         SwingUtilities.invokeLater(()->{
             try{
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-                MailApp app=new MailApp();app.setIdentity(id);app.adapter=signAdapter;app.kemAdapter=decryptAdapter;
-                app.tokenLabel.setText("PKCS#11 signing · PIN dialog");app.kemLabel.setText("PKCS#11 ML-KEM + ECDH decryption · one PIN per message");
+                MailApp app=new MailApp();app.setIdentity(id);app.adapter=app.tokenAdapter(false);app.kemAdapter=decryptAdapter;
+                app.kemLabel.setText("PKCS#11 ML-KEM + ECDH decryption · one PIN per message");
                 app.recipient=id.encryptionCert();app.recipientLabel.setText(id.encryptionCert().getPublicKey().getAlgorithm());
                 app.pinnedSigner=id.signingCert();
                 app.from.setText("beta0@example.test");app.to.setText("beta0@example.test");app.encrypt.setSelected(true);

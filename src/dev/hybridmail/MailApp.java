@@ -274,7 +274,7 @@ public final class MailApp extends JFrame {
         syncingOutgoing=true;
         try{savedIdentities.removeAllItems();softwareIdentities.removeAllItems();yubikeyIdentities.removeAllItems();outgoingIdentity.removeAllItems();if(desktopState==null)return;
             String selected=desktopState.get("selected.identity","");
-            for(var saved:desktopState.identities()){savedIdentities.addItem(saved);(saved.passwordRequired()?softwareIdentities:yubikeyIdentities).addItem(saved);outgoingIdentity.addItem(saved);if(saved.id().equals(selected)){savedIdentities.setSelectedItem(saved);(saved.passwordRequired()?softwareIdentities:yubikeyIdentities).setSelectedItem(saved);outgoingIdentity.setSelectedItem(saved);}}
+            for(var saved:desktopState.selectableIdentities()){savedIdentities.addItem(saved);(saved.passwordRequired()?softwareIdentities:yubikeyIdentities).addItem(saved);outgoingIdentity.addItem(saved);if(saved.id().equals(selected)){savedIdentities.setSelectedItem(saved);(saved.passwordRequired()?softwareIdentities:yubikeyIdentities).setSelectedItem(saved);outgoingIdentity.setSelectedItem(saved);}}
         }finally{syncingOutgoing=false;}
     }
     private static String certificateEmail(X509Certificate certificate)throws Exception{
@@ -327,7 +327,7 @@ public final class MailApp extends JFrame {
             JComboBox<String> kem=new JComboBox<>(new String[]{"9d","82","83","84","85"});kem.setSelectedItem(settings.get("token.kemSlot","9d"));
             JComboBox<String> ecdh=new JComboBox<>(new String[]{"82","83","84","85","9d"});ecdh.setSelectedItem(settings.get("token.ecdhSlot","82"));
             JPanel basic=new JPanel(new GridLayout(0,1,0,8));basic.add(row("Serial",serial));
-            basic.add(new JLabel("ML-DSA signing key: slot 9c"));basic.add(row("RSA slot",rsa));basic.add(row("ML-KEM slot",kem));basic.add(row("ECDH slot",ecdh));
+            basic.add(new JLabel("ML-DSA signing key: slot 9c"));basic.add(row("Classical signing slot (ECDSA)",rsa));basic.add(row("ML-KEM slot",kem));basic.add(row("ECDH slot",ecdh));
             basic.add(new JLabel("Uses existing keys. Saving settings never generates or replaces keys."));
             JPanel advanced=new JPanel(new GridLayout(0,1,0,8));advanced.add(new JLabel("Leave crypto paths blank to use the app's bundled libraries."));
             String[] names={"openssl.path","provider.path","module.path","python.path"};String[] labels={"OpenSSL","Provider","Module","Python 3"};
@@ -353,7 +353,7 @@ public final class MailApp extends JFrame {
             String address=email.getText().trim();new jakarta.mail.internet.InternetAddress(address,true).validate();
             String executable=settings.adapter(false);if(executable==null)throw new IOException("Configure a token signing adapter first");
             var profiles=new java.util.LinkedHashMap<String,Identity>();
-            for(var saved:settings.identities())if(!saved.passwordRequired()){Identity old=settings.loadIdentity(saved.id(),null);profiles.put(old.signatureAlgorithm(),old);}
+            for(var saved:settings.selectableIdentities())if(!saved.passwordRequired()){Identity old=settings.loadIdentity(saved.id(),null);profiles.put(old.signatureAlgorithm(),old);}
             if(profiles.isEmpty())throw new IOException("Import a certificate-only token identity first");
             job("Signing new certificates with existing token keys…",()->{
                 var updated=new java.util.ArrayList<Identity>();

@@ -44,6 +44,14 @@ public final class DesktopState {
             result.add(new SavedIdentity(id,get("identity."+id+".name",id)+(get("identity."+id+".type","token").equals("pkcs12")?" · software .p12":" · YubiKey "+get("identity."+id+".token.serial","unbound")),get("identity."+id+".type","token").equals("pkcs12")));
         return result;
     }
+    /** Legacy RSA token demos remain on disk for reading old mail, but are not offered for outgoing use. */
+    public List<SavedIdentity> selectableIdentities(){
+        return identities().stream().filter(saved->{
+            if(saved.passwordRequired())return true;
+            try{return !Identity.HYBRID_RSA_SIGN.equals(Identity.readCertificate(directory.resolve("identities").resolve(saved.id()).resolve("signing.cer")).getPublicKey().getAlgorithm());}
+            catch(Exception e){return true;} // Preserve the existing load-time error for damaged identities.
+        }).toList();
+    }
     private Path identityDirectory(String id){
         if(identities().stream().noneMatch(i->i.id().equals(id)))throw new IllegalArgumentException("Unknown saved identity");
         return directory.resolve("identities").resolve(id);

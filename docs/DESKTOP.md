@@ -64,7 +64,7 @@ Validation: native Keychain write/read/delete passed in the packaged app. After 
 
 **Create identity on empty YubiKey…** offers three profiles. Level 2 creates ML-DSA-44, ECDSA P-256, ML-KEM-768 and ECDH P-256. Level 3 creates ML-DSA-65, ECDSA P-384, ML-KEM-768 and ECDH P-384. Level 5 creates ML-DSA-87, ECDSA P-384, ML-KEM-1024 and ECDH P-384. Slots are 9c / 9a / 9d / 82 respectively. Every option creates four on-device keys and saves both pure and hybrid identities; choose either when sending. The level labels refer to ML-DSA's NIST category (ML-KEM-768 is category 3). Policy is PIN Always / Touch Never. Certificates are local test certificates; private keys remain on the device.
 
-Signing automatically uses the bundled PKCS#11 backend. There is no signing-adapter chooser; old custom signing-adapter preferences are ignored by the desktop app. Software identities continue to sign using their local private keys.
+Signing and decryption automatically use the bundled PKCS#11 backends for YubiKey identities. There are no adapter choosers; old custom adapter preferences are ignored by the desktop app. Software identities use their local private keys.
 
 All 24 user PIV slots must have neither a key nor a certificate. The factory attestation slot F9 is excluded. Unknown metadata, unsupported firmware, communication failures and an occupied slot all stop provisioning. The native helper repeats the check on an exclusive connection immediately before generation. It has no reset/delete/import/overwrite operation. Credentials travel over stdin pipes, never command arguments or environment variables. An explicit management key or the factory AES-192 management key and the existing PIV PIN are required; credentials are not changed by this flow.
 

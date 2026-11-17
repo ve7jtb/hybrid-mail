@@ -37,7 +37,6 @@ public final class MailApp extends JFrame {
     private final JComboBox<DesktopState.SavedIdentity> softwareIdentities=new JComboBox<>(),yubikeyIdentities=new JComboBox<>();
     private X509Certificate recipient, pinnedSigner;
     private String adapter,kemAdapter;
-    private final JLabel kemLabel=new JLabel("Decryption: software");
     private final JTextField from = new JTextField("alice@example.test"), to = new JTextField("bob@example.test"), subject = new JTextField("A private conversation");
     private final JTextArea body = new JTextArea("Hello,\n\nThis message is signed using post-quantum cryptography.\n"), reader = new JTextArea();
     private final JCheckBox encrypt = new JCheckBox("Also encrypt for recipient (optional)", false);
@@ -237,15 +236,6 @@ public final class MailApp extends JFrame {
         settings.add(button("YubiKey configuration…",this::configureYubiKey));
         settings.add(button("Update token certificate email…",this::reissueTokenCertificates));
         settings.add(button("Show saved identity files",()->{try{Desktop.getDesktop().open(state().directory().toFile());}catch(Exception e){error(e);}}));p.add(settings);
-        p.add(section("3  Token decryption",kemLabel));
-        JPanel kem=new JPanel(new FlowLayout(FlowLayout.LEFT));
-        kem.add(button("Choose PKCS#11 KEM adapter…",()->{
-            Path path=choose(false,"Choose trusted PKCS#11 KEM adapter executable");if(path==null)return;
-            if(!Files.isExecutable(path)){error(new IOException("Select an executable adapter"));return;}
-            kemAdapter=path.toAbsolutePath().toString();saveAdapter(true,kemAdapter);kemLabel.setText("Token decryption: "+path.getFileName());
-        }));
-        p.add(kem);
-        p.add(new JLabel("ML-KEM and hybrid decryption use the token; one PIN prompt per message."));
         p.add(Box.createVerticalStrut(24));
         p.add(new JLabel("Generated identities are local test identities. Exchange certificate fingerprints out of band."));
         p.add(new JLabel("Private keys stay local. Account passwords are not saved by this app."));
@@ -253,12 +243,6 @@ public final class MailApp extends JFrame {
     }
     private DesktopState state()throws Exception{
         if(desktopState==null){desktopState=DesktopState.open();desktopState.activate();}return desktopState;
-    }
-    private void updateBackendLabels(){
-        kemLabel.setText(kemAdapter==null?"Decryption: software":"Token decryption · app PIN dialog");
-    }
-    private void saveAdapter(boolean kem,String value){
-        try{state().set(kem?"decrypt.adapter":"sign.adapter",value);state().save();}catch(Exception e){error(e);}
     }
     private void refreshSaved(){
         syncingOutgoing=true;
@@ -302,7 +286,7 @@ public final class MailApp extends JFrame {
     }
     private void restoreDesktop(){
         try{
-            state();if(!desktopState.get("google.email","").isBlank())googleLabel.setText("Google: connect to restore saved Keychain session");desktopState.migrateTrust();desktopState.migrateTokenBindings();refreshSaved();refreshContacts();adapter=desktopState.adapter(false);kemAdapter=desktopState.adapter(true);updateBackendLabels();
+            state();if(!desktopState.get("google.email","").isBlank())googleLabel.setText("Google: connect to restore saved Keychain session");desktopState.migrateTrust();desktopState.migrateTokenBindings();refreshSaved();refreshContacts();adapter=desktopState.adapter(false);kemAdapter=desktopState.adapter(true);
             recipient=desktopState.certificate("recipient");pinnedSigner=desktopState.certificate("pinned");refreshOutgoingEncryption();
             if(recipient!=null)recipientLabel.setText(recipient.getPublicKey().getAlgorithm()+" · "+recipient.getSubjectX500Principal());
             from.setText(desktopState.get("mail.from",from.getText()));to.setText(desktopState.get("mail.to",to.getText()));
@@ -331,7 +315,7 @@ public final class MailApp extends JFrame {
             settings.set("token.serial",serial.getText().trim());settings.set("token.rsaSlot",rsa.getSelectedItem().toString());settings.set("token.kemSlot",kem.getSelectedItem().toString());settings.set("token.ecdhSlot",ecdh.getSelectedItem().toString());
             for(int i=0;i<4;i++)settings.set(names[i],paths[i].getText().isBlank()?null:paths[i].getText().trim());
             settings.set("sign.adapter","pkcs11");settings.set("decrypt.adapter","pkcs11");settings.save();settings.activate();
-            if(identity!=null)setIdentity(identity);else{adapter=settings.adapter(false);kemAdapter=settings.adapter(true);updateBackendLabels();}status.setText("YubiKey defaults saved. Selected credentials keep their own serial and slots.");
+            if(identity!=null)setIdentity(identity);else{adapter=settings.adapter(false);kemAdapter=settings.adapter(true);}status.setText("YubiKey defaults saved. Selected credentials keep their own serial and slots.");
         }catch(Exception e){error(e);}
     }
     private void reissueTokenCertificates(){
@@ -439,7 +423,7 @@ public final class MailApp extends JFrame {
     private String tokenAdapter(boolean kem){String selected=desktopState.adapter(kem);return selected==null?DesktopState.resources().resolve("adapters").resolve(kem?"pkcs11-kem.py":"pkcs11-mu.py").toString():selected;}
     private void setIdentity(Identity id) {
         try{if(desktopState!=null)desktopState.activateIdentity(id);}catch(Exception e){error(e);return;}identity=id;
-        if(desktopState!=null){adapter=id.signingKey()==null?tokenAdapter(false):null;kemAdapter=id.encryptionKey()==null&&id.encryptionCert()!=null?tokenAdapter(true):null;updateBackendLabels();}
+        if(desktopState!=null){adapter=id.signingKey()==null?tokenAdapter(false):null;kemAdapter=id.encryptionKey()==null&&id.encryptionCert()!=null?tokenAdapter(true):null;}
         identityLabel.setText(id.signatureAlgorithm()+" · "+id.signingCert().getSubjectX500Principal());status.setText("Identity ready. Import a recipient certificate to encrypt.");}
     private void export(boolean signing) {
         if(identity==null){error(new IOException("Load an identity first"));return;}
@@ -560,8 +544,7 @@ public final class MailApp extends JFrame {
         SwingUtilities.invokeLater(()->{
             try{
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-                MailApp app=new MailApp();app.setIdentity(id);app.adapter=app.tokenAdapter(false);app.kemAdapter=decryptAdapter;
-                app.kemLabel.setText("PKCS#11 ML-KEM + ECDH decryption · one PIN per message");
+                MailApp app=new MailApp();app.setIdentity(id);app.adapter=app.tokenAdapter(false);app.kemAdapter=app.tokenAdapter(true);
                 app.recipient=id.encryptionCert();app.recipientLabel.setText(id.encryptionCert().getPublicKey().getAlgorithm());
                 app.pinnedSigner=id.signingCert();
                 app.from.setText("beta0@example.test");app.to.setText("beta0@example.test");app.encrypt.setSelected(true);

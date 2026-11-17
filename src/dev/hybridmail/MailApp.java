@@ -24,7 +24,9 @@ public final class MailApp extends JFrame {
     private ReadResult currentRead;
     private record ReadResult(String plain,MailEngine.Opened verified,String subject){}
     private Identity identity;
-    private ImapInbox inbox;
+    private MailInbox inbox;
+    private final JCheckBox smimeInboxOnly=new JCheckBox("S/MIME only");
+    private final JButton newerMail=new JButton("Newer"),olderMail=new JButton("Older");
     private GoogleOAuth.Token googleToken;
     private String googleEmail;
     private java.util.List<ImapInbox.Entry> inboxEntries=java.util.List.of();
@@ -64,7 +66,7 @@ public final class MailApp extends JFrame {
         p.add(new JScrollPane(body));
         JPanel bottom = new JPanel(new BorderLayout()); bottom.add(new JLabel("Body is signed; encryption is optional. Outer From / To / Subject headers are unprotected."),BorderLayout.NORTH);
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        actions.add(button("Recipient certificates…",()->tabs.setSelectedIndex(4))); actions.add(button("Save signed .eml…", () -> compose(false))); actions.add(button("Send via SMTP…", () -> compose(true)));
+        actions.add(button("Recipient certificates…",()->tabs.setSelectedIndex(4))); actions.add(button("Save signed .eml…", () -> compose(false))); actions.add(button("Send…", () -> compose(true)));
         bottom.add(actions, BorderLayout.SOUTH); p.add(bottom,BorderLayout.SOUTH); return p;
     }
     private JPanel readPanel() {
@@ -85,8 +87,11 @@ public final class MailApp extends JFrame {
         actions.add(button("Connect IMAP…",()->connectInbox(false)));
         actions.add(button("Connect Gmail",()->connectInbox(true)));
         actions.add(button("Refresh",this::refreshInbox));
+        newerMail.setEnabled(false);olderMail.setEnabled(false);newerMail.addActionListener(e->gmailPage(false));olderMail.addActionListener(e->gmailPage(true));actions.add(newerMail);actions.add(olderMail);
+        smimeInboxOnly.setEnabled(false);smimeInboxOnly.addActionListener(e->{if(inbox instanceof GmailApi api){api.setSmimeOnly(smimeInboxOnly.isSelected());refreshInbox();}});actions.add(smimeInboxOnly);
         actions.add(button("Disconnect",this::disconnectInbox));top.add(actions);
         JPanel google=new JPanel(new FlowLayout(FlowLayout.LEFT));
+        google.add(button("Use PQ Mail Google client",()->{try{GoogleSession.saveClient(GoogleOAuth.bundledClient());if(googleToken!=null){googleToken.close();googleToken=null;}googleLabel.setText("PQ Mail Google client · testing: registered testers only");status.setText("Choose Sign in with Google. Your previous custom registration is no longer selected.");}catch(Exception e){error(e);}}));
         google.add(button("Import Google OAuth client…",this::importGoogleClient));
         google.add(button("Enter Google client credentials…",this::enterGoogleClient));
         google.add(button("Sign in with Google…",this::signInGoogle));
@@ -107,25 +112,29 @@ public final class MailApp extends JFrame {
     private void connectInbox(boolean gmail){
         Account a=gmail?googleAccount(false):account(false);if(a==null)return;
         job("Connecting to inbox…",()->{try{
-            ImapInbox next=ImapInbox.connect(a.host,a.port,a.user,new String(a.password),a.oauth);
+            MailInbox next;
+            if(gmail){var api=new GmailApi(this::googleCredential);api.verifyAccount(a.user);api.setSmimeOnly(smimeInboxOnly.isSelected());next=api;}else next=ImapInbox.connect(a.host,a.port,a.user,new String(a.password),false);
             try{var entries=next.latest();if(inbox!=null)try{inbox.close();}catch(Exception ignored){}inbox=next;return entries;}
             catch(Exception e){next.close();throw e;}
-        }finally{Arrays.fill(a.password,'\0');}},entries->{showInbox(entries);inboxLabel.setText(a.user+" · "+entries.size()+" most recent messages · read-only");tabs.setSelectedIndex(3);});
+        }finally{Arrays.fill(a.password,'\0');}},entries->{showInbox(entries);inboxLabel.setText(a.user+" · "+(gmail?"Gmail API · 50 per page · no disk cache":"IMAP · 10 most recent")+" · read-only");tabs.setSelectedIndex(3);});
     }
     private void showInbox(java.util.List<ImapInbox.Entry> entries){
         inboxEntries=entries;inboxModel.setRowCount(0);
         var format=java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(java.time.ZoneId.systemDefault());
         for(var entry:entries)inboxModel.addRow(new Object[]{entry.sender(),entry.subject(),entry.received()==null?"":format.format(entry.received())});
-        status.setText(entries.isEmpty()?"Inbox is empty":"Showing "+entries.size()+" most recent arrivals, newest first");
+        smimeInboxOnly.setEnabled(inbox instanceof GmailApi);
+        newerMail.setEnabled(inbox instanceof GmailApi g&&g.hasNewer());olderMail.setEnabled(inbox instanceof GmailApi g&&g.hasOlder());
+        status.setText(entries.isEmpty()?"No matching messages on this page; use Older if available":"Showing "+entries.size()+" messages, newest first"+(inbox instanceof GmailApi?" · use Older/Newer for the entire inbox":""));
     }
+    private void gmailPage(boolean older){if(!(inbox instanceof GmailApi api))return;job("Loading Gmail headers…",()->older?api.older():api.newer(),this::showInbox);}
     private void refreshInbox(){if(inbox==null){error(new IOException("Connect to an inbox first"));return;}job("Refreshing inbox…",()->inbox.latest(),this::showInbox);}
     private void disconnectInbox(){
-        ImapInbox previous=inbox;inbox=null;inboxEntries=java.util.List.of();inboxModel.setRowCount(0);inboxLabel.setText("Not connected");
+        MailInbox previous=inbox;inbox=null;smimeInboxOnly.setEnabled(false);newerMail.setEnabled(false);olderMail.setEnabled(false);inboxEntries=java.util.List.of();inboxModel.setRowCount(0);inboxLabel.setText("Not connected");
         if(previous!=null)job("Disconnecting…",()->{previous.close();return "Disconnected";},status::setText);
     }
     private void openInboxMessage(){
         int selected=inboxTable.getSelectedRow();if(selected<0||inbox==null)return;
-        clearReadTrust();var entry=inboxEntries.get(inboxTable.convertRowIndexToModel(selected));ImapInbox current=inbox;Identity id=identity;X509Certificate pin=pinnedSigner;
+        clearReadTrust();var entry=inboxEntries.get(inboxTable.convertRowIndexToModel(selected));MailInbox current=inbox;Identity id=identity;X509Certificate pin=pinnedSigner;
         job("Opening selected message…",()->display(current.message(entry.uid()),id,pin),this::showMessage);
     }
     private void importGoogleClient(){
@@ -136,7 +145,7 @@ public final class MailApp extends JFrame {
         JTextField clientId=new JTextField(42);JPasswordField secret=new JPasswordField(42);
         JPanel fields=new JPanel(new GridLayout(0,1,0,8));fields.add(new JLabel("Use the client ID and secret from a Google Desktop app OAuth client."));
         fields.add(row("Client ID",clientId));fields.add(row("Client secret",secret));
-        fields.add(new JLabel("Saved only in this Mac's PQ Mail configuration; not uploaded to GitHub."));
+        fields.add(new JLabel("Custom client saved only in "+credentialStore()+"; not uploaded to GitHub."));
         if(JOptionPane.showConfirmDialog(this,fields,"Google Desktop client credentials",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)!=JOptionPane.OK_OPTION){secret.setText("");return;}
         char[] value=secret.getPassword();secret.setText("");
         try{GoogleSession.saveClient(new GoogleOAuth.Client(clientId.getText().trim(),new String(value).trim()));Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in "+credentialStore()+". Choose Sign in with Google.");}
@@ -148,7 +157,7 @@ public final class MailApp extends JFrame {
             GoogleOAuth.Client client=GoogleSession.client(state());
             JTextField email=new JTextField(state().get("google.email",""),30);
             JPanel prompt=new JPanel(new GridLayout(0,1,0,8));prompt.add(new JLabel("Google account email"));prompt.add(email);
-            prompt.add(new JLabel("Google requires full mail permission for IMAP/SMTP. Review consent in your browser."));
+            prompt.add(new JLabel("Allow reading and sending Gmail messages. No delete or modify permission is requested."));
             prompt.add(new JLabel("Your refresh token is saved in "+credentialStore()+" until you sign out."));
             if(JOptionPane.showConfirmDialog(this,prompt,"Sign in with Google",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
             String address=email.getText().trim();new jakarta.mail.internet.InternetAddress(address,true).validate();
@@ -174,6 +183,10 @@ public final class MailApp extends JFrame {
         };worker.execute();progress.setVisible(true);
         try{GoogleOAuth.Token token=worker.get();googleEmail=email;googleLabel.setText("Google: "+email+" · restored from "+credentialStore()+"");return token;}
         catch(java.util.concurrent.ExecutionException e){throw new IOException(e.getCause().getMessage());}
+    }
+    private synchronized char[] googleCredential()throws Exception{
+        if(googleToken==null||!googleToken.valid()){if(googleToken!=null)googleToken.close();googleToken=GoogleSession.restore(GoogleSession.client(state()),state().get("google.email",""));}
+        return googleToken.credential();
     }
     private Account googleAccount(boolean smtp){
         try{if(googleToken==null||!googleToken.valid()){if(googleToken!=null)googleToken.close();googleToken=restoreGoogleSession();}return new Account(smtp?"smtp.gmail.com":"imap.gmail.com",smtp?587:993,googleEmail,googleToken.credential(),true);}catch(Exception e){error(e);tabs.setSelectedIndex(3);return null;}
@@ -477,7 +490,7 @@ public final class MailApp extends JFrame {
         job(send?"Signing and sending…":"Signing and saving…",()->{
             try {
                 MimeMessage m=MailEngine.compose(id,f,t,s,b,r,backend);
-                if(send)MailEngine.send(m,a.host,a.port,a.user,new String(a.password),a.oauth);
+                if(send){if(a.oauth){try(var api=new GmailApi(this::googleCredential)){api.verifyAccount(a.user);api.send(m);}}else MailEngine.send(m,a.host,a.port,a.user,new String(a.password),false);}
                 else Files.write(file,MailEngine.encode(m),StandardOpenOption.CREATE_NEW);
                 return send?"Message sent":"Saved "+file.getFileName();
             } finally {if(a!=null)Arrays.fill(a.password,'\0');}
@@ -524,7 +537,7 @@ public final class MailApp extends JFrame {
     }
     private record Account(String host,int port,String user,char[] password,boolean oauth){}
     private Account account(boolean smtp){
-        if(smtp){Object[] choices={"Google OAuth","Server password","Cancel"};int choice=JOptionPane.showOptionDialog(this,"Choose how to authenticate for sending","SMTP authentication",JOptionPane.DEFAULT_OPTION,JOptionPane.QUESTION_MESSAGE,null,choices,choices[0]);if(choice==0)return googleAccount(true);if(choice!=1)return null;}
+        if(smtp){Object[] choices={"Gmail API","Other host (SMTP)","Cancel"};int choice=JOptionPane.showOptionDialog(this,"Choose how to authenticate for sending","Send using",JOptionPane.DEFAULT_OPTION,JOptionPane.QUESTION_MESSAGE,null,choices,choices[0]);if(choice==0)return googleAccount(true);if(choice!=1)return null;}
         String prefix=smtp?"smtp.":"imap.";
         DesktopState settings;try{settings=state();}catch(Exception e){error(e);return null;}
         JTextField host=new JTextField(settings.get(prefix+"host","")),port=new JTextField(settings.get(prefix+"port",smtp?"587":"993")),user=new JTextField(settings.get(prefix+"user",from.getText()));JPasswordField pass=new JPasswordField();

@@ -8,7 +8,7 @@ root = Path(__file__).resolve().parent
 src = root.parent / 'src/dev/hybridmail'
 out = root / 'app/build/generated/shared/dev/hybridmail'
 out.mkdir(parents=True, exist_ok=True)
-for name in ['Identity','TokenProfile','MailEngine','ImapInbox','ExternalMu','ExternalKem']:
+for name in ['Identity','TokenProfile','MailEngine','ImapInbox','MailInbox','ExternalMu','ExternalKem']:
     s=(src/(name+'.java')).read_text()
     if name=='ExternalMu':
         marker='    /** Executable protocol:'

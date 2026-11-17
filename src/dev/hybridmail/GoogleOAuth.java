@@ -15,7 +15,18 @@ import java.util.function.*;
 
 /** Google Desktop authorization-code flow: system browser, loopback and S256 PKCE. */
 public final class GoogleOAuth {
-    static final String SCOPE="https://mail.google.com/";
+    // Public installed-app registration. This is not a confidential server credential.
+    // User access/refresh tokens remain separate in the operating-system credential store.
+    static Client bundledClient()throws IOException{
+        try(var in=GoogleOAuth.class.getResourceAsStream("/google-client.json")){
+            if(in==null)throw new IOException("This build has no bundled Google client. Import a Desktop OAuth client in Inbox.");
+            var j=JsonParser.parseString(new String(in.readAllBytes(),StandardCharsets.UTF_8)).getAsJsonObject();
+            return new Client(j.get("id").getAsString(),j.get("secret").getAsString());
+        }
+    }
+    static final String READ_SCOPE="https://www.googleapis.com/auth/gmail.readonly";
+    static final String SEND_SCOPE="https://www.googleapis.com/auth/gmail.send";
+    static final String SCOPE=READ_SCOPE+" "+SEND_SCOPE;
     static final URI AUTH=URI.create("https://accounts.google.com/o/oauth2/v2/auth");
     static final URI TOKEN=URI.create("https://oauth2.googleapis.com/token");
     public record Client(String id,String secret){
@@ -111,7 +122,7 @@ public final class GoogleOAuth {
     static Token token(String json)throws IOException{
         try{JsonObject data=JsonParser.parseString(json).getAsJsonObject();String value=data.get("access_token").getAsString();long seconds=data.get("expires_in").getAsLong();
             if(!"Bearer".equalsIgnoreCase(data.get("token_type").getAsString())||value.isBlank()||seconds<=0||seconds>86400)throw new IOException("Invalid Google token response");
-            if(data.has("scope")&&!Arrays.asList(data.get("scope").getAsString().split(" ")).contains(SCOPE))throw new IOException("Google did not grant the mail permission");
+            if(data.has("scope")&&!new HashSet<>(Arrays.asList(data.get("scope").getAsString().split(" "))).containsAll(List.of(READ_SCOPE,SEND_SCOPE)))throw new IOException("Google did not grant the mail permission");
             Token token=new Token(value,seconds);if(data.has("refresh_token")){String refresh=data.get("refresh_token").getAsString();if(refresh.isBlank()||refresh.length()>16384)throw new IOException("Invalid refresh token");token.refresh=refresh.toCharArray();}return token;
         }catch(IOException e){throw e;}catch(RuntimeException e){throw new IOException("Invalid Google token response");}
     }

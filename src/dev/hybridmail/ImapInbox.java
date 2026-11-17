@@ -7,7 +7,7 @@ import jakarta.mail.*;
 import jakarta.mail.internet.MimeMessage;
 
 /** Read-only, session-scoped inbox. UIDs keep selections stable after expunges. */
-public final class ImapInbox implements AutoCloseable {
+public final class ImapInbox implements MailInbox {
     public record Entry(long uid,String sender,String subject,Instant received,long bytes){}
     private final Store store;
     private final Folder folder;

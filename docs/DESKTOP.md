@@ -26,7 +26,7 @@ After opening a successfully verified signed email, **Read & verify → Trust si
 
 Signature validity and signer trust are displayed separately. Trust is local exact-certificate pinning, not CA path building or revocation checking. Encryption trust is a recorded verification decision; it does not block using an otherwise valid untrusted encryption certificate.
 
-## Ten-message inbox
+## Inbox
 
 Select **Inbox → Connect IMAP** for a TLS server (usually port 993). The app opens `INBOX` read-only and lists up to ten newest arrivals by IMAP sequence, newest first. This is arrival order, not a global sort by the sender-controlled Date header. Only headers are initially loaded. Double-click or select **Open selected message** to retrieve the selected body (20 MiB limit). Refresh updates the list. A disconnected/stale session requires reconnecting. No delete, move, flag changes, or background polling is implemented.
 
@@ -34,15 +34,15 @@ Plain-text unsigned mail is explicitly marked unverified. HTML is not rendered a
 
 ## Google OAuth client setup
 
-1. Open [Google Auth Platform](https://console.cloud.google.com/auth/overview) and choose/create a Google Cloud project.
-2. Configure **Branding** with an app name and support/developer email.
-3. For a personal account, choose an **External** audience. Keep the app in testing and add the intended Gmail account as a test user.
-4. Add `https://mail.google.com/` under **Data Access**. Google requires this full-mail scope for IMAP/SMTP; review its broad permissions at consent. Workspace policies may restrict access.
-5. Under **Clients**, create an OAuth client of type **Desktop app** and download its JSON. A Web application client is not accepted. No deployed web redirect is needed: the app uses a temporary loopback IP port.
-6. In **Inbox**, import the JSON with **Import Google OAuth client**. If JSON download is unavailable, choose **Enter Google client credentials** and paste the full Client ID plus Client secret into its masked field. Both methods save the client configuration in Mac Keychain. Then choose **Sign in with Google**. Enter the test email and complete Google's consent in the system browser. Cancel is available in the app.
-7. Choose **Connect Gmail**. This uses `imap.gmail.com:993` over TLS with XOAUTH2. For sending, choose **Compose → Send via SMTP → Google OAuth**; this uses `smtp.gmail.com:587` with required STARTTLS and XOAUTH2.
+The bundled PQ Mail Desktop client is the default for new installations. The shared project `pq-mail-ve7jtb` is in Testing and requires listed test users; Google restricted-scope verification is pending. The bundled installed-app client configuration is public, while each user's refresh token stays in the operating-system credential store. Existing custom clients remain selected until **Use PQ Mail Google client** is chosen.
 
-After upgrading, sign in once and approve consent to obtain an offline refresh token. Subsequently **Connect Gmail** or sending through Google OAuth restores the session from Keychain and refreshes expired access tokens without opening the browser. There is no network connection on startup. macOS may ask permission to access the login Keychain, particularly after an app update. **Test Mac Keychain** checks storage with disposable data without using Google credentials.
+For an optional custom client, configure Google Cloud OAuth branding, External audience and test users, enable **Gmail API**, declare only `https://www.googleapis.com/auth/gmail.readonly` and `https://www.googleapis.com/auth/gmail.send`, and create a **Desktop app** client. Import its JSON or use **Enter Google client credentials…**. Then choose **Sign in with Google** and **Connect Gmail**.
+
+Gmail uses REST over HTTPS. It lists 50 message headers per page; **Older/Newer** traverses the entire inbox and **Refresh** returns to the newest page. Only the current page's headers and navigation cursors remain in memory. Raw MIME is fetched when opened and passed to the local S/MIME verifier/decryptor; bodies and attachments are not cached to disk. Opening messages does not mark them read. Sending uses **Compose → Send… → Gmail API** and uploads the locally generated signed/encrypted MIME message. No delete, label-modify, or draft API is used. Failed or timed-out sends are not automatically retried; check Sent mail before retrying.
+
+**Connect IMAP…** and **Send… → Other host (SMTP)** retain the existing TLS server configuration for other providers. Google OAuth remains a desktop feature; Android's preview keeps its existing IMAP/SMTP configuration.
+
+After upgrading, select **Use PQ Mail Google client** to switch to the shared registration, then sign in once for read/send consent. Legacy full-mail sessions are not reused. Changing scopes does not revoke an old grant at Google; remove that previous app connection in your Google account if no longer needed. Subsequently **Connect Gmail** or sending through Gmail API restores the session from Keychain and refreshes expired access tokens without opening the browser. There is no network connection on startup. macOS may ask permission to access the login Keychain, particularly after an app update. **Test Mac Keychain** checks storage with disposable data without using Google credentials.
 
 **Sign out of Google** clears the in-memory token, deletes the saved Keychain refresh token, and disconnects the inbox; it retains client configuration and does not revoke the grant at Google. If Keychain deletion fails the app reports it; unlock the Keychain and retry Sign out. You can revoke it through your Google account's third-party connections. Never commit the downloaded client JSON, access tokens or account passwords. Google can expire or revoke refresh tokens; external OAuth projects in Testing typically issue refresh tokens that expire after seven days for the Gmail scope, so occasional reauthorization can still be required.
 
@@ -75,3 +75,7 @@ No ykman installation is needed for the packaged creation flow. It uses the bund
 Software and YubiKey creation accept up to four additional comma-separated email addresses. All signing and encryption certificates, pure and hybrid, include the primary address plus these `rfc822Name` Subject Alternative Names. The subject CN remains the primary email. Duplicate or invalid addresses are rejected. Pending YubiKey setup metadata preserves the additional addresses for certificate issuance retries.
 
 New YubiKey creation detects the inserted device and checks all user PIV slots before opening the form. The detected serial is display-only. Missing, busy, nonempty or multiple devices stop the flow; the same serial is checked again before provisioning.
+
+Gmail **S/MIME only** filters each page using its top-level Content-Type (opaque S/MIME and multipart/signed with a PKCS#7 signature protocol). It does not fetch message bodies or establish signature validity. Pages cover 50 inbox entries before filtering, so a page may show fewer or no matches while **Older** remains available. S/MIME nested inside forwarded messages or ordinary attachments is not included.
+
+Official desktop builds inject shared client configuration from the `PQ_MAIL_GOOGLE_CLIENT_SECRET` Actions secret. Source builds can supply that environment variable or an ignored `google-client.json` containing `id` and `secret`; without it, use the custom client import. This installed-app client configuration is extractable from the packaged app; it is not a confidential server credential. User tokens are never bundled.

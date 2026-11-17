@@ -17,6 +17,8 @@ jobs:
           java-version: '25'
       - run: bash scripts/build-dependencies.sh
       - run: bash build.sh test
+        env:
+          PQ_MAIL_GOOGLE_CLIENT_SECRET: ${{ secrets.PQ_MAIL_GOOGLE_CLIENT_SECRET }}
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: java-runtime-input

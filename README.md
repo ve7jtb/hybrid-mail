@@ -24,7 +24,7 @@ An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB a
 
 - Compose signed text messages, optionally encrypt them, and save/open `.eml` files.
 - Send through SMTP with STARTTLS and show the **10 most recent inbox messages** through read-only IMAP over TLS.
-- Sign in to Gmail with Google Desktop OAuth, including PKCE and a loopback callback. Save the client configuration and refresh token in **macOS Keychain** or **Windows Credential Manager**.
+- Sign in to Gmail with Google Desktop OAuth, including PKCE and a loopback callback, requesting only Gmail API read-only and send scopes. Save the client configuration and refresh token in **macOS Keychain** or **Windows Credential Manager**.
 - Select the outgoing signing identity and recipient encryption certificate independently.
 - Manage signing and encryption certificates, inspect SHA-256 fingerprints, export PEM/DER, and explicitly mark certificates trusted. Successfully verified incoming signers can be added to the trust store.
 - Keep **software identities in password-protected `.p12` files** separate from **YubiKey identities**, whose private keys stay on the device.
@@ -60,7 +60,7 @@ Bouncy Castle computes ML-DSA external μ, including composite domain separation
 3. In **Compose**, choose **Sign with**, enter matching sender/recipient addresses, and optionally enable **Also encrypt for recipient** and select **Encrypt to**.
 4. Save the message locally or send it with SMTP. Use **Read & verify** for a local message or open a message from **Inbox**.
 
-For Gmail, create your own Google OAuth client of type **Desktop app**, add your account as a test user when applicable, and import its JSON or use **Enter Google client credentials…**. Then choose **Sign in with Google** and **Connect Gmail**. SMTP also supports Google OAuth. Refresh tokens restore access after restart; sign-out removes the saved token. Server passwords and YubiKey PINs are not saved. See the [desktop and Gmail guide](docs/DESKTOP.md).
+For Gmail, the desktop app includes a shared **PQ Mail** Google OAuth registration; new installations do not need their own client ID. Choose **Sign in with Google**, then **Connect Gmail**. The shared project is currently in **Testing**: your account must be added as a test user by the maintainer, and Gmail refresh tokens expire after seven days. Existing custom clients remain selected; choose **Use PQ Mail Google client** to switch, then sign in again. Developers can still import their own Desktop client JSON or use **Enter Google client credentials…**. Google connections use the Gmail API with only `gmail.readonly` and `gmail.send`; other hosts retain IMAP/SMTP. Gmail shows 50 header-only messages per page with **Newer/Older** controls for the entire inbox. Message MIME is fetched when opened and is not cached to disk. Refresh tokens restore access after restart; sign-out removes the saved token. Server passwords and YubiKey PINs are not saved. See the [desktop and Gmail guide](docs/DESKTOP.md).
 
 ### Android hardware testing
 
@@ -158,7 +158,7 @@ The display name and repository changed to PQ Mail. Existing settings, identity 
 - The reader handles signed text/plain mail and AuthEnvelopedData, plus ordinary plain text explicitly marked unsigned. HTML rendering, attachments and legacy EnvelopedData are not supported. Verification/decryption failures are not downgraded to unsigned mail.
 - Trust uses exact certificate fingerprints, validity and key-usage checks. There is no CA chain building or revocation checking. Outer mail headers are not signed or encrypted. The app distinguishes signature validity from trust and flags sender/certificate mismatches.
 
-Public demonstration certificates are separately published in [hybrid-mail-test-certificates](https://github.com/ve7jtb/hybrid-mail-test-certificates). Private keys, user identity files, device identifiers, OAuth credentials and local hardware artifacts are excluded from this source repository.
+Public demonstration certificates are separately published in [hybrid-mail-test-certificates](https://github.com/ve7jtb/hybrid-mail-test-certificates). Private keys, user identity files, device identifiers, user OAuth tokens, custom client credentials and local hardware artifacts are excluded from this source repository.
 
 ## Source map
 
@@ -167,3 +167,5 @@ The Android UI, USB/NFC backend, build instructions and instrumentation tests ar
 Desktop Java code is under `src/dev/hybridmail/`: `MailApp` is the Swing UI; `MailEngine` handles S/MIME and mail transport; `Identity` and `DesktopState` manage identities and storage; `ExternalMu` / `ExternalKem` bridge token operations; `TokenProvision` invokes the native provisioning helper. `adapters/` contains the Python OpenSSL/PKCS#11 and legacy ykman adapters. `native-src/` contains platform credential helpers and Rust provisioning code. Tests are in the Java sources, `tests/`, and the Rust helper.
 
 Third-party components retain their own licenses; see [notices](docs/THIRD-PARTY.txt). No project license has been selected yet.
+
+Gmail **S/MIME only** filters each page using its top-level Content-Type (opaque S/MIME and multipart/signed with a PKCS#7 signature protocol). It does not fetch message bodies or establish signature validity. Pages cover 50 inbox entries before filtering, so a page may show fewer or no matches while **Older** remains available. S/MIME nested inside forwarded messages or ordinary attachments is not included.

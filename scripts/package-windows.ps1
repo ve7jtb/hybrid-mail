@@ -21,8 +21,8 @@ $env:PATH="$stage/native/bin;$env:PATH"
 $env:PKCS11_PROVIDER_MODULE="$stage/native/lib/ykcs11.dll"
 & "$stage/native/bin/openssl.exe" list -providers -provider default -provider "$stage/native/lib/pkcs11.dll"; Checked
 & "$stage/native/python/python.exe" -m py_compile adapters/pkcs11-mu.py adapters/pkcs11-kem.py adapters/pkcs11-presence.py; Checked
-foreach($test in @('SelfTest','TokenIdentityTest','TokenKemTest','Token87Test','SoftwareProfilesTest')) {
- & "$env:JAVA_HOME/bin/java.exe" -Djava.awt.headless=true -cp 'build/hybrid-mail.jar;lib/*' "dev.hybridmail.$test"; Checked
+foreach($test in @('SelfTest','TokenIdentityTest','TokenKemTest','Token87Test','SoftwareProfilesTest','GmailApiTest')) {
+ & "$env:JAVA_HOME/bin/java.exe" '-Djava.awt.headless=true' -cp 'build/hybrid-mail.jar;lib/*' "dev.hybridmail.$test"; Checked
 }
 # Isolated native credential-store test; never accesses an actual OAuth credential.
 $helper="$stage/native/bin/hybrid-mail-credentials.exe"

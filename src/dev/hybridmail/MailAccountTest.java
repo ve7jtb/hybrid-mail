@@ -32,7 +32,7 @@ public final class MailAccountTest {
         reject(()->GoogleOAuth.code("state=other&code=secret","expected"),"OAuth state mismatch rejected");
         reject(()->GoogleOAuth.code("state=expected&state=expected&code=x","expected"),"duplicate callback rejected");
         reject(()->GoogleOAuth.code("state=expected&error=access_denied","expected"),"Google consent denial rejected");
-        try(var token=GoogleOAuth.token("{\"access_token\":\"test-token\",\"token_type\":\"Bearer\",\"expires_in\":3600,\"scope\":\"https://mail.google.com/\"}")){
+        try(var token=GoogleOAuth.token("{\"access_token\":\"test-token\",\"token_type\":\"Bearer\",\"expires_in\":3600,\"scope\":\"https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send\"}")){
             check(token.valid()&&new String(token.credential()).equals("test-token"),"session token available");token.close();reject(token::credential,"sign-out clears token");
         }
         try(var expired=new GoogleOAuth.Token("expired-test-token",1)){reject(expired::credential,"expired token rejected");}

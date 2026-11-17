@@ -18,6 +18,7 @@ Expand-Archive build/python.zip "$stage/native/python" -Force
 # Embedded Python's stdlib is sufficient for all adapters.
 $env:PATH="$stage/native/bin;$env:PATH"
 & "$stage/native/bin/openssl.exe" version; Checked
+$env:PKCS11_PROVIDER_MODULE="$stage/native/lib/ykcs11.dll"
 & "$stage/native/bin/openssl.exe" list -providers -provider default -provider "$stage/native/lib/pkcs11.dll"; Checked
 & "$stage/native/python/python.exe" -m py_compile adapters/pkcs11-mu.py adapters/pkcs11-kem.py adapters/pkcs11-presence.py; Checked
 foreach($test in @('SelfTest','TokenIdentityTest','TokenKemTest','Token87Test','SoftwareProfilesTest')) {

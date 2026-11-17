@@ -19,7 +19,8 @@ final class GoogleSession {
         var j=new JsonObject();j.addProperty("scope",GoogleOAuth.SCOPE);j.addProperty("client",client.id());j.addProperty("email",email);j.addProperty("refresh",refresh);MacKeychain.put("google-session",j.toString());
     }
     static GoogleOAuth.Token restore(GoogleOAuth.Client client,String email)throws Exception{
-        String saved=MacKeychain.get("google-session");if(saved==null)throw new IOException("Sign in with Google once to save your session in Mac Keychain");
+        boolean authenticate=System.getProperty("os.name").startsWith("Mac") && Boolean.parseBoolean(DesktopState.open().get("google.authenticateRestore","false"));
+        String saved=MacKeychain.get("google-session",authenticate);if(saved==null)throw new IOException("Sign in with Google once to save your session in Mac Keychain");
         JsonObject j;try{j=JsonParser.parseString(saved).getAsJsonObject();if(!j.has("scope")||!GoogleOAuth.SCOPE.equals(j.get("scope").getAsString()))throw new IOException("Sign in again to authorize Gmail read-only and send access. Previous IMAP/SMTP sessions are not reused.");if(!client.id().equals(j.get("client").getAsString())||!email.equalsIgnoreCase(j.get("email").getAsString()))throw new IOException("Saved Google session belongs to another client or account. Sign in again.");}catch(RuntimeException e){throw new IOException("Saved Google session is invalid. Sign in again.");}
         GoogleOAuth.Token token=GoogleOAuth.refresh(client,j.get("refresh").getAsString());
         try{save(client,email,token);return token;}catch(Exception e){token.close();throw e;}

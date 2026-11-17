@@ -17,11 +17,13 @@ final class MacKeychain {
             if(!process.waitFor(90,TimeUnit.SECONDS))throw new IOException("Mac Keychain access timed out");
             byte[] bytes=read.get(5,TimeUnit.SECONDS);
             if(process.exitValue()==2)return null;
+            if(process.exitValue()==3)throw new IOException("Touch ID or Mac password authentication was cancelled, unavailable, or timed out. No Google session was restored.");
             if(process.exitValue()!=0||bytes.length>65536)throw new IOException("Mac Keychain access failed or was cancelled. Unlock your login Keychain and try again.");
             return bytes;
         }catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException("Keychain access interrupted");}catch(ExecutionException|TimeoutException e){throw new IOException("Cannot read Mac Keychain response");}finally{process.destroyForcibly();}
     }
-    static String get(String account)throws IOException{byte[] data=call("get",account,null);if(data==null)return null;try{return new String(data,StandardCharsets.UTF_8);}finally{Arrays.fill(data,(byte)0);}}
+    static String get(String account)throws IOException{return get(account,false);}
+    static String get(String account,boolean authenticate)throws IOException{byte[] data=call(authenticate?"get-auth":"get",account,null);if(data==null)return null;try{return new String(data,StandardCharsets.UTF_8);}finally{Arrays.fill(data,(byte)0);}}
     static void put(String account,String value)throws IOException{byte[] data=value.getBytes(StandardCharsets.UTF_8);try{call("put",account,data);}finally{Arrays.fill(data,(byte)0);}}
     static void delete(String account)throws IOException{call("delete",account,null);}
 }

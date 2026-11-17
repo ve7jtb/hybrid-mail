@@ -89,6 +89,13 @@ public final class MailApp extends JFrame {
         google.add(button("Import Google OAuth client…",this::importGoogleClient));
         google.add(button("Enter Google client credentials…",this::enterGoogleClient));
 google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStore()+" with disposable data…",()->{String value=java.util.UUID.randomUUID().toString();try{MacKeychain.put("self-test",value);if(!value.equals(MacKeychain.get("self-test")))throw new IOException("Keychain round trip failed");}finally{MacKeychain.delete("self-test");}return true;},ok->status.setText("PASS "+credentialStore()+" write/read/delete; no Google credentials used"))));
+        if(System.getProperty("os.name").startsWith("Mac")){
+            JCheckBox authenticate=new JCheckBox("Use Touch ID or Mac password when restoring Google session");
+            try{authenticate.setSelected(Boolean.parseBoolean(state().get("google.authenticateRestore","false")));}catch(Exception e){error(e);}
+            authenticate.addActionListener(e->{try{state().set("google.authenticateRestore",Boolean.toString(authenticate.isSelected()));state().save();}catch(Exception failure){authenticate.setSelected(!authenticate.isSelected());error(failure);}});
+            google.add(authenticate);
+            google.add(new JLabel("<html>macOS chooses Touch ID or password. Applies to the next session restore.<br>Your login Keychain may still request separate access permission.</html>"));
+        }
         settings.add(google,BorderLayout.CENTER);
         settings.add(left(button("Close",dialog::dispose)),BorderLayout.SOUTH);
         dialog.setContentPane(settings);dialog.pack();dialog.setLocationRelativeTo(this);dialog.setVisible(true);

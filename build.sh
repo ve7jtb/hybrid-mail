@@ -7,7 +7,7 @@ command -v javac >/dev/null || { echo 'Install JDK 25 and set JAVA_HOME.' >&2; e
 mkdir -p build/classes
 if [[ "$(uname -s)" == Darwin ]]; then
   mkdir -p build/native
-  clang -O2 -framework Security -framework CoreFoundation native-src/keychain.c -o build/native/hybrid-mail-keychain
+  clang -x objective-c -fobjc-arc -fblocks -O2 -framework LocalAuthentication -framework Foundation -framework Security -framework CoreFoundation native-src/keychain.c -o build/native/hybrid-mail-keychain
   codesign --force --sign - --identifier dev.hybridmail.keychain build/native/hybrid-mail-keychain
 fi
 javac -encoding UTF-8 -cp 'lib/*' -d build/classes src/dev/hybridmail/*.java

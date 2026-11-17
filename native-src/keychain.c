@@ -1,5 +1,7 @@
 // Narrow Keychain bridge. Secret values travel only over stdin/stdout pipes.
 #include <Security/Security.h>
+#import <LocalAuthentication/LocalAuthentication.h>
+#import <Foundation/Foundation.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <stdio.h>
 #include <string.h>
@@ -7,13 +9,28 @@
 static void wipe(void *p,size_t n){volatile unsigned char *b=p;while(n--)*b++=0;}
 int main(int argc, char **argv) {
     if(argc!=3 || (strcmp(argv[2],"google-client") && strcmp(argv[2],"google-session") && strcmp(argv[2],"self-test")))return 1;
+    if(!strcmp(argv[1],"get-auth")){
+        @autoreleasepool {
+            LAContext *context=[[LAContext alloc] init];
+            NSError *error=nil;
+            if(![context canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication error:&error])return 3;
+            dispatch_semaphore_t done=dispatch_semaphore_create(0);
+            __block BOOL accepted=NO;
+            [context evaluatePolicy:LAPolicyDeviceOwnerAuthentication
+                localizedReason:@"Restore your saved PQ Mail Google session"
+                reply:^(BOOL success,NSError *failure){accepted=success;dispatch_semaphore_signal(done);}];
+            long timedOut=dispatch_semaphore_wait(done,dispatch_time(DISPATCH_TIME_NOW,80*NSEC_PER_SEC));
+            [context invalidate];
+            if(timedOut || !accepted)return 3;
+        }
+    }
     CFStringRef account=CFStringCreateWithCString(NULL,argv[2],kCFStringEncodingUTF8);
     CFMutableDictionaryRef q=CFDictionaryCreateMutable(NULL,0,&kCFTypeDictionaryKeyCallBacks,&kCFTypeDictionaryValueCallBacks);
     CFDictionarySetValue(q,kSecClass,kSecClassGenericPassword);
     CFDictionarySetValue(q,kSecAttrService,CFSTR("dev.hybridmail.google-oauth"));
     CFDictionarySetValue(q,kSecAttrAccount,account);
     OSStatus status=errSecParam;
-    if(!strcmp(argv[1],"get")){
+    if(!strcmp(argv[1],"get") || !strcmp(argv[1],"get-auth")){
         CFDictionarySetValue(q,kSecReturnData,kCFBooleanTrue);
         CFDictionarySetValue(q,kSecMatchLimit,kSecMatchLimitOne);
         CFTypeRef result=NULL;status=SecItemCopyMatching(q,&result);

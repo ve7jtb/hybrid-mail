@@ -79,3 +79,9 @@ New YubiKey creation detects the inserted device and checks all user PIV slots b
 Gmail **S/MIME only** filters each page using its top-level Content-Type (opaque S/MIME and multipart/signed with a PKCS#7 signature protocol). It does not fetch message bodies or establish signature validity. Pages cover 50 inbox entries before filtering, so a page may show fewer or no matches while **Older** remains available. S/MIME nested inside forwarded messages or ordinary attachments is not included.
 
 Official desktop builds inject shared client configuration from the `PQ_MAIL_GOOGLE_CLIENT_SECRET` Actions secret. Source builds can supply that environment variable or an ignored `google-client.json` containing `id` and `secret`; without it, use the custom client import. This installed-app client configuration is extractable from the packaged app; it is not a confidential server credential. User tokens are never bundled.
+
+### Touch ID when restoring Google sessions (macOS)
+
+In **Inbox → Advanced settings…**, enable **Use Touch ID or Mac password when restoring Google session**. PQ Mail asks macOS to authenticate you before reading the saved Google refresh token. Cancellation or timeout prevents restoration. This also applies when an expired in-memory session is restored; it does not prompt for every inbox request. The preference takes effect on the next restoration.
+
+This development build uses Local Authentication in front of the existing login Keychain. The token is not migrated to biometric-protected Data Protection Keychain storage. macOS can still request a separate login-Keychain unlock or application-access approval. Stronger Keychain-enforced biometric access requires properly provisioned Apple code signing. This option does not change YubiKey PIN prompts.

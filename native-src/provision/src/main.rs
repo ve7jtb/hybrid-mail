@@ -29,10 +29,10 @@ fn require_empty(card:&mut impl Card)->Result<()> {
  for slot in Slot::key_slots(){if !card.empty(slot)?{return Err(format!("YubiKey is not empty: PIV slot {:02x} is provisioned. No keys were changed.",slot as u8));}}
  Ok(())
 }
-fn generate(card:&mut impl Card,hybrid:bool,mut save:impl FnMut(Slot,Vec<u8>)->Result<()>)->Result<()> {
+fn generate(card:&mut impl Card,_hybrid:bool,mut save:impl FnMut(Slot,Vec<u8>)->Result<()>)->Result<()> {
  require_empty(card)?;
- let mut plan=vec![(Slot::Signature,KeyType::MlDsa87),(Slot::KeyManagement,KeyType::MlKem1024)];
- if hybrid{plan.extend([(Slot::Authentication,KeyType::EccP384),(Slot::Retired1,KeyType::EccP384)]);}
+ let plan=[(Slot::Signature,KeyType::MlDsa87),(Slot::KeyManagement,KeyType::MlKem1024),
+  (Slot::Authentication,KeyType::EccP384),(Slot::Retired1,KeyType::EccP384)];
  for (slot,alg) in plan {if !card.empty(slot)?{return Err("Target slot is no longer empty; stopped without overwriting it".into());}save(slot,card.generate(slot,alg)?)?;}
  Ok(())
 }
@@ -87,6 +87,6 @@ fn main(){if let Err(error)=main_inner(){eprintln!("{error}");std::process::exit
  impl Card for Fake{fn empty(&mut self,s:Slot)->Result<bool>{if self.fail{Err("unknown".into())}else{Ok(!self.occupied.contains(&(s as u8)))}}fn generate(&mut self,s:Slot,_:KeyType)->Result<Vec<u8>>{self.generated.push(s as u8);self.occupied.insert(s as u8);Ok(vec![1])}}
  #[test]fn refuses_every_occupied_slot(){for s in Slot::key_slots(){let mut f=Fake{occupied:HashSet::from([s as u8]),generated:vec![],fail:false};assert!(generate(&mut f,true,|_,_|Ok(())).is_err());assert!(f.generated.is_empty());}}
  #[test]fn unknown_is_not_empty(){let mut f=Fake{occupied:HashSet::new(),generated:vec![],fail:true};assert!(generate(&mut f,true,|_,_|Ok(())).is_err());assert!(f.generated.is_empty());}
- #[test]fn profiles_and_no_rerun(){for hybrid in [false,true]{let mut f=Fake{occupied:HashSet::new(),generated:vec![],fail:false};generate(&mut f,hybrid,|_,_|Ok(())).unwrap();assert_eq!(f.generated.len(),if hybrid{4}else{2});assert!(generate(&mut f,hybrid,|_,_|Ok(())).is_err());}}
+ #[test]fn profiles_and_no_rerun(){for hybrid in [false,true]{let mut f=Fake{occupied:HashSet::new(),generated:vec![],fail:false};generate(&mut f,hybrid,|_,_|Ok(())).unwrap();assert_eq!(f.generated,vec![0x9c,0x9d,0x9a,0x82]);assert!(generate(&mut f,hybrid,|_,_|Ok(())).is_err());}}
  #[test]fn partial_failure_never_retries(){let mut f=Fake{occupied:HashSet::new(),generated:vec![],fail:false};assert!(generate(&mut f,true,|_,_|Err("disk failure".into())).is_err());assert_eq!(f.generated.len(),1);assert!(generate(&mut f,true,|_,_|Ok(())).is_err());assert_eq!(f.generated.len(),1);}
 }

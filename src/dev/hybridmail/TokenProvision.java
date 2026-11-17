@@ -26,7 +26,7 @@ final class TokenProvision {
     }
     static void check(String serial)throws Exception{if(!run(serial,"check",false,null,null,null).trim().equals("EMPTY"))throw new IOException("Could not establish empty YubiKey state");}
     static Map<String,PublicKey> create(String serial,boolean hybrid,Path folder,char[] pin,char[] management)throws Exception{
-        return decode(run(serial,"create",hybrid,folder,pin,management),hybrid);
+        return decode(run(serial,"create",true,folder,pin,management),true);
     }
     static Map<String,PublicKey> read(String serial,boolean hybrid,Path folder)throws Exception{return decode(run(serial,"read",hybrid,folder,null,null),hybrid);}
     private static Map<String,PublicKey> decode(String output,boolean hybrid)throws Exception{var json=JsonParser.parseString(output).getAsJsonObject();Map<String,PublicKey> keys=new HashMap<>();

@@ -20,7 +20,8 @@ public final class Token87Test {
   try{
    DesktopState state=new DesktopState(dir);state.set("token.serial","111111");
    for(boolean hybrid:new boolean[]{false,true}){
-    var identity=Identity.forTokenProfile("token@example.test",profile,ml.getPublic(),hybrid?ec.getPublic():null,kem.getPublic(),hybrid?ecdh.getPublic():null,signer);
+    var identity=Identity.forTokenProfile("token@example.test",profile,ml.getPublic(),hybrid?ec.getPublic():null,kem.getPublic(),hybrid?ecdh.getPublic():null,signer,List.of("one@example.test","two@example.test","three@example.test","four@example.test"));
+    if(identity.signingCert().getSubjectAlternativeNames().size()!=5||identity.encryptionCert().getSubjectAlternativeNames().size()!=5)throw new AssertionError("Token SANs missing");
     String id=state.remember(identity,"Token87",null);state.bindToken(id,"111111","9a","9d","82");identity=state.loadIdentity(id,null);
     if(identity.signingKey()!=null||identity.encryptionKey()!=null||identity.traditionalKey()!=null)throw new AssertionError("Private key stored");
     state.set("token.serial","222222");state.activateIdentity(identity);if(!DesktopState.activeTokenSerial().equals("111111"))throw new AssertionError("Device binding replaced by global settings");

@@ -54,7 +54,7 @@ References: [Google desktop OAuth](https://developers.google.com/identity/protoc
 
 ## ML-DSA-87 software identities
 
-Choose **Keys & token → Create identity…** and select pure ML-DSA-87 or hybrid ML-DSA-87/ECDSA P-384. Save a new password-protected `.p12` file. The identity is remembered and selectable for outgoing messages. Pure ML-DSA-87 pairs with ML-KEM-1024; the P-384 composite signature pairs with MLKEM1024-ECDH-P384-SHA3-256. These software profiles do not generate or replace YubiKey keys.
+Choose **Keys & token → Create software identity…** and select Level 2, 3 or 5, matching the YubiKey profiles below. Every choice generates four software keys and saves both pure and hybrid identities in one password-protected `.p12` file. Both are remembered and appear under **Sign with**. The PQ keys are shared between the pure and hybrid profiles; importing the bundle restores both. Existing single-identity `.p12` files remain supported. Software creation does not alter token keys.
 
 Validation: native Keychain write/read/delete passed in the packaged app. After user consent, the app was fully quit and relaunched; Connect Gmail restored its refresh token from Keychain and loaded the inbox without browser authorization. Pure ML-DSA-87 and composite ML-DSA-87/P-384 certificate, PKCS#12, signed-only and encrypted S/MIME round trips passed.
 
@@ -71,3 +71,5 @@ All 24 user PIV slots must have neither a key nor a certificate. The factory att
 Provisioning several slots is not atomic. Failure leaves any successfully created keys in place and blocks another generation attempt. Public DER files are preserved in `token-setups`; when generation completed but certificate signing was cancelled or failed, use **Finish pending certificates…** and select that setup's `setup.properties`. This only reads and verifies the existing on-device public keys against the saved setup, then issues certificates; it never generates keys. Partially generated setups require manual recovery, not rerunning generation.
 
 No ykman installation is needed for the packaged creation flow. It uses the bundled native Yubico yubikit helper and PKCS#11 adapters. The older Terminal scripts and optional ykman signer still require ykman. Building the helper from source requires Rust 1.88 or newer and the platform PC/SC development libraries: run `scripts/build-provision.sh` before packaging.
+
+Software and YubiKey creation accept up to four additional comma-separated email addresses. All signing and encryption certificates, pure and hybrid, include the primary address plus these `rfc822Name` Subject Alternative Names. The subject CN remains the primary email. Duplicate or invalid addresses are rejected. Pending YubiKey setup metadata preserves the additional addresses for certificate issuance retries.

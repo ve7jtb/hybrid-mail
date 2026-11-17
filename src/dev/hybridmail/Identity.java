@@ -37,21 +37,50 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
     public static Identity generate(String email, boolean hybrid) throws Exception {
         return generate(email,hybrid?HYBRID_SIGN:PURE_SIGN);
     }
-    public static Identity generate(String email,String alg)throws Exception{
+    public static Identity generate(String email,String alg)throws Exception{return generate(email,alg,List.of());}
+    static List<String> additionalEmails(String primary,String text)throws Exception{
+        new jakarta.mail.internet.InternetAddress(primary,true).validate();
+        var emails=new ArrayList<String>();var seen=new HashSet<String>();seen.add(primary.toLowerCase(Locale.ROOT));
+        if(!text.isBlank())for(String raw:text.split(",",-1)){
+            String address=raw.trim();var parsed=new jakarta.mail.internet.InternetAddress(address,true);parsed.validate();
+            if(!address.equals(parsed.getAddress())||parsed.getPersonal()!=null)throw new IllegalArgumentException("Enter plain email addresses separated by commas");
+            if(!seen.add(address.toLowerCase(Locale.ROOT)))throw new IllegalArgumentException("Duplicate certificate email address");emails.add(address);
+        }
+        if(emails.size()>4)throw new IllegalArgumentException("Use at most four additional email addresses");return List.copyOf(emails);
+    }
+    static Identity generate(String email,String alg,List<String> extra)throws Exception{
         new jakarta.mail.internet.InternetAddress(email,true).validate();
         if(!Set.of(PURE_SIGN,HYBRID_SIGN,HYBRID_RSA_SIGN,PURE_87_SIGN,HYBRID_87_SIGN,PURE_44_SIGN,HYBRID_44_SIGN,HYBRID_65_P384_SIGN).contains(alg))throw new GeneralSecurityException("Unsupported signing profile");
         boolean hybrid=alg.startsWith("MLDSA");
         KeyPair s=KeyPairGenerator.getInstance(alg,"BC").generateKeyPair();
         String kem=alg.equals(HYBRID_65_P384_SIGN)?HYBRID_768_P384_KEM:alg.equals(PURE_87_SIGN)?PURE_1024_KEM:alg.equals(HYBRID_87_SIGN)?HYBRID_1024_KEM:hybrid?HYBRID_KEM:PURE_KEM;
         KeyPair k=KeyPairGenerator.getInstance(kem,"BC").generateKeyPair();
-        X509Certificate sc = cert(email, s.getPublic(), s.getPrivate(), alg, true);
-        X509Certificate kc = cert(email, k.getPublic(), s.getPrivate(), alg, false);
+        X509Certificate sc = cert(email, s.getPublic(), s.getPrivate(), alg, true,extra);
+        X509Certificate kc = cert(email, k.getPublic(), s.getPrivate(), alg, false,extra);
         return new Identity(sc, s.getPrivate(), kc, k.getPrivate(), null);
     }
-    private static X509Certificate cert(String email, PublicKey key, PrivateKey signer, String alg, boolean signing) throws Exception {
-        return cert(email, key, new JcaContentSignerBuilder(alg).setProvider("BC").build(signer), signing);
+    /** Exactly four generated keys, shared by pure and hybrid certificate views. */
+    static List<Identity> generateSoftwareProfile(String email,TokenProfile profile)throws Exception{return generateSoftwareProfile(email,profile,List.of());}
+    static List<Identity> generateSoftwareProfile(String email,TokenProfile profile,List<String> extra)throws Exception{
+        String algorithm=switch(profile){case LEVEL2->HYBRID_44_SIGN;case LEVEL3->HYBRID_65_P384_SIGN;case LEVEL5->HYBRID_87_SIGN;};
+        var hybrid=generate(email,algorithm,extra);
+        var signing=(CompositePrivateKey)hybrid.signingKey();var encryption=(CompositePrivateKey)hybrid.encryptionKey();
+        var ml=((CompositePublicKey)hybrid.signingCert().getPublicKey()).getPublicKeys().get(0);
+        var kem=((CompositePublicKey)hybrid.encryptionCert().getPublicKey()).getPublicKeys().get(0);
+        var sc=cert(email,ml,signing.getPrivateKeys().get(0),profile.ml,true,extra);
+        var kc=cert(email,kem,signing.getPrivateKeys().get(0),profile.ml,false,extra);
+        return List.of(new Identity(sc,signing.getPrivateKeys().get(0),kc,encryption.getPrivateKeys().get(0),null),hybrid);
     }
-    private static X509Certificate cert(String email, PublicKey key, ContentSigner signer, boolean signing) throws Exception {
+    private static X509Certificate cert(String email, PublicKey key, PrivateKey signer, String alg, boolean signing) throws Exception {
+        return cert(email,key,signer,alg,signing,List.of());
+    }
+    private static X509Certificate cert(String email,PublicKey key,PrivateKey signer,String alg,boolean signing,List<String> extra)throws Exception{
+        return cert(email, key, new JcaContentSignerBuilder(alg).setProvider("BC").build(signer), signing,extra);
+    }
+    private static X509Certificate cert(String email, PublicKey key, ContentSigner signer, boolean signing) throws Exception {return cert(email,key,signer,signing,List.of());}
+    private static X509Certificate cert(String email,PublicKey key,ContentSigner signer,boolean signing,List<String> extra)throws Exception{
+        var names=new ArrayList<GeneralName>();names.add(new GeneralName(GeneralName.rfc822Name,email));
+        for(String address:additionalEmails(email,String.join(",",extra)))names.add(new GeneralName(GeneralName.rfc822Name,address));
         X500Name name = new X500NameBuilder(BCStyle.INSTANCE).addRDN(BCStyle.CN, email).build();
         Instant now = Instant.now();
         var b = new JcaX509v3CertificateBuilder(name, new BigInteger(159, new SecureRandom()).add(BigInteger.ONE),
@@ -59,7 +88,7 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         b.addExtension(Extension.basicConstraints, true, new BasicConstraints(false));
         b.addExtension(Extension.keyUsage, true, new KeyUsage(signing ? KeyUsage.digitalSignature : KeyUsage.keyEncipherment));
         b.addExtension(Extension.extendedKeyUsage, false, new ExtendedKeyUsage(KeyPurposeId.id_kp_emailProtection));
-        b.addExtension(Extension.subjectAlternativeName, false, new GeneralNames(new GeneralName(GeneralName.rfc822Name, email)));
+        b.addExtension(Extension.subjectAlternativeName, false, new GeneralNames(names.toArray(GeneralName[]::new)));
         return new JcaX509CertificateConverter().setProvider("BC").getCertificate(b.build(signer));
     }
     /** Create a local test certificate for an EXISTING token key; never generates token keys. */
@@ -100,7 +129,8 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
     public static Identity forToken87(String email,PublicKey ml,PublicKey ec,PublicKey kem,PublicKey ecdh,ExternalMu.Backend backend)throws Exception{
         return forTokenProfile(email,TokenProfile.LEVEL5,ml,ec,kem,ecdh,backend);
     }
-    static Identity forTokenProfile(String email,TokenProfile profile,PublicKey ml,PublicKey ec,PublicKey kem,PublicKey ecdh,ExternalMu.Backend backend)throws Exception{
+    static Identity forTokenProfile(String email,TokenProfile profile,PublicKey ml,PublicKey ec,PublicKey kem,PublicKey ecdh,ExternalMu.Backend backend)throws Exception{return forTokenProfile(email,profile,ml,ec,kem,ecdh,backend,List.of());}
+    static Identity forTokenProfile(String email,TokenProfile profile,PublicKey ml,PublicKey ec,PublicKey kem,PublicKey ecdh,ExternalMu.Backend backend,List<String> extra)throws Exception{
         new jakarta.mail.internet.InternetAddress(email,true).validate();
         if(!profile.ml.equals(ml.getAlgorithm())||!profile.kem.equals(kem.getAlgorithm()))throw new GeneralSecurityException("Token keys do not match selected profile");
         PublicKey signing=ml,encryption=kem;
@@ -112,8 +142,8 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
             encryption=new CompositePublicKey(profile.kemOid,kem,ecdh);
         }else if(ecdh!=null)throw new GeneralSecurityException("Both classical components are required for hybrid mode");
         validateEncryptionKey(encryption);
-        var sc=cert(email,signing,externalSigner(signing,null,backend),true);sc.verify(signing,"BC");
-        var kc=cert(email,encryption,externalSigner(signing,null,backend),false);kc.verify(signing,"BC");
+        var sc=cert(email,signing,externalSigner(signing,null,backend),true,extra);sc.verify(signing,"BC");
+        var kc=cert(email,encryption,externalSigner(signing,null,backend),false,extra);kc.verify(signing,"BC");
         return new Identity(sc,null,kc,null,null);
     }
     public ContentSigner signer(ExternalMu.Backend backend) throws Exception {
@@ -161,7 +191,8 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         certificate.verify(signingCert.getPublicKey(),"BC");
         return new Identity(signingCert,signingKey,certificate,null,traditionalKey);
     }
-    public void save(Path file, char[] password) throws Exception {
+    public void save(Path file, char[] password) throws Exception {save(file,password,null);}
+    void save(Path file,char[] password,Identity pure)throws Exception {
         if (password.length < 12) throw new IllegalArgumentException("Use at least 12 characters for the identity password");
         KeyStore ks = KeyStore.getInstance("PKCS12", "BC"); ks.load(null, password);
         if (signingKey != null) ks.setKeyEntry("sign", signingKey, password, new java.security.cert.Certificate[]{signingCert});
@@ -173,19 +204,30 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
             X509Certificate storageCert = cert("conventional-component@example.test", ec, traditionalKey, "SHA256withECDSA", true);
             ks.setKeyEntry("traditional", traditionalKey, password, new java.security.cert.Certificate[]{storageCert});
         }
+        if(pure!=null){
+            ks.setKeyEntry("pure-sign",pure.signingKey(),password,new java.security.cert.Certificate[]{pure.signingCert()});
+            ks.setKeyEntry("pure-encrypt",pure.encryptionKey(),password,new java.security.cert.Certificate[]{pure.encryptionCert()});
+        }
         PrivateFiles.create(file);
         try (OutputStream out = Files.newOutputStream(file)) { ks.store(out, password); }
     }
-    public static Identity load(Path file, char[] password) throws Exception {
+    public static Identity load(Path file, char[] password) throws Exception {return load(file,password,false);}
+    static List<Identity> loadProfiles(Path file,char[] password)throws Exception{
+        var hybrid=load(file,password);KeyStore ks=KeyStore.getInstance("PKCS12","BC");
+        try(var in=Files.newInputStream(file)){ks.load(in,password);}
+        return ks.containsAlias("pure-sign")?List.of(load(file,password,true),hybrid):List.of(hybrid);
+    }
+    static Identity load(Path file,char[] password,boolean pure)throws Exception {
+        String prefix=pure?"pure-":"";
         KeyStore ks = KeyStore.getInstance("PKCS12", "BC");
         try (InputStream in = Files.newInputStream(file)) { ks.load(in, password); }
-        var sc = (X509Certificate)ks.getCertificate("sign");
+        var sc = (X509Certificate)ks.getCertificate(prefix+"sign");
         if (sc == null) throw new GeneralSecurityException("Missing certificate alias 'sign'");
         String a = sc.getPublicKey().getAlgorithm();
         if (!a.equalsIgnoreCase(PURE_SIGN) && !a.equalsIgnoreCase(HYBRID_SIGN) && !a.equalsIgnoreCase(HYBRID_RSA_SIGN) && !a.equalsIgnoreCase(PURE_87_SIGN) && !a.equalsIgnoreCase(HYBRID_87_SIGN) && !a.equalsIgnoreCase(PURE_44_SIGN) && !a.equalsIgnoreCase(HYBRID_44_SIGN) && !a.equalsIgnoreCase(HYBRID_65_P384_SIGN))
             throw new GeneralSecurityException("Unsupported signing key: " + a);
-        return new Identity(sc, (PrivateKey)ks.getKey("sign", password), (X509Certificate)ks.getCertificate("encrypt"),
-            (PrivateKey)ks.getKey("encrypt", password), (PrivateKey)ks.getKey("traditional", password));
+        return new Identity(sc, (PrivateKey)ks.getKey(prefix+"sign", password), (X509Certificate)ks.getCertificate(prefix+"encrypt"),
+            (PrivateKey)ks.getKey(prefix+"encrypt", password), (PrivateKey)ks.getKey("traditional", password));
     }
     /** Supported software/public recipient profiles; token recovery keeps its narrower validation. */
     public static void validateEncryptionKey(PublicKey key)throws Exception{

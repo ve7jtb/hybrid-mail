@@ -58,7 +58,7 @@ public final class DesktopState {
     }
     public Identity loadIdentity(String id,char[] password)throws Exception{
         Path folder=identityDirectory(id);
-        if(get("identity."+id+".type","token").equals("pkcs12"))return Identity.load(folder.resolve("identity.p12"),password);
+        if(get("identity."+id+".type","token").equals("pkcs12"))return Identity.load(folder.resolve("identity.p12"),password,get("identity."+id+".variant","").equals("pure"));
         X509Certificate signing=Identity.readCertificate(folder.resolve("signing.cer"));
         X509Certificate encryption=Files.exists(folder.resolve("encryption.cer"))?Identity.readCertificate(folder.resolve("encryption.cer")):null;
         String alg=signing.getPublicKey().getAlgorithm();
@@ -98,6 +98,12 @@ public final class DesktopState {
         }
         LinkedHashSet<String> ids=new LinkedHashSet<>();for(var old:identities())ids.add(old.id());ids.add(id);
         set("identities",String.join(",",ids));set("identity."+id+".name",name);set("identity."+id+".type",token?"token":"pkcs12");set("selected.identity",id);if(token&&get("identity."+id+".token.serial","").isBlank()&&!get("token.serial","").isBlank())bindToken(id,get("token.serial",""),get("token.rsaSlot","9a"),get("token.kemSlot","9d"),get("token.ecdhSlot","82"));save();return id;
+    }
+    public void rememberSoftwareProfiles(List<Identity> profiles,Path file,String name)throws Exception{
+        for(int i=0;i<profiles.size();i++){
+            var identity=profiles.get(i);String id=remember(identity,name+" · "+identity.signatureAlgorithm(),file);
+            set("identity."+id+".variant",profiles.size()==2&&i==0?"pure":"");
+        }save();
     }
     public void saveCertificate(String role,X509Certificate certificate)throws Exception{
         if(!Set.of("recipient","pinned").contains(role))throw new IllegalArgumentException("Invalid certificate role");

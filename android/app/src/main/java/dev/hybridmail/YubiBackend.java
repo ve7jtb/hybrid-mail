@@ -49,7 +49,7 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
         try {
             connection=new PivDiagnostic.Connection(devices.get().openConnection(SmartCardConnection.class));
             stage="Selecting and initializing PIV";
-            session=new PivSession(connection);
+            session=PivSessions.open(connection);
             stage="Reading PIV serial number";
             if(session.getSerialNumber()!=serial)throw new GeneralSecurityException("Wrong YubiKey. Insert serial "+serial);
             // Check ALL bound public keys before requesting or submitting a PIN.

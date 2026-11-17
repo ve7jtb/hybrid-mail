@@ -64,6 +64,20 @@ public class YubiBackendTest {
    for(char[] pin:pins)assertArrayEquals(new char[6],pin);
   }
  }
+ @Test public void betaFirmwareResolvesQualifierOnSameCard()throws Exception{
+  Card card=new Card(TokenProfile.LEVEL3){
+   byte[] handle(byte[] a)throws Exception{
+    int ins=a[1]&255;
+    if(ins==0xfd)return new byte[]{0,0,1};
+    if(ins==0xa4 && a.length>5 && a[4]==8)return "YubiKey 0.0.1".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+    if(ins==0x1d){byte[] qualifier=join(tlv(1,new byte[]{6,0,0}),tlv(2,new byte[]{1}),tlv(3,new byte[]{0,0,0,0}));byte[] data=tlv(0x19,qualifier);return join(new byte[]{(byte)data.length},data);}
+    return super.handle(a);
+   }
+  };
+  var session=PivSessions.open(card);assertEquals(new Version(6,0,0),session.getVersion());assertEquals(12345,session.getSerialNumber());
+  assertEquals(new Version(0,0,1),com.yubico.yubikit.core.application.SessionVersionOverride.overrideOf(new Version(0,0,1)));
+  assertEquals(0,card.verifies);
+ }
  @Test public void unavailablePivShowsHeaderWithoutPin()throws Exception{
   Card card=new Card(TokenProfile.LEVEL2){public byte[] sendAndReceive(byte[] apdu)throws IOException{if((apdu[1]&255)==0xa4)return new byte[]{0x6a,(byte)0x82};return super.sendAndReceive(apdu);}};
   var backend=new YubiBackend(()->card,label->{fail("PIN requested before PIV selection");return null;},12345,card.publicKeys());

@@ -93,7 +93,7 @@ public final class MainActivity extends Activity {
                 if(sc.getKeyUsage()==null||!sc.getKeyUsage()[0]||ec.getKeyUsage()==null||ec.getKeyUsage().length<3||!ec.getKeyUsage()[2])throw new GeneralSecurityException("Certificate key usage is incorrect");
                 var id=new Identity(sc,null,ec,null,null);int serial;
                 try(var connection=requireDevice().openConnection(SmartCardConnection.class)){
-                    var piv=new PivSession(connection);serial=piv.getSerialNumber();
+                    var piv=PivSessions.open(connection);serial=piv.getSerialNumber();
                     for(var e:YubiBackend.keys(id).entrySet())if(!MessageDigest.isEqual(e.getValue().getEncoded(),YubiBackend.publicKey(piv,e.getKey()).getEncoded()))throw new GeneralSecurityException("Certificate does not match YubiKey slot "+e.getKey());
                 }
                 store.addToken(sc.getSubjectX500Principal()+" • "+id.signatureAlgorithm(),serial,id);runOnUiThread(this::identities);
@@ -136,7 +136,7 @@ public final class MainActivity extends Activity {
     private void createToken(String email,String extra,TokenProfile profile)throws Exception {
         List<String> sans=Identity.additionalEmails(email,extra);int serial;Map<Slot,PublicKey> keys=new EnumMap<>(Slot.class);
         try(var connection=requireDevice().openConnection(SmartCardConnection.class)){
-            var piv=new PivSession(connection);serial=piv.getSerialNumber();
+            var piv=PivSessions.open(connection);serial=piv.getSerialNumber();
             for(Slot slot:List.of(Slot.SIGNATURE,Slot.AUTHENTICATION,Slot.KEY_MANAGEMENT,Slot.RETIRED1))keys.put(slot,YubiBackend.publicKey(piv,slot));
         }
         var backend=new YubiBackend(this::requireDevice,this::requestPin,serial,keys);

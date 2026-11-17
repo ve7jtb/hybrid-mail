@@ -81,6 +81,21 @@ public final class DesktopState {
         if(!Set.of("recipient","pinned").contains(role))throw new IllegalArgumentException("Invalid certificate role");
         Path path=directory.resolve(role+".cer");return Files.exists(path)?Identity.readCertificate(path):null;
     }
+    private static String trustKey(X509Certificate certificate,String role)throws Exception{
+        if(!Set.of("signing","encryption").contains(role))throw new IllegalArgumentException("Invalid certificate trust role");
+        return "trusted."+role+"."+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(certificate.getEncoded()));
+    }
+    public boolean isTrusted(X509Certificate certificate,String role)throws Exception{return Boolean.parseBoolean(get(trustKey(certificate,role),"false"));}
+    public void setTrusted(X509Certificate certificate,String role,boolean trusted)throws Exception{
+        if(trusted){certificate.checkValidity();boolean[] usage=certificate.getKeyUsage();int bit=role.equals("signing")?0:2;if(usage==null||usage.length<=bit||!usage[bit])throw new IOException("Certificate does not permit "+role);}
+        set(trustKey(certificate,role),trusted?"true":null);save();
+    }
+    public void migrateTrust()throws Exception{
+        if(!get("trust.migrated","false").equals("true")){
+            X509Certificate old=certificate("pinned");if(old!=null)set(trustKey(old,"signing"),"true");
+            set("trust.migrated","true");save();
+        }
+    }
     public record Contact(String id,String email,String role){}
     public List<Contact> contacts(){
         List<Contact> contacts=new ArrayList<>();
@@ -106,6 +121,7 @@ public final class DesktopState {
     }
     public void removeContact(Contact contact)throws Exception{
         if(!contacts().contains(contact))throw new IOException("Unknown certificate contact");
+        setTrusted(contactCertificate(contact),contact.role(),false);
         Path trash=directory.resolve("removed-contacts");Files.createDirectories(trash);Files.setPosixFilePermissions(trash,PosixFilePermissions.fromString("rwx------"));
         Files.move(directory.resolve("contacts").resolve(contact.id()),trash.resolve(contact.id()+"-"+System.currentTimeMillis()));
         var ids=new ArrayList<String>();for(var old:contacts())if(!old.id().equals(contact.id()))ids.add(old.id());

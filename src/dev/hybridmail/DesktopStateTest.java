@@ -34,7 +34,24 @@ public final class DesktopStateTest {
             state.rememberContact(software.signingCert(),"desktop@example.test","signing");check(state.contacts().size()==2,"duplicate certificate import is idempotent");
             try{state.rememberContact(software.encryptionCert(),"wrong@example.test","encryption");throw new AssertionError("wrong email accepted");}catch(java.io.IOException expected){System.out.println("PASS contact email mismatch rejected");}
             try{state.rememberContact(software.signingCert(),"desktop@example.test","encryption");throw new AssertionError("wrong key usage accepted");}catch(java.io.IOException expected){System.out.println("PASS signing-only certificate rejected for encryption");}
-            state.removeContact(signingContact);check(state.contacts().size()==1&&Files.isDirectory(state.directory().resolve("removed-contacts")),"contact removal preserves recoverable public certificate");
+            check(!state.isTrusted(software.signingCert(),"signing"),"import does not implicitly trust a certificate");
+            state.migrateTrust();check(state.isTrusted(software.signingCert(),"signing"),"legacy explicit pin migrates once");
+            state.setTrusted(software.signingCert(),"signing",false);state.migrateTrust();
+            check(!new DesktopState(state.directory()).isTrusted(software.signingCert(),"signing"),"revocation persists and migration does not restore trust");
+            for(boolean hybrid:new boolean[]{false,true}){
+                Identity incoming=Identity.generate("incoming@example.test",hybrid);
+                var message=MailEngine.compose(incoming,"incoming@example.test","desktop@example.test","Trust test","Verified body",null,null);
+                var verified=MailEngine.open(message,null,null);
+                check(verified.signerCertificate().equals(incoming.signingCert()),"verified incoming certificate exposed for "+(hybrid?"hybrid":"pure")+" signature");
+                state.rememberContact(verified.signerCertificate(),"incoming@example.test","signing");
+                state.setTrusted(verified.signerCertificate(),"signing",true);
+                check(new DesktopState(state.directory()).isTrusted(incoming.signingCert(),"signing"),"incoming fingerprint trust persists");
+            }
+            state.setTrusted(software.signingCert(),"signing",true);
+            state.setTrusted(software.encryptionCert(),"encryption",true);
+            check(!state.isTrusted(software.signingCert(),"encryption")&&!state.isTrusted(renewed.signingCert(),"signing"),"trust is role-specific and does not follow reissued certificates with the same key");
+            check(state.isTrusted(software.signingCert(),"signing")&&state.isTrusted(software.encryptionCert(),"encryption"),"multiple certificate fingerprints coexist");
+            state.removeContact(signingContact);check(state.contacts().size()==3&&!state.isTrusted(software.signingCert(),"signing")&&Files.isDirectory(state.directory().resolve("removed-contacts")),"contact removal preserves recoverable public certificate");
             state.saveGoogleClient(new GoogleOAuth.Client("test.apps.googleusercontent.com","test-client-secret"));
             var client=GoogleOAuth.Client.read(state.directory().resolve("google-client.json"));
             check(client.id().equals("test.apps.googleusercontent.com")&&client.secret().equals("test-client-secret")&&!Files.readString(state.directory().resolve("settings.properties")).contains("test-client-secret"),"manual OAuth client round trip in separate owner-only config");

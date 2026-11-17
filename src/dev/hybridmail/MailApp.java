@@ -12,7 +12,7 @@ import jakarta.mail.internet.MimeMessage;
 
 public final class MailApp extends JFrame {
     private java.util.List<DesktopState.Contact> certificateContacts=java.util.List.of();
-    private final javax.swing.table.DefaultTableModel certificateModel=new javax.swing.table.DefaultTableModel(new String[]{"Email","Purpose","Algorithm","SHA-256 fingerprint"},0){public boolean isCellEditable(int row,int column){return false;}};
+    private final javax.swing.table.DefaultTableModel certificateModel=new javax.swing.table.DefaultTableModel(new String[]{"Email","Purpose","Trust","Algorithm","SHA-256 fingerprint"},0){public boolean isCellEditable(int row,int column){return false;}};
     private final JTable certificateTable=new JTable(certificateModel);
     private boolean syncingOutgoing;
     private final JComboBox<DesktopState.SavedIdentity> outgoingIdentity=new JComboBox<>();
@@ -20,6 +20,9 @@ public final class MailApp extends JFrame {
         public String toString(){try{return email+" · "+certificate.getPublicKey().getAlgorithm()+" · "+Identity.fingerprint(certificate).substring(0,23);}catch(Exception e){return email;}}
     }
     private final JComboBox<EncryptionChoice> outgoingEncryption=new JComboBox<>();
+    private final JButton trustIncoming=new JButton("Trust signer fingerprint…");
+    private ReadResult currentRead;
+    private record ReadResult(String plain,MailEngine.Opened verified,String subject){}
     private Identity identity;
     private ImapInbox inbox;
     private GoogleOAuth.Token googleToken;
@@ -68,10 +71,11 @@ public final class MailApp extends JFrame {
         JPanel p = panel(); p.add(new JScrollPane(reader)); JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT));
         actions.add(button("Open .eml…", () -> {
             Path file = choose(false,"Open S/MIME message"); if(file == null)return;
-            Identity id = identity; X509Certificate pin = pinnedSigner;
+            clearReadTrust();Identity id = identity; X509Certificate pin = pinnedSigner;
             job("Verifying message…", () -> { if(Files.size(file)>MailEngine.MAX_MESSAGE) throw new IOException("Message too large"); return display(MailEngine.parse(Files.readAllBytes(file)),id,pin); }, this::showMessage);
         }));
         actions.add(button("Open inbox",()->tabs.setSelectedIndex(3)));
+        trustIncoming.setEnabled(false);trustIncoming.addActionListener(e->trustIncomingSigner());actions.add(trustIncoming);
         p.add(actions,BorderLayout.NORTH); return p;
     }
     private JPanel inboxPanel(){
@@ -121,7 +125,7 @@ public final class MailApp extends JFrame {
     }
     private void openInboxMessage(){
         int selected=inboxTable.getSelectedRow();if(selected<0||inbox==null)return;
-        var entry=inboxEntries.get(inboxTable.convertRowIndexToModel(selected));ImapInbox current=inbox;Identity id=identity;X509Certificate pin=pinnedSigner;
+        clearReadTrust();var entry=inboxEntries.get(inboxTable.convertRowIndexToModel(selected));ImapInbox current=inbox;Identity id=identity;X509Certificate pin=pinnedSigner;
         job("Opening selected message…",()->display(current.message(entry.uid()),id,pin),this::showMessage);
     }
     private void importGoogleClient(){
@@ -166,14 +170,14 @@ public final class MailApp extends JFrame {
         actions.add(button("Refresh",this::refreshContacts));p.add(actions,BorderLayout.NORTH);
         certificateTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);certificateTable.setAutoCreateRowSorter(true);certificateTable.setRowHeight(30);
         certificateTable.setDefaultRenderer(Object.class,new javax.swing.table.DefaultTableCellRenderer(){public Component getTableCellRendererComponent(JTable t,Object value,boolean selected,boolean focus,int row,int column){putClientProperty("html.disable",Boolean.TRUE);return super.getTableCellRendererComponent(t,value,selected,focus,row,column);}});
-        certificateTable.getColumnModel().getColumn(0).setPreferredWidth(200);certificateTable.getColumnModel().getColumn(3).setPreferredWidth(350);p.add(new JScrollPane(certificateTable));
+        certificateTable.getColumnModel().getColumn(0).setPreferredWidth(200);certificateTable.getColumnModel().getColumn(4).setPreferredWidth(350);p.add(new JScrollPane(certificateTable));
         JPanel bottom=new JPanel(new GridLayout(0,1));JPanel controls=new JPanel(new FlowLayout(FlowLayout.LEFT));
-        controls.add(button("Details…",this::contactDetails));controls.add(button("Use selected certificate",this::useContact));controls.add(button("Export…",this::exportContact));controls.add(button("Remove",this::removeContact));bottom.add(controls);
-        bottom.add(new JLabel("Signing certificates are exact trust pins. Encryption certificates protect mail to their matching email address."));p.add(bottom,BorderLayout.SOUTH);return p;
+        controls.add(button("Details…",this::contactDetails));controls.add(button("Mark trusted…",()->setContactTrust(true)));controls.add(button("Remove trust",()->setContactTrust(false)));controls.add(button("Use selected certificate",this::useContact));controls.add(button("Export…",this::exportContact));controls.add(button("Remove",this::removeContact));bottom.add(controls);
+        bottom.add(new JLabel("Trust is saved for exact certificate fingerprints. Importing or selecting a certificate does not grant trust."));p.add(bottom,BorderLayout.SOUTH);return p;
     }
     private DesktopState.Contact selectedContact(){int row=certificateTable.getSelectedRow();return row<0?null:certificateContacts.get(certificateTable.convertRowIndexToModel(row));}
     private void refreshContacts(){
-        try{certificateContacts=state().contacts();certificateModel.setRowCount(0);for(var contact:certificateContacts){var certificate=state().contactCertificate(contact);certificateModel.addRow(new Object[]{contact.email(),contact.role(),certificate.getPublicKey().getAlgorithm(),Identity.fingerprint(certificate)});}refreshOutgoingEncryption();}catch(Exception e){error(e);}
+        try{certificateContacts=state().contacts();certificateModel.setRowCount(0);for(var contact:certificateContacts){var certificate=state().contactCertificate(contact);certificateModel.addRow(new Object[]{contact.email(),contact.role(),state().isTrusted(certificate,contact.role())?"Trusted":"Not trusted",certificate.getPublicKey().getAlgorithm(),Identity.fingerprint(certificate)});}refreshOutgoingEncryption();}catch(Exception e){error(e);}
     }
     private void contactDetails(){
         var contact=selectedContact();if(contact==null)return;
@@ -186,7 +190,7 @@ public final class MailApp extends JFrame {
     private void applyContact(DesktopState.Contact contact,X509Certificate certificate)throws Exception{
         certificate.checkValidity();
         if(contact.role().equals("encryption")){recipient=certificate;recipientLabel.setText(contact.email()+" · "+certificate.getPublicKey().getAlgorithm());to.setText(contact.email());encrypt.setSelected(true);state().saveCertificate("recipient",certificate);refreshOutgoingEncryption();tabs.setSelectedIndex(0);status.setText("Encryption enabled for "+contact.email());}
-        else{pinnedSigner=certificate;pinLabel.setText(contact.email()+" · "+certificate.getPublicKey().getAlgorithm());state().saveCertificate("pinned",certificate);status.setText("Selected signing certificate pinned for verification");}
+        else{pinnedSigner=certificate;pinLabel.setText(contact.email()+" · "+certificate.getPublicKey().getAlgorithm());state().saveCertificate("pinned",certificate);status.setText(state().isTrusted(certificate,"signing")?"Trusted signing certificate selected":"Signing certificate selected but not trusted; use Mark trusted in Certificates");}
     }
     private void exportContact(){
         var contact=selectedContact();if(contact==null)return;Path target=choose(true,"Export certificate (.pem or .cer)");if(target==null)return;
@@ -198,7 +202,7 @@ public final class MailApp extends JFrame {
         try{var certificate=state().contactCertificate(contact);state().removeContact(contact);
             if(certificate.equals(recipient)){recipient=null;recipientLabel.setText("No recipient certificate");state().clearCertificate("recipient");}
             if(certificate.equals(pinnedSigner)){pinnedSigner=null;pinLabel.setText("No signer certificate pinned");state().clearCertificate("pinned");}
-            refreshContacts();status.setText("Removed from contacts; public certificate retained under removed-contacts");
+            refreshContacts();refreshReadTrust();status.setText("Removed from contacts; public certificate retained under removed-contacts");
         }catch(Exception e){error(e);}
     }
     private JPanel keysPanel() {
@@ -292,7 +296,7 @@ public final class MailApp extends JFrame {
     }
     private void restoreDesktop(){
         try{
-            state();refreshSaved();refreshContacts();adapter=desktopState.adapter(false);kemAdapter=desktopState.adapter(true);updateBackendLabels();
+            state();desktopState.migrateTrust();refreshSaved();refreshContacts();adapter=desktopState.adapter(false);kemAdapter=desktopState.adapter(true);updateBackendLabels();
             recipient=desktopState.certificate("recipient");pinnedSigner=desktopState.certificate("pinned");refreshOutgoingEncryption();
             if(recipient!=null)recipientLabel.setText(recipient.getPublicKey().getAlgorithm()+" · "+recipient.getSubjectX500Principal());
             if(pinnedSigner!=null)pinLabel.setText(pinnedSigner.getSubjectX500Principal().toString());
@@ -384,7 +388,7 @@ public final class MailApp extends JFrame {
                 if(emails.isEmpty())throw new IOException("Certificate has no email Subject Alternative Name");
                 String email=emails.size()==1?emails.getFirst():(String)JOptionPane.showInputDialog(this,"Choose the contact mailbox","Certificate email",JOptionPane.PLAIN_MESSAGE,null,emails.toArray(),emails.getFirst());if(email==null)return;
                 JTextArea detail=new JTextArea("Email: "+email+"\nPurpose: "+(pin?"signature verification":"encryption")+"\nSubject: "+certificate.getSubjectX500Principal()+"\nAlgorithm: "+certificate.getPublicKey().getAlgorithm()+"\nValid until: "+certificate.getNotAfter()+"\n\nSHA-256 fingerprint:\n"+Identity.fingerprint(certificate)+"\n\nConfirm this fingerprint with the owner before trusting it.",10,65);detail.setEditable(false);detail.setLineWrap(true);detail.setWrapStyleWord(true);
-                if(JOptionPane.showConfirmDialog(this,new JScrollPane(detail),"Save and trust this certificate?",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+                if(JOptionPane.showConfirmDialog(this,new JScrollPane(detail),"Save certificate (trust can be marked separately)?",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
                 var contact=state().rememberContact(certificate,email,pin?"signing":"encryption");refreshContacts();applyContact(contact,certificate);
             }catch(Exception e){error(e);}
         });
@@ -411,15 +415,45 @@ public final class MailApp extends JFrame {
             } finally {if(a!=null)Arrays.fill(a.password,'\0');}
         },status::setText);
     }
-    private String display(MimeMessage m,Identity id,X509Certificate pin)throws Exception {
-        if(MailPreview.isOrdinary(m))return MailPreview.display(m);
-        var o=MailEngine.open(m,id,pin,kemAdapter==null?null:ExternalKem.executable(kemAdapter));
-        return "SIGNATURE VALID · "+o.signatureAlgorithm()+"\n"+(o.encrypted()?"AES-256-GCM authenticated decryption succeeded":"Not encrypted")+"\n"+
-            (o.pinned()?"Signer matches the certificate you pinned":"SIGNER NOT TRUSTED: no matching pinned certificate")+"\n"+
-            (o.fromMatches()?"Outer From matches certificate email (header itself is unsigned)":"WARNING: outer From does not match signing certificate")+
-            "\nSHA-256: "+o.fingerprint()+"\n\nOuter subject (unprotected): "+m.getSubject()+"\n\n──────── Signed body ────────\n\n"+o.text();
+    private ReadResult display(MimeMessage message,Identity id,X509Certificate pin)throws Exception {
+        if(MailPreview.isOrdinary(message))return new ReadResult(MailPreview.display(message),null,message.getSubject());
+        var opened=MailEngine.open(message,id,pin,kemAdapter==null?null:ExternalKem.executable(kemAdapter));
+        return new ReadResult(null,opened,message.getSubject());
     }
-    private void showMessage(String text){reader.setText(text);reader.setCaretPosition(0);tabs.setSelectedIndex(1);status.setText("Message opened. Review the security status above.");}
+    private String formatRead(ReadResult result)throws Exception{
+        if(result.verified()==null)return result.plain();var o=result.verified();
+        boolean trusted=state().isTrusted(o.signerCertificate(),"signing");
+        return "SIGNATURE VALID · "+o.signatureAlgorithm()+"\n"+(o.encrypted()?"AES-256-GCM authenticated decryption succeeded":"Not encrypted")+"\n"+
+            (trusted?"SIGNER TRUSTED: SHA-256 certificate fingerprint matches your saved trust":"SIGNER NOT TRUSTED: fingerprint has not been marked trusted")+"\n"+
+            (o.fromMatches()?"Outer From matches certificate email (header itself is unsigned)":"WARNING: outer From does not match signing certificate")+
+            "\nSHA-256: "+o.fingerprint()+"\n\nOuter subject (unprotected): "+result.subject()+"\n\n──────── Signed body ────────\n\n"+o.text();
+    }
+    private void clearReadTrust(){currentRead=null;trustIncoming.setEnabled(false);}
+    private void showMessage(ReadResult result){
+        try{showMessage(formatRead(result));currentRead=result;trustIncoming.setEnabled(result.verified()!=null);}catch(Exception e){clearReadTrust();error(e);}
+    }
+    private void showMessage(String text){clearReadTrust();reader.setText(text);reader.setCaretPosition(0);tabs.setSelectedIndex(1);status.setText("Message opened. Review the security status above.");}
+    private void refreshReadTrust(){if(currentRead!=null)try{reader.setText(formatRead(currentRead));reader.setCaretPosition(0);}catch(Exception e){error(e);}}
+    private boolean confirmTrust(X509Certificate certificate,String role,String warning)throws Exception{
+        JTextArea detail=new JTextArea("Trust this exact "+role+" certificate fingerprint?\n\nSubject: "+certificate.getSubjectX500Principal()+"\nEmail SANs: "+certificate.getSubjectAlternativeNames()+"\nAlgorithm: "+certificate.getPublicKey().getAlgorithm()+"\n\nSHA-256:\n"+Identity.fingerprint(certificate)+"\n\n"+warning+"\nCompare the fingerprint with the owner through a trusted channel before accepting. Trust is not a CA-chain validation.",12,65);detail.setEditable(false);detail.setLineWrap(true);detail.setWrapStyleWord(true);
+        return JOptionPane.showConfirmDialog(this,new JScrollPane(detail),"Mark certificate trusted",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)==JOptionPane.OK_OPTION;
+    }
+    private void setContactTrust(boolean trusted){
+        var contact=selectedContact();if(contact==null)return;
+        try{var certificate=state().contactCertificate(contact);if(trusted&&!confirmTrust(certificate,contact.role(),"This trust decision is saved on this Mac."))return;
+            state().setTrusted(certificate,contact.role(),trusted);refreshContacts();refreshReadTrust();status.setText(trusted?"Certificate fingerprint marked trusted":"Certificate trust removed");
+        }catch(Exception e){error(e);}
+    }
+    private void trustIncomingSigner(){
+        if(currentRead==null||currentRead.verified()==null)return;
+        try{var verified=currentRead.verified();var certificate=verified.signerCertificate();
+            if(!confirmTrust(certificate,"signing",verified.fromMatches()?"The signature is valid. This does not by itself prove the sender's identity.":"WARNING: the outer From address does not match this certificate. Trust applies to the certificate SANs, not the outer From."))return;
+            var names=certificate.getSubjectAlternativeNames();if(names==null)throw new IOException("Signer has no email SAN");
+            boolean saved=false;for(var name:names)if(Integer.valueOf(1).equals(name.get(0))){state().rememberContact(certificate,name.get(1).toString(),"signing");saved=true;}
+            if(!saved)throw new IOException("Signer has no email SAN");
+            state().setTrusted(certificate,"signing",true);refreshContacts();refreshReadTrust();status.setText("Incoming signer's SHA-256 certificate fingerprint saved as trusted");
+        }catch(Exception e){error(e);}
+    }
     private record Account(String host,int port,String user,char[] password,boolean oauth){}
     private Account account(boolean smtp){
         if(smtp){Object[] choices={"Google OAuth","Server password","Cancel"};int choice=JOptionPane.showOptionDialog(this,"Choose how to authenticate for sending","SMTP authentication",JOptionPane.DEFAULT_OPTION,JOptionPane.QUESTION_MESSAGE,null,choices,choices[0]);if(choice==0)return googleAccount(true);if(choice!=1)return null;}

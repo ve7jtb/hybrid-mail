@@ -69,7 +69,7 @@ public final class MailEngine {
         if (bytes.length > MAX_MESSAGE) throw new IOException("Message exceeds 20 MiB limit");
         return new MimeMessage(session(), new ByteArrayInputStream(bytes));
     }
-    public record Opened(String text, boolean encrypted, String signatureAlgorithm, String fingerprint, boolean pinned, boolean fromMatches) { }
+    public record Opened(String text, boolean encrypted, String signatureAlgorithm, String fingerprint, boolean pinned, boolean fromMatches, X509Certificate signerCertificate) { }
     public static Opened open(MimeMessage message, Identity id, X509Certificate pinned) throws Exception {
         return open(message,id,pinned,null);
     }
@@ -107,7 +107,7 @@ public final class MailEngine {
         boolean matches = from != null && from.length == 1 && from[0] instanceof InternetAddress a && Identity.matchesEmail(cert, a.getAddress());
         MimeBodyPart body = signed.getContent();
         if (!body.isMimeType("text/plain")) throw new IOException("This simple reader supports text/plain signed bodies only");
-        return new Opened((String)body.getContent(), encrypted, cert.getPublicKey().getAlgorithm(), fp, trusted, matches);
+        return new Opened((String)body.getContent(), encrypted, cert.getPublicKey().getAlgorithm(), fp, trusted, matches, cert);
     }
     public static void send(MimeMessage m, String host, int port, String user, String password) throws Exception {
         send(m,host,port,user,password,false);

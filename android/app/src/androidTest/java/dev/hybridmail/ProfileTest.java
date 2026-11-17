@@ -22,8 +22,10 @@ public class ProfileTest {
             for(int mode=0;mode<2;mode++){
                 var id=restored.get(mode);assertEquals(2,id.signingCert().getSubjectAlternativeNames().size());
                 for(boolean encrypted:new boolean[]{false,true}){
-                    var m=MailEngine.compose(id,"alias@example.test","android@example.test","Android interoperability",p.code+" mode "+mode,encrypted?id.encryptionCert():null,null);
+                    var m=MailEngine.composeAttachments(id,"alias@example.test","android@example.test","Android interoperability",p.code+" mode "+mode,encrypted?id.encryptionCert():null,null,java.util.List.of(new MailEngine.Attachment("résumé.bin",new byte[]{0,1,13,10,(byte)255})));
                     byte[] bytes=MailEngine.encode(m);var opened=MailEngine.open(MailEngine.parse(bytes),id,id.signingCert());
+                    assertEquals("résumé.bin",opened.attachments().get(0).name());
+                    assertArrayEquals(new byte[]{0,1,13,10,(byte)255},opened.attachments().get(0).data());
                     assertEquals(encrypted,opened.encrypted());assertTrue(opened.pinned());assertTrue(opened.fromMatches());assertEquals(p.code+" mode "+mode,opened.text());
                     Files.write(root.resolve(p.code+"-"+mode+"-"+encrypted+".eml"),bytes);
                     if(encrypted){

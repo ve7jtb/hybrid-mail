@@ -117,9 +117,12 @@ public final class DesktopState {
         if(!Set.of("signing","encryption").contains(role))throw new IllegalArgumentException("Invalid certificate trust role");
         return "trusted."+role+"."+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(certificate.getEncoded()));
     }
+    private static void validateContactPurpose(X509Certificate cert,String role)throws Exception{
+        try{Identity.validateCertificatePurpose(cert,role);}catch(java.security.GeneralSecurityException e){throw new IOException(e.getMessage(),e);}
+    }
     public boolean isTrusted(X509Certificate certificate,String role)throws Exception{return Boolean.parseBoolean(get(trustKey(certificate,role),"false"));}
     public void setTrusted(X509Certificate certificate,String role,boolean trusted)throws Exception{
-        if(trusted){certificate.checkValidity();boolean[] usage=certificate.getKeyUsage();int bit=role.equals("signing")?0:2;if(usage==null||usage.length<=bit||!usage[bit])throw new IOException("Certificate does not permit "+role);}
+        if(trusted)validateContactPurpose(certificate,role);
         set(trustKey(certificate,role),trusted?"true":null);save();
     }
     public void migrateTrust()throws Exception{
@@ -142,8 +145,7 @@ public final class DesktopState {
         if(!Set.of("signing","encryption").contains(role))throw new IOException("Choose signing or encryption");
         new jakarta.mail.internet.InternetAddress(email,true).validate();
         if(!Identity.matchesEmail(certificate,email))throw new IOException("Certificate email SAN does not match the contact address");
-        certificate.checkValidity();boolean[] usage=certificate.getKeyUsage();int bit=role.equals("signing")?0:2;
-        if(usage==null||usage.length<=bit||!usage[bit])throw new IOException("Certificate does not permit "+role);
+        validateContactPurpose(certificate,role);
         if(role.equals("encryption"))Identity.validateEncryptionKey(certificate.getPublicKey());
         MessageDigest digest=MessageDigest.getInstance("SHA-256");digest.update(certificate.getEncoded());digest.update(("\n"+email.toLowerCase(Locale.ROOT)+"\n"+role).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         String id=HexFormat.of().formatHex(digest.digest());Path folder=directory.resolve("contacts").resolve(id);

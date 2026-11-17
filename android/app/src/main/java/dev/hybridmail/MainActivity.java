@@ -34,6 +34,8 @@ public final class MainActivity extends Activity {
     private AndroidStore.Entry selected;
     private X509Certificate recipient;
     private byte[] outgoing;
+    private final List<MailEngine.Attachment> attachments=new ArrayList<>();
+    private boolean encryptDraft;
     private volatile boolean busy;
     private volatile CompletableFuture<char[]> pendingPin;
     private volatile CompletableFuture<Void> pendingStage;
@@ -75,10 +77,13 @@ public final class MainActivity extends Activity {
         button("Lock software identity",()->{identity=null;selected=null;outgoing=null;home();});
     }
     private void identities(){page("Identities & certificates");
+        button("Import and trust signing certificate",()->importTrustedCertificate("signing"));
+        button("Import and trust encryption certificate",()->importTrustedCertificate("encryption"));
         button("Create software .p12 — four keys",()->identityForm(false));
         button("Import software .p12",()->pick(uri->{byte[] data=read(uri);runOnUiThread(()->password("Unlock imported .p12",p->importBundle(data,p)));}));
         button("Use existing YubiKey keys — issue certificates",()->identityForm(true));
         button("Import existing YubiKey certificate pair",this::importTokenCertificates);
+        try{for(var certificate:store.encryptionContacts())button("Use trusted encryption certificate: "+certificate.getSubjectX500Principal()+" • "+certificate.getPublicKey().getAlgorithm(),()->{recipient=certificate;notice("Recipient encryption certificate selected");});}catch(Exception e){error(e);}
         text("YubiKey: existing slots 9c (ML-DSA), 9a (ECDSA), 9d (ML-KEM), 82 (ECDH). This Android preview never generates or replaces token keys. Certificates are saved locally; private keys stay on the YubiKey.");
         try{for(var entry:store.entries())button(entry.toString(),()->select(entry));}catch(Exception e){error(e);}
         if(identity!=null){button("Export signing certificate",()->exportCert(identity.signingCert(),"signing.cer"));button("Export encryption certificate",()->exportCert(identity.encryptionCert(),"encryption.cer"));
@@ -206,22 +211,48 @@ public final class MainActivity extends Activity {
             var e=new AndroidStore.Entry(id,"Imported "+loaded.get(loaded.size()-1).signatureAlgorithm(),p.getFileName().toString(),0,"","");store.add(e);runOnUiThread(()->chooseView(e,loaded));
         }catch(Exception e){Files.deleteIfExists(p);throw e;}
     }
+    private void importTrustedCertificate(String role){pick(uri->{
+        var cert=(X509Certificate)java.security.cert.CertificateFactory.getInstance("X.509","BC").generateCertificate(new ByteArrayInputStream(read(uri)));
+        Identity.validateCertificatePurpose(cert,role);String fingerprint=Identity.fingerprint(cert);
+        runOnUiThread(()->new AlertDialog.Builder(this).setTitle("Trust "+role+" certificate?")
+            .setMessage(cert.getSubjectX500Principal()+"\n"+cert.getPublicKey().getAlgorithm()+"\nSHA-256: "+fingerprint+"\nCompare this fingerprint with the owner. This trusts this exact certificate, not a CA chain.")
+            .setNegativeButton("Cancel",null).setPositiveButton("Trust",(d,w)->{try{store.trust(cert,role);if(role.equals("encryption"))recipient=cert;notice("Certificate fingerprint trusted for "+role);}catch(Exception e){error(e);}}).show());
+    });}
     private void select(AndroidStore.Entry e){if(e.serial()!=0)work("Loading public certificates…",()->{identity=store.loadToken(e);selected=e;runOnUiThread(this::home);});
         else password("Unlock software .p12",pass->{var ids=Identity.loadProfiles(store.root.resolve(e.bundle()),pass);runOnUiThread(()->chooseView(e,ids));});}
     private void chooseView(AndroidStore.Entry e,List<Identity> ids){String[] labels=ids.stream().map(Identity::signatureAlgorithm).toArray(String[]::new);
         new AlertDialog.Builder(this).setTitle("Outgoing identity profile").setItems(labels,(d,n)->{identity=ids.get(n);selected=e;try{for(var san:identity.signingCert().getSubjectAlternativeNames())if(Integer.valueOf(1).equals(san.get(0))){from=(String)san.get(1);break;}}catch(Exception ignored){}home();}).show();}
     private void compose(){if(identity==null){error(new Exception("Select an identity first"));return;}outgoing=null;page("Compose signed mail");text(identity.signatureAlgorithm()+" • "+(selected.serial()==0?"software":"YubiKey "+selected.serial()));
         EditText f=field("From",from),t=field("To",to),s=field("Subject",subject),b=field("Message",body);b.setSingleLine(false);b.setMinLines(5);
-        CheckBox encrypt=new CheckBox(this);encrypt.setText("Encrypt with recipient certificate");page.addView(encrypt);
+        CheckBox encrypt=new CheckBox(this);encrypt.setText("Encrypt body and attachments with recipient certificate");encrypt.setChecked(encryptDraft);encrypt.setOnCheckedChangeListener((v,checked)->encryptDraft=checked);page.addView(encrypt);
         text(recipient==null?"No recipient certificate loaded":recipient.getSubjectX500Principal()+"\n"+recipient.getPublicKey().getAlgorithm());
-        button("Import recipient encryption certificate",()->{from=f.getText().toString();to=t.getText().toString();subject=s.getText().toString();body=b.getText().toString();pick(uri->{byte[] data=read(uri);var cert=(X509Certificate)java.security.cert.CertificateFactory.getInstance("X.509","BC").generateCertificate(new ByteArrayInputStream(data));Identity.validateEncryptionKey(cert.getPublicKey());recipient=cert;runOnUiThread(this::compose);});});
+        button("Import recipient encryption certificate",()->{from=f.getText().toString();to=t.getText().toString();subject=s.getText().toString();body=b.getText().toString();pick(uri->{byte[] data=read(uri);var cert=(X509Certificate)java.security.cert.CertificateFactory.getInstance("X.509","BC").generateCertificate(new ByteArrayInputStream(data));Identity.validateCertificatePurpose(cert,"encryption");recipient=cert;runOnUiThread(this::compose);});});
+        text("Attachments are signed with the body. Enable encryption to protect filenames and contents. Up to 20 files / 10 MiB total.");
+        for(var attachment:new ArrayList<>(attachments))button("Remove: "+attachment,()->{attachments.remove(attachment);from=f.getText().toString();to=t.getText().toString();subject=s.getText().toString();body=b.getText().toString();compose();});
+        button("Add attachment…",()->{
+            from=f.getText().toString();to=t.getText().toString();subject=s.getText().toString();body=b.getText().toString();
+            if(attachments.size()>=20){error(new IOException("At most 20 attachments"));return;}
+            pick(uri->{String name="attachment.bin";
+                try(var cursor=getContentResolver().query(uri,new String[]{android.provider.OpenableColumns.DISPLAY_NAME},null,null,null)){
+                    if(cursor!=null&&cursor.moveToFirst())name=cursor.getString(0);
+                }
+                byte[] bytes=read(uri);long total=bytes.length;for(var item:attachments)total+=item.data().length;
+                if(total>MailEngine.MAX_MESSAGE/2)throw new IOException("Attachments exceed 10 MiB");
+                var attachment=new MailEngine.Attachment(name,bytes);runOnUiThread(()->{attachments.add(attachment);compose();});
+            });
+        });
         button("Sign and prepare .eml",()->{from=f.getText().toString().trim();to=t.getText().toString().trim();subject=s.getText().toString();body=b.getText().toString();boolean enc=encrypt.isChecked();if(enc&&recipient==null){error(new Exception("Import recipient encryption certificate first"));return;}
-            work("Signing "+identity.signatureAlgorithm()+ (enc?" and encrypting…":"…"),()->{outgoing=MailEngine.encode(MailEngine.compose(identity,from,to,subject,body,enc?recipient:null,selected.serial()==0?null:backend()));runOnUiThread(()->export(outgoing,"message.eml","message/rfc822"));});});
+            work("Signing "+identity.signatureAlgorithm()+ (enc?" and encrypting…":"…"),()->{outgoing=MailEngine.encode(MailEngine.composeAttachments(identity,from,to,subject,body,enc?recipient:null,selected.serial()==0?null:backend(),List.copyOf(attachments)));runOnUiThread(()->export(outgoing,"message.eml","message/rfc822"));});});
     }
     private void openMessage(byte[] bytes)throws Exception {
         var result=MailEngine.open(MailEngine.parse(bytes),identity,null,selected!=null&&selected.serial()!=0?backend():null);
-        runOnUiThread(()->{page("Verified S/MIME message");text("Signature valid • "+result.signatureAlgorithm()+"\n"+(result.encrypted()?"Decrypted":"Unencrypted")+"\nSender address "+(result.fromMatches()?"matches certificate":"DOES NOT match certificate")+"\n"+(store.trusted(result.fingerprint())?"Trusted fingerprint":"Untrusted fingerprint")+"\n"+result.fingerprint());text(result.text());
-            button("Trust this signer fingerprint",()->new AlertDialog.Builder(this).setTitle("Trust signer?").setMessage("Compare this SHA-256 fingerprint through a trusted channel before accepting:\n"+result.fingerprint()).setNegativeButton("Cancel",null).setPositiveButton("Trust",(d,w)->{try{store.trust(result.signerCertificate());notice("Fingerprint saved as trusted");}catch(Exception e){error(e);}}).show());});
+        runOnUiThread(()->{page("S/MIME message");text((result.signerCertificate()==null?"UNSIGNED — sender not verified":"Signature valid • "+result.signatureAlgorithm())+"\n"+(result.encrypted()?"Decrypted":"Unencrypted")+"\nSender address "+(result.fromMatches()?"matches certificate":"DOES NOT match certificate")+"\n"+(store.trusted(result.fingerprint())?"Trusted fingerprint":"Untrusted fingerprint")+"\n"+result.fingerprint());text(result.text());
+            for(var attachment:result.attachments())button("Save attachment: "+attachment,()->export(attachment.data(),attachment.name(),"application/octet-stream"));
+            if(!result.attachments().isEmpty())text("Saved attachments are decrypted files. Nothing is saved until you choose a destination.");
+            if(result.signerCertificate()!=null)button("Trust this signer for encryption",()->{try{var cert=result.signerCertificate();Identity.validateCertificatePurpose(cert,"encryption");
+                new AlertDialog.Builder(this).setTitle("Trust encryption certificate?").setMessage("Confirm this fingerprint with the owner before encrypting mail:\n"+result.fingerprint()).setNegativeButton("Cancel",null).setPositiveButton("Trust",(d,w)->{try{store.trust(cert,"encryption");recipient=cert;notice("Encryption certificate trusted and selected");}catch(Exception e){error(e);}}).show();
+            }catch(Exception e){error(e);}});
+            if(result.signerCertificate()!=null)button("Trust this signer fingerprint",()->new AlertDialog.Builder(this).setTitle("Trust signer?").setMessage("Compare this SHA-256 fingerprint through a trusted channel before accepting:\n"+result.fingerprint()).setNegativeButton("Cancel",null).setPositiveButton("Trust",(d,w)->{try{store.trust(result.signerCertificate());notice("Fingerprint saved as trusted");}catch(Exception e){error(e);}}).show());});
     }
     private void account(){page("IMAP inbox & SMTP");var prefs=getSharedPreferences("mail",0);
         EditText user=field("Account username",prefs.getString("user",from)),imap=field("IMAP TLS host (port 993)",prefs.getString("imap","")),smtp=field("SMTP STARTTLS host (port 587)",prefs.getString("smtp",""));

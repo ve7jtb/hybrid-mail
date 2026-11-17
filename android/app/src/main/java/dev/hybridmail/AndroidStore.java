@@ -31,6 +31,14 @@ final class AndroidStore {
         Files.write(root.resolve(key+"-encrypt.cer"),id.encryptionCert().getEncoded());
         add(new Entry(key,label,"",serial,key+"-sign.cer",key+"-encrypt.cer"));
     }
-    void trust(X509Certificate cert)throws Exception{context.getSharedPreferences("trust",0).edit().putBoolean(Identity.fingerprint(cert),true).apply();}
-    boolean trusted(String fingerprint){return context.getSharedPreferences("trust",0).getBoolean(fingerprint,false);}
+    void trust(X509Certificate cert)throws Exception{trust(cert,"signing");}
+    void trust(X509Certificate cert,String role)throws Exception{
+        Identity.validateCertificatePurpose(cert,role);
+        Files.write(root.resolve("trusted-"+role+"-"+Identity.fingerprint(cert).replace(":","")+".cer"),cert.getEncoded());
+        context.getSharedPreferences("trust",0).edit().putBoolean(role+":"+Identity.fingerprint(cert),true).apply();
+    }
+    List<X509Certificate> encryptionContacts()throws Exception{
+        List<X509Certificate> result=new ArrayList<>();try(var paths=Files.newDirectoryStream(root,"trusted-encryption-*.cer")){for(var path:paths)result.add(Identity.readCertificate(path));}return result;
+    }
+    boolean trusted(String fingerprint){return context.getSharedPreferences("trust",0).getBoolean("signing:"+fingerprint,context.getSharedPreferences("trust",0).getBoolean(fingerprint,false));}
 }

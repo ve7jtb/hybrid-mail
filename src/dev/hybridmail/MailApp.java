@@ -22,6 +22,9 @@ public final class MailApp extends JFrame {
     private final JComboBox<EncryptionChoice> outgoingEncryption=new JComboBox<>();
     private final JButton trustIncoming=new JButton("Trust signer fingerprint…");
     private ReadResult currentRead;
+    private final DefaultListModel<Path> attachmentModel=new DefaultListModel<>();
+    private final JList<Path> attachmentList=new JList<>(attachmentModel);
+    private final JButton saveAttachment=new JButton("Save attachment…");
     private record ReadResult(String plain,MailEngine.Opened verified,String subject){}
     private Identity identity;
     private MailInbox inbox;
@@ -63,8 +66,13 @@ public final class MailApp extends JFrame {
         outgoingIdentity.addActionListener(e->{if(!syncingOutgoing){var chosen=(DesktopState.SavedIdentity)outgoingIdentity.getSelectedItem();if(chosen!=null)openSaved(chosen);}});
         outgoingEncryption.setEnabled(encrypt.isSelected());encrypt.addActionListener(e->outgoingEncryption.setEnabled(encrypt.isSelected()));
         outgoingEncryption.addActionListener(e->{if(!syncingOutgoing){var chosen=(EncryptionChoice)outgoingEncryption.getSelectedItem();if(chosen!=null){recipient=chosen.certificate();to.setText(chosen.email());recipientLabel.setText(chosen.email()+" · "+recipient.getPublicKey().getAlgorithm());try{state().saveCertificate("recipient",recipient);}catch(Exception error){error(error);}}}}); fields.add(new JLabel("All outgoing messages are signed. Enable encryption only when you have the recipient’s encryption certificate.")); p.add(fields,BorderLayout.NORTH);
-        p.add(new JScrollPane(body));
-        JPanel bottom = new JPanel(new BorderLayout()); bottom.add(new JLabel("Body is signed; encryption is optional. Outer From / To / Subject headers are unprotected."),BorderLayout.NORTH);
+        JPanel content=new JPanel(new BorderLayout(0,6));content.add(new JScrollPane(body));
+        JPanel attachments=new JPanel(new BorderLayout());attachmentList.setVisibleRowCount(2);
+        attachments.add(new JScrollPane(attachmentList));JPanel fileActions=new JPanel(new FlowLayout(FlowLayout.LEFT));
+        fileActions.add(button("Add attachments…",()->{JFileChooser c=new JFileChooser();c.setMultiSelectionEnabled(true);if(c.showOpenDialog(this)==JFileChooser.APPROVE_OPTION){for(File file:c.getSelectedFiles()){if(attachmentModel.size()>=20){error(new IOException("At most 20 attachments"));break;}attachmentModel.addElement(file.toPath());}}}));
+        fileActions.add(button("Remove selected",()->{for(Path file:attachmentList.getSelectedValuesList())attachmentModel.removeElement(file);}));
+        attachments.add(fileActions,BorderLayout.NORTH);content.add(attachments,BorderLayout.SOUTH);p.add(content);
+        JPanel bottom = new JPanel(new BorderLayout()); bottom.add(new JLabel("Body and attachments are signed; enable encryption to protect both. Outer From / To / Subject headers are unprotected."),BorderLayout.NORTH);
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         actions.add(button("Recipient certificates…",()->tabs.setSelectedIndex(4))); actions.add(button("Save signed .eml…", () -> compose(false))); actions.add(button("Send…", () -> compose(true)));
         bottom.add(actions, BorderLayout.SOUTH); p.add(bottom,BorderLayout.SOUTH); return p;
@@ -77,7 +85,8 @@ public final class MailApp extends JFrame {
             job("Verifying message…", () -> { if(Files.size(file)>MailEngine.MAX_MESSAGE) throw new IOException("Message too large"); return display(MailEngine.parse(Files.readAllBytes(file)),id,pin); }, this::showMessage);
         }));
         actions.add(button("Open inbox",()->tabs.setSelectedIndex(3)));
-        trustIncoming.setEnabled(false);trustIncoming.addActionListener(e->trustIncomingSigner());actions.add(trustIncoming);
+        trustIncoming.setEnabled(false);trustIncoming.addActionListener(e->trustIncomingSigner());actions.add(trustIncoming);actions.add(button("Trust signer for encryption…",this::trustIncomingEncryption));
+        saveAttachment.setEnabled(false);saveAttachment.addActionListener(e->saveReadAttachment());actions.add(saveAttachment);
         p.add(actions,BorderLayout.NORTH); return p;
     }
     private void googleAdvancedSettings(){
@@ -509,12 +518,13 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         Path file=send?null:chooseSave("Save signed S/MIME message", "message.eml", "eml");if(!send&&file==null)return;
         Account a=send?account(true):null;if(send&&a==null)return;
         Identity id=identity; X509Certificate r=encrypt.isSelected()?recipient:null; ExternalMu.Backend backend=adapter==null?null:ExternalMu.executable(adapter);
+        var files=java.util.Collections.list(attachmentModel.elements());
         String f=from.getText().trim(),t=to.getText().trim(),s=subject.getText(),b=body.getText();
         try{state().set("mail.from",f);state().set("mail.to",t);state().save();}catch(Exception e){error(e);return;}
-        if(send&&JOptionPane.showConfirmDialog(this,"Send this "+(r!=null?"signed and encrypted":"signed, unencrypted")+" message to "+t+"?","Send message",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){Arrays.fill(a.password,'\0');return;}
+        if(send&&JOptionPane.showConfirmDialog(this,"Send this "+(r!=null?"signed and encrypted":"signed, unencrypted")+" message with "+files.size()+" attachment(s) to "+t+"?","Send message",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){Arrays.fill(a.password,'\0');return;}
         job(send?"Signing and sending…":"Signing and saving…",()->{
             try {
-                MimeMessage m=MailEngine.compose(id,f,t,s,b,r,backend);
+                MimeMessage m=MailEngine.compose(id,f,t,s,b,r,backend,files);
                 if(send){if(a.oauth){try(var api=new GmailApi(this::googleCredential)){api.verifyAccount(a.user);api.send(m);}}else MailEngine.send(m,a.host,a.port,a.user,new String(a.password),false);}
                 else Files.write(file,MailEngine.encode(m),StandardOpenOption.CREATE_NEW);
                 return send?"Message sent":"Saved "+file.getFileName();
@@ -528,17 +538,26 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     }
     private String formatRead(ReadResult result)throws Exception{
         if(result.verified()==null)return result.plain();var o=result.verified();
+        if(o.signerCertificate()==null)return "DECRYPTED · UNSIGNED MESSAGE\nSender and content are not signature-verified. Do not infer signer trust from encryption.\n\nOuter subject (unprotected): "+result.subject()+"\n\n"+o.text()+"\n\nAttachments: "+o.attachments();
         boolean trusted=state().isTrusted(o.signerCertificate(),"signing");
-        return "SIGNATURE VALID · "+o.signatureAlgorithm()+"\n"+(o.encrypted()?"AES-256-GCM authenticated decryption succeeded":"Not encrypted")+"\n"+
+        return "SIGNATURE VALID · "+o.signatureAlgorithm()+"\n"+(o.encrypted()?"Decryption succeeded; signed content verified":"Not encrypted")+"\n"+
             (trusted?"SIGNER TRUSTED: SHA-256 certificate fingerprint matches your saved trust":"SIGNER NOT TRUSTED: fingerprint has not been marked trusted")+"\n"+
             (o.fromMatches()?"Outer From matches certificate email (header itself is unsigned)":"WARNING: outer From does not match signing certificate")+
-            "\nSHA-256: "+o.fingerprint()+"\n\nOuter subject (unprotected): "+result.subject()+"\n\n──────── Signed body ────────\n\n"+o.text();
+            "\nSHA-256: "+o.fingerprint()+"\n\nOuter subject (unprotected): "+result.subject()+"\n\n──────── Signed body ────────\n\n"+o.text()+"\n\nAttachments: "+o.attachments();
     }
-    private void clearReadTrust(){currentRead=null;trustIncoming.setEnabled(false);}
+    private void clearReadTrust(){currentRead=null;trustIncoming.setEnabled(false);saveAttachment.setEnabled(false);}
     private void showMessage(ReadResult result){
-        try{showMessage(formatRead(result));currentRead=result;trustIncoming.setEnabled(result.verified()!=null);}catch(Exception e){clearReadTrust();error(e);}
+        try{showMessage(formatRead(result));currentRead=result;trustIncoming.setEnabled(result.verified()!=null&&result.verified().signerCertificate()!=null);saveAttachment.setEnabled(result.verified()!=null&&!result.verified().attachments().isEmpty());}catch(Exception e){clearReadTrust();error(e);}
     }
     private void showMessage(String text){clearReadTrust();reader.setText(text);reader.setCaretPosition(0);tabs.setSelectedIndex(1);status.setText("Message opened. Review the security status above.");}
+    private void saveReadAttachment(){
+        if(currentRead==null||currentRead.verified()==null)return;
+        var files=currentRead.verified().attachments();if(files.isEmpty())return;
+        var file=(MailEngine.Attachment)JOptionPane.showInputDialog(this,"Save a verified attachment (saved files are decrypted)","Attachments",JOptionPane.PLAIN_MESSAGE,null,files.toArray(),files.getFirst());
+        if(file==null)return;JFileChooser chooser=new JFileChooser();chooser.setSelectedFile(new File(file.name()));
+        if(chooser.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;
+        try{Files.write(chooser.getSelectedFile().toPath(),file.data(),StandardOpenOption.CREATE_NEW);status.setText("Attachment saved; existing files are never overwritten.");}catch(Exception e){error(e);}
+    }
     private void refreshReadTrust(){if(currentRead!=null)try{reader.setText(formatRead(currentRead));reader.setCaretPosition(0);}catch(Exception e){error(e);}}
     private boolean confirmTrust(X509Certificate certificate,String role,String warning)throws Exception{
         JTextArea detail=new JTextArea("Trust this exact "+role+" certificate fingerprint?\n\nSubject: "+certificate.getSubjectX500Principal()+"\nEmail SANs: "+certificate.getSubjectAlternativeNames()+"\nAlgorithm: "+certificate.getPublicKey().getAlgorithm()+"\n\nSHA-256:\n"+Identity.fingerprint(certificate)+"\n\n"+warning+"\nCompare the fingerprint with the owner through a trusted channel before accepting. Trust is not a CA-chain validation.",12,65);detail.setEditable(false);detail.setLineWrap(true);detail.setWrapStyleWord(true);
@@ -550,8 +569,18 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             state().setTrusted(certificate,contact.role(),trusted);refreshContacts();refreshReadTrust();status.setText(trusted?"Certificate fingerprint marked trusted":"Certificate trust removed");
         }catch(Exception e){error(e);}
     }
+    private void trustIncomingEncryption(){
+        if(currentRead==null||currentRead.verified()==null||currentRead.verified().signerCertificate()==null){error(new IOException("Open a verified signed message first"));return;}
+        try{var cert=currentRead.verified().signerCertificate();Identity.validateCertificatePurpose(cert,"encryption");
+            if(!confirmTrust(cert,"encryption","Only use this certificate if its owner intends it for encrypted mail."))return;
+            var sans=cert.getSubjectAlternativeNames();boolean saved=false;
+            if(sans!=null)for(var san:sans)if(Integer.valueOf(1).equals(san.get(0))){state().rememberContact(cert,san.get(1).toString(),"encryption");saved=true;}
+            if(!saved)throw new IOException("Certificate has no email SAN; import the owner's encryption certificate instead");
+            state().setTrusted(cert,"encryption",true);refreshContacts();status.setText("Incoming certificate trusted for encryption");
+        }catch(Exception e){error(e);}
+    }
     private void trustIncomingSigner(){
-        if(currentRead==null||currentRead.verified()==null)return;
+        if(currentRead==null||currentRead.verified()==null||currentRead.verified().signerCertificate()==null)return;
         try{var verified=currentRead.verified();var certificate=verified.signerCertificate();
             if(!confirmTrust(certificate,"signing",verified.fromMatches()?"The signature is valid. This does not by itself prove the sender's identity.":"WARNING: the outer From address does not match this certificate. Trust applies to the certificate SANs, not the outer From."))return;
             var names=certificate.getSubjectAlternativeNames();if(names==null)throw new IOException("Signer has no email SAN");

@@ -41,7 +41,7 @@ Wait for **Connect your YubiKey**, remove the key from NFC range, then tap and h
 
 Encrypted `.p12` bundles and public token certificates are stored in app-private storage; Android backup is disabled. No YubiKey PIN, `.p12` password, or mail account password is persisted. A token PIN is cached in a mutable character array for one logical operation, used for PIN_ALWAYS verification of each component, and cleared in `finally` along with the connection. Software keys remain unlocked in process memory until **Lock software identity**, process termination, or replacement; Java does not guarantee erasure of provider private-key objects. Screenshots are disabled for the app, including PIN dialogs.
 
-This preview does not yet include Google OAuth/refresh-token storage, Android token provisioning, background synchronization, attachment/HTML viewing, or the desktop's full certificate-management interface. Gmail requires an app password if the account permits it. Recipient encryption certificates are selected for the current session; trusted signer fingerprints persist. Self-signed demo certificates are not automatically trusted by other mail clients.
+This preview does not yet include Google OAuth/refresh-token storage, Android token provisioning, background synchronization, HTML rendering, or the desktop's full certificate-management interface. Gmail requires an app password if the account permits it. The current recipient selection is session-only; trusted signing/encryption fingerprints and trusted encryption certificates persist and can be selected again from Identities & certificates. Self-signed demo certificates are not automatically trusted by other mail clients.
 
 ## Build
 
@@ -92,3 +92,17 @@ During the local round-trip test:
 5. **Test complete — remove your key** confirms both operations finished. No email is sent.
 
 The new stage/removal dialogs have passed a UI startup smoke test; the recorded physical NFC passes precede this wording/transition update. Timestamped results remain stored separately for each signing profile, including failures.
+
+## Attachments
+
+Compose → **Add attachment…** uses Android’s document picker. Remove individual files before preparing the message. Enable encryption to protect the body, filenames and files; otherwise all are signed only. Pure and hybrid profiles use the same shared S/MIME engine as desktop. Up to 20 files and 10 MiB body/file payload are supported, subject to the 20 MiB encoded-message limit. Selected files are held in memory; drafts are not persisted. For signed mail, verification must succeed before attachments are available. Encrypted-only mail is labeled unsigned and provides no signer assurance. Use **Save attachment** to choose a destination for the decrypted file. No broad storage permission is required.
+
+### Conventional S/MIME interoperability
+
+RSA and ECDSA signatures can be received and explicitly trusted by certificate fingerprint. Recipient encryption certificates support RSA (2048 bits or larger) and ECDH P-256/P-384 alongside PQ KEM profiles. Key usage and emailProtection extended key usage are checked when present; an ECDH certificate requires keyAgreement when key usage is present. Trust for signing and encryption is separate and does not imply CA-chain validation.
+
+Import a recipient certificate or use **Trust signer for encryption** on verified mail if the signer certificate also permits encryption. A separate encryption certificate must be imported when the signing certificate is signing-only. Conventional software `.p12` files with one unambiguous signing key and at most one encryption key can be imported, including arbitrary aliases. Classical decryption requires the matching software private key; PQ YubiKey profiles remain unchanged.
+
+The reader accepts signed messages inside AuthEnvelopedData or conventional EnvelopedData (including AES-CBC), and plain-text content in common mixed/alternative/related MIME layouts. HTML is not rendered. Encrypted messages without a signature are shown explicitly as unsigned and cannot be used to establish signer trust. Encryption to a conventional recipient does not provide post-quantum confidentiality, even when the message carries a PQ signature.
+
+The attachment and conventional S/MIME update passed Android build/lint and emulator instrumentation tests on November 17, 2026. Physical YubiKey tests of these new features and third-party mail-client interoperability remain pending.

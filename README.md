@@ -20,13 +20,15 @@ An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB a
 | YubiKey signing and decryption | Bundled PKCS#11 | Direct YubiKit; Level 3 NFC verified, physical USB testing pending |
 | Generate four keys on an empty YubiKey | Yes | No; use existing keys |
 | Signed mail with optional encryption; `.eml` files | Yes | Yes |
+| Signed/encrypted attachments; save received files | Yes | Yes; system document picker |
+| Conventional RSA/ECDSA signing and RSA/ECDH encryption | Yes; software private keys | Yes; software private keys |
 | Ten-message IMAPS inbox; SMTP STARTTLS | Yes | Yes |
 | Google OAuth and persistent refresh tokens | Yes | Not yet |
-| Certificate management and trusted fingerprints | Full desktop interface | Certificate import/export and persistent signer fingerprints; recipient selection is session-only |
+| Certificate management and trusted fingerprints | Full desktop interface | Certificate import/export; persistent signing/encryption fingerprints and saved trusted encryption certificates |
 
 ## Desktop features
 
-- Compose signed text messages, optionally encrypt them, and save/open `.eml` files.
+- Compose signed messages with attachments, optionally encrypt them, and save/open `.eml` files.
 - For other hosts, send through SMTP with STARTTLS and show the **10 most recent inbox messages** through read-only IMAP over TLS. Gmail uses its API with 50-message pages and an optional S/MIME-only filter.
 - Sign in to Gmail with Google Desktop OAuth, including PKCE and a loopback callback, requesting only Gmail API read-only and send scopes. Save the client configuration and refresh token in **macOS Keychain** or **Windows Credential Manager**.
 - Select the outgoing signing identity and recipient encryption certificate independently.
@@ -53,7 +55,7 @@ Software creation offers the same Level 2, 3 and 5 choices as YubiKey creation. 
 
 Software and YubiKey creation accept up to four additional comma-separated email addresses. All signing and encryption certificates, pure and hybrid, include the primary address plus these `rfc822Name` Subject Alternative Names. The subject CN remains the primary email. Duplicate or invalid addresses are rejected. Pending YubiKey setup metadata preserves the additional addresses for certificate issuance retries.
 
-Messages use opaque CMS SignedData, optionally wrapped in AuthEnvelopedData. Encryption uses KEMRecipientInfo, HKDF-SHA256, AES-256 key wrap and AES-256-GCM. Encryption is performed on the host with the recipient's public key; the recipient's YubiKey performs private-key decapsulation and ECDH during decryption. The host combines hybrid secrets.
+Outgoing messages use opaque CMS SignedData, optionally wrapped in AuthEnvelopedData. PQ encryption uses KEMRecipientInfo, HKDF-SHA256, AES-256 key wrap and AES-256-GCM. Encryption is performed on the host with the recipient's public key; the recipient's YubiKey performs private-key decapsulation and ECDH during decryption. The host combines hybrid secrets.
 
 Bouncy Castle computes ML-DSA external μ, including composite domain separation, and assembles composite signatures. The app's OpenSSL/PKCS#11 adapter uses the provider's external-μ support from [PR #818](https://github.com/openssl-projects/pkcs11-provider/pull/818). Returned signatures are verified before use. A composite operation shares one entered PIN between its two components and clears the cache when the operation finishes; PINs are never persisted.
 
@@ -152,6 +154,20 @@ The build pins AGP 9.3.3, Gradle 9.7.1 and YubiKit 3.3.0. The APK supports API 2
 
 The display name and repository changed to PQ Mail. Existing settings, identity references, trust records and OAuth credential-store identifiers remain compatible. The application deliberately retains the legacy **`Hybrid Mail`** data directory (`~/Library/Application Support/Hybrid Mail` on macOS and `%LOCALAPPDATA%\Hybrid Mail` on Windows), Java package names, helper filenames and `HYBRID_*` environment variables. No key regeneration or credential migration is needed for the rename.
 
+## S/MIME attachments
+
+In desktop Compose, use **Add attachments…** and **Remove selected**. Files and the text body are signed together. Enable **Also encrypt for recipient** to encrypt the complete signed message, including attachment filenames and contents, using the selected PQ, hybrid, or conventional recipient certificate. Gmail API and SMTP use the same protected message. Outer email headers remain unprotected.
+
+For signed mail, signature verification must succeed before attachments are available. Decrypted-only mail is explicitly labeled unsigned, and its attachments carry no signer assurance. Decrypted attachments remain in memory until you explicitly save one. Desktop saving refuses to overwrite existing files; Android uses the system save dialog. The composer supports up to 20 attachments and a combined body/file payload of 10 MiB, subject to the final 20 MiB encoded-message limit. Android also supports attachment selection and saving through the system document picker.
+
+## Conventional S/MIME interoperability
+
+RSA and ECDSA signatures can be received and explicitly trusted by certificate fingerprint. Recipient encryption certificates support RSA (2048 bits or larger) and ECDH P-256/P-384 alongside PQ KEM profiles. Key usage and emailProtection extended key usage are checked when present; an ECDH certificate requires keyAgreement when key usage is present. Trust for signing and encryption is separate and does not imply CA-chain validation.
+
+Import a recipient certificate or use **Trust signer for encryption** on verified mail if the signer certificate also permits encryption. A separate encryption certificate must be imported when the signing certificate is signing-only. Conventional software `.p12` files with one unambiguous signing key and at most one encryption key can be imported, including arbitrary aliases. Classical decryption requires the matching software private key; PQ YubiKey profiles remain unchanged.
+
+The reader accepts signed messages inside AuthEnvelopedData or conventional EnvelopedData (including AES-CBC), and plain-text content in common mixed/alternative/related MIME layouts. HTML is not rendered. Encrypted messages without a signature are shown explicitly as unsigned and cannot be used to establish signer trust. Encryption to a conventional recipient does not provide post-quantum confidentiality, even when the message carries a PQ signature.
+
 ## Validation and limitations
 
 - **Current Level 3 hardware:** physical Beta0 tests passed on macOS through PKCS#11 for ML-DSA-65 / ML-KEM-768 and MLDSA65-ECDSA-P384-SHA512 / MLKEM768-ECDH-P384-SHA3-256. All four keys were generated on-device with PIN Always / Touch Never. Both signed-and-encrypted S/MIME round trips passed. The new pure/hybrid public certificate pairs were copied into Android and independently read back byte-for-byte. Subsequent Android NFC round trips passed for both profiles.
@@ -159,7 +175,8 @@ The display name and repository changed to PQ Mail. Existing settings, identity 
 - **Earlier hardware tests:** physical Beta0 hardware tests passed for pure ML-DSA-65 and composite MLDSA65-RSA3072-PSS-SHA512 signing through PKCS#11, and pure ML-KEM-768 / hybrid MLKEM768-ECDH-P256 decryption. Saved messages were independently reopened and verified. The earlier ykman external-μ signing demo also passed.
 - Automated tests cover software profiles, simulated external signing/decryption including all three provisioning levels in pure and hybrid modes, serialization, tampering, key matching, PIN cache cleanup, identity bindings, and provisioning refusal/partial failures. Simulators do not establish physical-device support. Level 2 and Level 5 pure physical hardware round trips remain unverified; the Level 5 hybrid Gmail demonstration below passed; the normal provisioning UI requires an empty compatible key.
 - Gmail API OAuth with the shared client and read/send scopes was observed in the Mac app: 12 inbox messages loaded, with 3 matching the S/MIME-only filter. Mock API tests cover paging and pure/hybrid signed/encrypted MIME transfer for all three levels. On November 17, 2026, two synthetic self-addressed messages were sent and received through the live Gmail API: one signed and one signed-and-encrypted. MLDSA87-ECDSA-P384-SHA512 signatures verified, and MLKEM1024-ECDH-P384-SHA3-256 YubiKey decryption completed with authenticated AES-256-GCM decryption. Earlier full-mail OAuth, Keychain restoration after restart, and the ten-message IMAP inbox were also observed. Live SMTP delivery, third-party interoperability, Windows hardware use and a production security audit are not established by these tests.
-- The reader handles signed text/plain mail and AuthEnvelopedData, plus ordinary plain text explicitly marked unsigned. HTML rendering, attachments and legacy EnvelopedData are not supported. Verification/decryption failures are not downgraded to unsigned mail.
+- The reader accepts opaque and detached signatures, AuthEnvelopedData and conventional EnvelopedData, common text MIME layouts, and attachments. Encrypted-only messages are explicitly labeled unsigned; signature or decryption failures are not downgraded. HTML rendering is not supported.
+- **Attachment and conventional interoperability tests:** desktop regression tests and Android emulator tests passed for binary/Unicode-named attachments in all six PQ profiles, RSA/ECDSA signatures, RSA/ECDH encryption, arbitrary-alias software `.p12` import, detached signatures, AES-GCM and legacy AES-CBC envelopes, and unsigned encrypted messages. These are local generated-message tests, not independent third-party client or physical YubiKey validation of the new features.
 - Trust uses exact certificate fingerprints, validity and key-usage checks. There is no CA chain building or revocation checking. Outer mail headers are not signed or encrypted. The app distinguishes signature validity from trust and flags sender/certificate mismatches.
 
 Public demonstration certificates are separately published in [hybrid-mail-test-certificates](https://github.com/ve7jtb/hybrid-mail-test-certificates). Private keys, user identity files, device identifiers, user OAuth tokens, custom client credentials and local hardware artifacts are excluded from this source repository.

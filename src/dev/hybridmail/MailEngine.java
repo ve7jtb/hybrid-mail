@@ -2,6 +2,9 @@ package dev.hybridmail;
 
 import java.io.*;
 import java.security.*;
+import java.nio.file.*;
+import jakarta.activation.DataHandler;
+import jakarta.mail.util.ByteArrayDataSource;
 import java.security.cert.X509Certificate;
 import java.util.*;
 import jakarta.mail.*;
@@ -21,11 +24,57 @@ public final class MailEngine {
     public static Session session() { return Session.getInstance(new Properties()); }
     public static MimeMessage compose(Identity id, String from, String to, String subject, String text,
                                       X509Certificate recipient, ExternalMu.Backend external) throws Exception {
+        return compose(id,from,to,subject,text,recipient,external,List.of());
+    }
+    public record Attachment(String name, byte[] data) {
+        public Attachment { name=safeFilename(name); data=data.clone(); }
+        @Override public byte[] data(){return data.clone();}
+        @Override public String toString(){return name+" ("+data.length+" bytes)";}
+    }
+    private static byte[] readBounded(InputStream in,int limit)throws IOException {
+        ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] block=new byte[8192];int n;
+        while((n=in.read(block))!=-1){if(n>limit-out.size())throw new IOException("Attachment exceeds size limit");out.write(block,0,n);}
+        return out.toByteArray();
+    }
+    public static String safeFilename(String name){
+        if(name==null)return "attachment.bin";
+        String result=name.replace('\\','/');result=result.substring(result.lastIndexOf('/')+1).replaceAll("[\\p{Cntrl}]","_");
+        return result.isBlank()||result.equals(".")||result.equals("..")?"attachment.bin":result;
+    }
+    public static MimeMessage compose(Identity id,String from,String to,String subject,String text,
+            X509Certificate recipient,ExternalMu.Backend external,List<Path> files)throws Exception {
+        if(files.size()>20)throw new IOException("At most 20 attachments per message");
+        List<Attachment> attachments=new ArrayList<>();long total=0;
+        for(Path file:files){
+            if(!Files.isRegularFile(file))throw new IOException("Attachment is not a regular file");
+            byte[] data;try(InputStream in=Files.newInputStream(file)){data=readBounded(in,MAX_MESSAGE/2);}
+            total+=data.length;if(total>MAX_MESSAGE/2)throw new IOException("Attachments exceed 10 MiB");
+            attachments.add(new Attachment(file.getFileName().toString(),data));
+        }
+        return composeAttachments(id,from,to,subject,text,recipient,external,attachments);
+    }
+    public static MimeMessage composeAttachments(Identity id,String from,String to,String subject,String text,
+            X509Certificate recipient,ExternalMu.Backend external,List<Attachment> files)throws Exception {
         InternetAddress sender = new InternetAddress(from, true); sender.validate();
         InternetAddress receiver = new InternetAddress(to, true); receiver.validate();
         if (!Identity.matchesEmail(id.signingCert(), sender.getAddress())) throw new GeneralSecurityException("From address does not match signing certificate");
         if (text.length() > MAX_MESSAGE / 4) throw new IOException("Message too large");
         MimeBodyPart plain = new MimeBodyPart(); plain.setText(text, "UTF-8");
+        if(files.size()>20)throw new IOException("At most 20 attachments per message");
+        if(!files.isEmpty()){
+            MimeMultipart mixed=new MimeMultipart("mixed");mixed.addBodyPart(plain);
+            long total=text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            for(Attachment file:files){
+                byte[] data=file.data();
+                total+=data.length;
+                if(total>MAX_MESSAGE/2)throw new IOException("Body and attachments exceed 10 MiB; encoded S/MIME must fit the 20 MiB message limit");
+                MimeBodyPart attachment=new MimeBodyPart();
+                attachment.setDataHandler(new DataHandler(new ByteArrayDataSource(data,"application/octet-stream")));
+                attachment.setFileName(file.name());attachment.setDisposition(Part.ATTACHMENT);
+                mixed.addBodyPart(attachment);
+            }
+            plain=new MimeBodyPart();plain.setContent(mixed);
+        }
         SMIMESignedGenerator sg = new SMIMESignedGenerator();
         sg.addSignerInfoGenerator(new JcaSignerInfoGeneratorBuilder(new JcaDigestCalculatorProviderBuilder().setProvider("BC").build())
             .build(id.signer(external), id.signingCert()));
@@ -41,12 +90,14 @@ public final class MailEngine {
         if (recipient != null) {
             recipient.checkValidity();
             if (!Identity.matchesEmail(recipient, receiver.getAddress())) throw new GeneralSecurityException("Recipient address does not match encryption certificate");
-            boolean[] usage = recipient.getKeyUsage();
-            if (usage == null || usage.length <= 2 || !usage[2]) throw new GeneralSecurityException("Certificate lacks keyEncipherment usage");
-            Identity.validateEncryptionKey(recipient.getPublicKey());
+            Identity.validateCertificatePurpose(recipient,"encryption");
             SMIMEAuthEnvelopedGenerator eg = new SMIMEAuthEnvelopedGenerator();
-            eg.addRecipientInfoGenerator(new JceKEMRecipientInfoGenerator(recipient, CMSAlgorithm.AES256_WRAP)
-                .setKDF(CMSAlgorithm.SHA256_HKDF).setProvider("BC"));
+            if(recipient.getPublicKey() instanceof java.security.interfaces.RSAPublicKey)
+                eg.addRecipientInfoGenerator(new JceKeyTransRecipientInfoGenerator(recipient).setProvider("BC"));
+            else if(recipient.getPublicKey() instanceof java.security.interfaces.ECPublicKey ec){
+                KeyPairGenerator generator=KeyPairGenerator.getInstance("EC","BC");generator.initialize(ec.getParams());KeyPair ephemeral=generator.generateKeyPair();
+                eg.addRecipientInfoGenerator(new JceKeyAgreeRecipientInfoGenerator(CMSAlgorithm.ECDH_SHA256KDF,ephemeral.getPrivate(),ephemeral.getPublic(),CMSAlgorithm.AES256_WRAP).setProvider("BC").addRecipient(recipient));
+            }else eg.addRecipientInfoGenerator(new JceKEMRecipientInfoGenerator(recipient,CMSAlgorithm.AES256_WRAP).setKDF(CMSAlgorithm.SHA256_HKDF).setProvider("BC"));
             protectedPart = eg.generate(protectedPart, new JceCMSContentEncryptorBuilder(CMSAlgorithm.AES256_GCM).setProvider("BC").build());
         }
         MimeMessage m = new MimeMessage(session());
@@ -67,28 +118,44 @@ public final class MailEngine {
         if (bytes.length > MAX_MESSAGE) throw new IOException("Message exceeds 20 MiB limit");
         return new MimeMessage(session(), new ByteArrayInputStream(bytes));
     }
-    public record Opened(String text, boolean encrypted, String signatureAlgorithm, String fingerprint, boolean pinned, boolean fromMatches, X509Certificate signerCertificate) { }
+    public record Opened(String text, boolean encrypted, String signatureAlgorithm, String fingerprint, boolean pinned, boolean fromMatches, X509Certificate signerCertificate, List<Attachment> attachments) {
+        public Opened { attachments=List.copyOf(attachments); }
+    }
     public static Opened open(MimeMessage message, Identity id, X509Certificate pinned) throws Exception {
         return open(message,id,pinned,null);
     }
     @SuppressWarnings("unchecked")
     public static Opened open(MimeMessage message,Identity id,X509Certificate pinned,ExternalKem.Backend token)throws Exception {
         Part part = message;
-        boolean encrypted = new ContentType(part.getContentType()).getParameter("smime-type") != null &&
-            "authEnveloped-data".equalsIgnoreCase(new ContentType(part.getContentType()).getParameter("smime-type"));
-        if (encrypted) {
-            if (id == null || id.encryptionCert()==null || (id.encryptionKey() == null && token==null)) throw new GeneralSecurityException("Load recipient identity to decrypt");
-            SMIMEAuthEnveloped env = new SMIMEAuthEnveloped(message);
-            RecipientInformation r = env.getRecipientInfos().get(new JceKEMRecipientId(id.encryptionCert()));
-            if (r == null) throw new GeneralSecurityException("This identity is not a recipient");
-            id.encryptionCert().checkValidity();
-            byte[] recovered = r.getContent(token!=null?ExternalKem.recipient(id.encryptionCert(),token):new JceKEMAuthEnvelopedRecipient(id.encryptionKey()).setProvider("BC"));
-            part = SMIMEUtil.toMimeBodyPart(recovered);
+        String smimeType=new ContentType(part.getContentType()).getParameter("smime-type");
+        boolean authenticated="authEnveloped-data".equalsIgnoreCase(smimeType);
+        boolean encrypted=authenticated||"enveloped-data".equalsIgnoreCase(smimeType);
+        if(encrypted){
+            if(id==null||id.encryptionCert()==null||(id.encryptionKey()==null&&token==null))throw new GeneralSecurityException("Load recipient identity to decrypt");
+            Identity.validateCertificatePurpose(id.encryptionCert(),"encryption");
+            RecipientInformationStore recipients=authenticated?new SMIMEAuthEnveloped(message).getRecipientInfos():new SMIMEEnveloped(message).getRecipientInfos();
+            RecipientInformation r=recipients.get(new JceKEMRecipientId(id.encryptionCert()));
+            if(r==null)r=recipients.get(new JceKeyTransRecipientId(id.encryptionCert()));
+            if(r==null)r=recipients.get(new JceKeyAgreeRecipientId(id.encryptionCert()));
+            if(r==null)throw new GeneralSecurityException("This identity is not a recipient");
+            Recipient recovery;
+            if(r instanceof KEMRecipientInformation)recovery=token!=null?ExternalKem.recipient(id.encryptionCert(),token):new JceKEMAuthEnvelopedRecipient(id.encryptionKey()).setProvider("BC");
+            else{
+                if(id.encryptionKey()==null)throw new GeneralSecurityException("Conventional decryption requires the matching software .p12 private key");
+                if(r instanceof KeyTransRecipientInformation)recovery=authenticated?new JceKeyTransAuthEnvelopedRecipient(id.encryptionKey()).setProvider("BC"):new JceKeyTransEnvelopedRecipient(id.encryptionKey()).setProvider("BC");
+                else if(r instanceof KeyAgreeRecipientInformation)recovery=authenticated?new JceKeyAgreeAuthEnvelopedRecipient(id.encryptionKey()).setProvider("BC"):new JceKeyAgreeEnvelopedRecipient(id.encryptionKey()).setProvider("BC");
+                else throw new GeneralSecurityException("Unsupported S/MIME recipient type");
+            }
+            part=SMIMEUtil.toMimeBodyPart(r.getContent(recovery));
         }
         SMIMESigned signed;
         if (part.isMimeType("multipart/signed")) signed = new SMIMESigned((MimeMultipart)part.getContent());
         else if ("signed-data".equalsIgnoreCase(new ContentType(part.getContentType()).getParameter("smime-type"))) signed = new SMIMESigned(part);
-        else throw new GeneralSecurityException("Expected S/MIME signed content; unsigned messages are not verified");
+        else {
+            if(!encrypted)throw new GeneralSecurityException("Expected S/MIME signed content; unsigned messages are not verified");
+            List<Attachment> files=new ArrayList<>();StringBuilder content=new StringBuilder();collectContent(part,content,files,0,new int[]{0});
+            return new Opened(content.length()==0?"No plain-text body. HTML is not rendered.":content.toString(),true,"Unsigned","",false,false,null,files);
+        }
         var signers = signed.getSignerInfos().getSigners();
         if (signers.size() != 1) throw new GeneralSecurityException("Expected exactly one signer");
         SignerInformation si = signers.iterator().next();
@@ -96,16 +163,29 @@ public final class MailEngine {
         if (certs.size() != 1) throw new GeneralSecurityException("Missing or ambiguous signing certificate");
         X509Certificate cert = new JcaX509CertificateConverter().setProvider("BC").getCertificate(certs.iterator().next());
         cert.checkValidity();
-        boolean[] usage = cert.getKeyUsage();
-        if (usage == null || !usage[0]) throw new GeneralSecurityException("Signing certificate lacks digitalSignature usage");
+        Identity.validateCertificatePurpose(cert,"signing");
         if (!si.verify(new JcaSimpleSignerInfoVerifierBuilder().setProvider("BC").build(cert))) throw new GeneralSecurityException("INVALID signature");
         String fp = Identity.fingerprint(cert);
         boolean trusted = pinned != null && MessageDigest.isEqual(pinned.getEncoded(), cert.getEncoded());
         Address[] from = message.getFrom();
         boolean matches = from != null && from.length == 1 && from[0] instanceof InternetAddress a && Identity.matchesEmail(cert, a.getAddress());
-        MimeBodyPart body = signed.getContent();
-        if (!body.isMimeType("text/plain")) throw new IOException("This simple reader supports text/plain signed bodies only");
-        return new Opened((String)body.getContent(), encrypted, cert.getPublicKey().getAlgorithm(), fp, trusted, matches, cert);
+        List<Attachment> attachments=new ArrayList<>();StringBuilder content=new StringBuilder();
+        collectContent(signed.getContent(),content,attachments,0,new int[]{0});
+        if(content.length()==0)content.append("No plain-text body. HTML is not rendered.");
+        return new Opened(content.toString(),encrypted,cert.getPublicKey().getAlgorithm(),fp,trusted,matches,cert,attachments);
+    }
+    private static void collectContent(Part part,StringBuilder text,List<Attachment> files,int depth,int[] count)throws Exception{
+        if(depth>12||++count[0]>100)throw new IOException("Signed MIME nesting or part count exceeds limit");
+        if(Part.ATTACHMENT.equalsIgnoreCase(part.getDisposition())||part.getFileName()!=null){
+            if(files.size()>=20)throw new IOException("Too many attachments");byte[] data;
+            try(InputStream in=part.getInputStream()){data=readBounded(in,MAX_MESSAGE);}
+            long total=data.length;for(Attachment file:files)total+=file.data.length;
+            if(total>MAX_MESSAGE)throw new IOException("Attachments exceed message limit");files.add(new Attachment(part.getFileName(),data));return;
+        }
+        if(part.isMimeType("text/plain")){if(text.length()>0)text.append("\n");text.append((String)part.getContent());return;}
+        if(part.isMimeType("multipart/mixed")||part.isMimeType("multipart/alternative")||part.isMimeType("multipart/related")){
+            Multipart multipart=(Multipart)part.getContent();for(int i=0;i<multipart.getCount();i++)collectContent(multipart.getBodyPart(i),text,files,depth+1,count);
+        }
     }
     public static void send(MimeMessage m, String host, int port, String user, String password) throws Exception {
         send(m,host,port,user,password,false);

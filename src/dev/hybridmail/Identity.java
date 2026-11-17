@@ -32,7 +32,10 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
     public static final String PURE_KEM = "ML-KEM-768";
     public static final String HYBRID_KEM = "MLKEM768-ECDH-P256-SHA3-256";
     public String signatureAlgorithm() {
-        return signingCert.getPublicKey().getAlgorithm();
+        PublicKey key=signingCert.getPublicKey();
+        if(key instanceof java.security.interfaces.RSAPublicKey)return "SHA256withRSA";
+        if(key instanceof java.security.interfaces.ECPublicKey ec)return ec.getParams().getCurve().getField().getFieldSize()>256?"SHA384withECDSA":"SHA256withECDSA";
+        return key.getAlgorithm();
     }
     public static Identity generate(String email, boolean hybrid) throws Exception {
         return generate(email,hybrid?HYBRID_SIGN:PURE_SIGN);
@@ -223,15 +226,31 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         KeyStore ks = KeyStore.getInstance("PKCS12", "BC");
         try (InputStream in = Files.newInputStream(file)) { ks.load(in, password); }
         var sc = (X509Certificate)ks.getCertificate(prefix+"sign");
-        if (sc == null) throw new GeneralSecurityException("Missing certificate alias 'sign'");
+        if(sc==null&&!pure){
+            List<String> signing=new ArrayList<>(),encryption=new ArrayList<>();
+            for(String alias:Collections.list(ks.aliases()))if(ks.isKeyEntry(alias)&&ks.getCertificate(alias) instanceof X509Certificate c){
+                if(!(c.getPublicKey() instanceof java.security.interfaces.RSAPublicKey)&&!(c.getPublicKey() instanceof java.security.interfaces.ECPublicKey))continue;
+                try{validateCertificatePurpose(c,"signing");signing.add(alias);}catch(GeneralSecurityException ignored){}
+                try{validateCertificatePurpose(c,"encryption");encryption.add(alias);}catch(GeneralSecurityException ignored){}
+            }
+            if(signing.size()!=1||encryption.size()>1)throw new GeneralSecurityException("Conventional .p12 must have one unambiguous signing key and at most one encryption key");
+            String sign=signing.get(0),enc=encryption.isEmpty()?null:encryption.get(0);
+            return new Identity((X509Certificate)ks.getCertificate(sign),(PrivateKey)ks.getKey(sign,password),enc==null?null:(X509Certificate)ks.getCertificate(enc),enc==null?null:(PrivateKey)ks.getKey(enc,password),null);
+        }
+        if(sc==null)throw new GeneralSecurityException("Missing signing certificate");
         String a = sc.getPublicKey().getAlgorithm();
-        if (!a.equalsIgnoreCase(PURE_SIGN) && !a.equalsIgnoreCase(HYBRID_SIGN) && !a.equalsIgnoreCase(HYBRID_RSA_SIGN) && !a.equalsIgnoreCase(PURE_87_SIGN) && !a.equalsIgnoreCase(HYBRID_87_SIGN) && !a.equalsIgnoreCase(PURE_44_SIGN) && !a.equalsIgnoreCase(HYBRID_44_SIGN) && !a.equalsIgnoreCase(HYBRID_65_P384_SIGN))
+        if (!(sc.getPublicKey() instanceof java.security.interfaces.RSAPublicKey) && !(sc.getPublicKey() instanceof java.security.interfaces.ECPublicKey) && !a.equalsIgnoreCase(PURE_SIGN) && !a.equalsIgnoreCase(HYBRID_SIGN) && !a.equalsIgnoreCase(HYBRID_RSA_SIGN) && !a.equalsIgnoreCase(PURE_87_SIGN) && !a.equalsIgnoreCase(HYBRID_87_SIGN) && !a.equalsIgnoreCase(PURE_44_SIGN) && !a.equalsIgnoreCase(HYBRID_44_SIGN) && !a.equalsIgnoreCase(HYBRID_65_P384_SIGN))
             throw new GeneralSecurityException("Unsupported signing key: " + a);
         return new Identity(sc, (PrivateKey)ks.getKey(prefix+"sign", password), (X509Certificate)ks.getCertificate(prefix+"encrypt"),
             (PrivateKey)ks.getKey(prefix+"encrypt", password), (PrivateKey)ks.getKey("traditional", password));
     }
     /** Supported software/public recipient profiles; token recovery keeps its narrower validation. */
     public static void validateEncryptionKey(PublicKey key)throws Exception{
+        if(key instanceof java.security.interfaces.RSAPublicKey rsa){if(rsa.getModulus().bitLength()<2048)throw new GeneralSecurityException("RSA encryption requires at least 2048 bits");return;}
+        if(key instanceof java.security.interfaces.ECPublicKey){
+            var ec=SubjectPublicKeyInfo.getInstance(key.getEncoded());
+            if(!org.bouncycastle.asn1.x9.X9ObjectIdentifiers.prime256v1.equals(ec.getAlgorithm().getParameters())&&!org.bouncycastle.asn1.sec.SECObjectIdentifiers.secp384r1.equals(ec.getAlgorithm().getParameters()))throw new GeneralSecurityException("ECDH encryption supports named P-256 and P-384");return;
+        }
         var spki=SubjectPublicKeyInfo.getInstance(key.getEncoded());
         if(spki.getAlgorithm().getAlgorithm().equals(org.bouncycastle.asn1.nist.NISTObjectIdentifiers.id_alg_ml_kem_1024))return;
         if(key instanceof CompositePublicKey c && (c.getAlgorithmIdentifier().getAlgorithm().equals(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLKEM1024_ECDH_P384_SHA3_256)||c.getAlgorithmIdentifier().getAlgorithm().equals(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLKEM768_ECDH_P384_SHA3_256))){
@@ -243,6 +262,14 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
             if(point.isInfinity()||!point.isValid())throw new GeneralSecurityException("Invalid P-384 point");return;
         }
         ExternalKem.validatePublicKey(key);
+    }
+    public static void validateCertificatePurpose(X509Certificate certificate,String role)throws Exception{
+        certificate.checkValidity();boolean[] usage=certificate.getKeyUsage();
+        int bit=role.equals("signing")?0:certificate.getPublicKey() instanceof java.security.interfaces.ECPublicKey?4:2;
+        if(usage!=null&&(usage.length<=bit||!usage[bit]))throw new GeneralSecurityException("Certificate does not permit "+role);
+        var eku=certificate.getExtendedKeyUsage();
+        if(eku!=null&&!eku.contains("1.3.6.1.5.5.7.3.4")&&!eku.contains("2.5.29.37.0"))throw new GeneralSecurityException("Certificate does not permit emailProtection");
+        if(role.equals("encryption"))validateEncryptionKey(certificate.getPublicKey());
     }
     public static X509Certificate readCertificate(Path file) throws Exception {
         try (InputStream in = Files.newInputStream(file)) {

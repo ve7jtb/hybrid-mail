@@ -208,7 +208,7 @@ public final class MailApp extends JFrame {
         else{pinnedSigner=certificate;state().saveCertificate("pinned",certificate);status.setText(state().isTrusted(certificate,"signing")?"Trusted signing certificate selected":"Signing certificate selected but not trusted; use Mark trusted in Certificates");}
     }
     private void exportContact(){
-        var contact=selectedContact();if(contact==null)return;Path target=choose(true,"Export certificate (.pem or .cer)");if(target==null)return;
+        var contact=selectedContact();if(contact==null)return;Path target=chooseSave("Export certificate", "recipient-certificate.pem", "pem", "cer");if(target==null)return;
         try{var certificate=state().contactCertificate(contact);Files.write(target,target.toString().toLowerCase().endsWith(".pem")?DesktopState.pem(certificate):certificate.getEncoded(),StandardOpenOption.CREATE_NEW);status.setText("Certificate exported");}catch(Exception e){error(e);}
     }
     private void removeContact(){
@@ -417,7 +417,7 @@ public final class MailApp extends JFrame {
         p.add(new JLabel("One password-protected .p12 file stores both identities. No YubiKey is changed."));
         p.add(new JLabel("New PKCS#12 password (12+ characters)"));p.add(pass);
         if(JOptionPane.showConfirmDialog(this,p,"Create software identities (.p12)",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){pass.setText("");return;}
-        Path file=choose(true,"Save new identity bundle (choose a new .p12 filename)");if(file==null){pass.setText("");return;}
+        Path file=chooseSave("Save new identity bundle", "identity.p12", "p12");if(file==null){pass.setText("");return;}
         char[] password=pass.getPassword();pass.setText("");String address=email.getText().trim(),additional=extraEmails.getText();TokenProfile profile=(TokenProfile)mode.getSelectedItem();
         job("Generating four software keys…",()->{try{
             if(password.length<12)throw new IllegalArgumentException("Use at least 12 characters for the identity password");
@@ -442,7 +442,7 @@ public final class MailApp extends JFrame {
     private void export(boolean signing) {
         if(identity==null){error(new IOException("Load an identity first"));return;}
         X509Certificate c=signing?identity.signingCert():identity.encryptionCert();if(c==null){error(new IOException("No certificate available"));return;}
-        Path file=choose(true,"Export public certificate (.pem or .cer)");if(file==null)return;
+        Path file=chooseSave("Export public certificate", signing?"signing-certificate.pem":"encryption-certificate.pem", "pem", "cer");if(file==null)return;
         job("Exporting certificate…",()->{Files.write(file,file.getFileName().toString().toLowerCase().endsWith(".pem")?DesktopState.pem(c):c.getEncoded(),StandardOpenOption.CREATE_NEW);return "Certificate exported";},status::setText);
     }
     private void importCert(boolean pin){
@@ -466,7 +466,7 @@ public final class MailApp extends JFrame {
             if(!Identity.matchesEmail(identity.signingCert(),from.getText().trim()))throw new IOException("From address does not match your signing certificate");
             if(encrypt.isSelected()&&!Identity.matchesEmail(recipient,to.getText().trim())){tabs.setSelectedIndex(4);throw new IOException("Choose an encryption certificate matching the To address, or turn off optional encryption to send signed-only mail");}
         }catch(Exception e){error(e);return;}
-        Path file=send?null:choose(true,"Save signed S/MIME message (.eml)");if(!send&&file==null)return;
+        Path file=send?null:chooseSave("Save signed S/MIME message", "message.eml", "eml");if(!send&&file==null)return;
         Account a=send?account(true):null;if(send&&a==null)return;
         Identity id=identity; X509Certificate r=encrypt.isSelected()?recipient:null; ExternalMu.Backend backend=adapter==null?null:ExternalMu.executable(adapter);
         String f=from.getText().trim(),t=to.getText().trim(),s=subject.getText(),b=body.getText();
@@ -535,6 +535,28 @@ public final class MailApp extends JFrame {
         new SwingWorker<T,Void>(){protected T doInBackground()throws Exception{return task.call();}protected void done(){setEnabled(true);setCursor(Cursor.getDefaultCursor());try{T result=get();status.setText("Ready");success.accept(result);}catch(Exception e){error(e.getCause()==null?e:e.getCause());}}}.execute();
     }
     private void error(Throwable e){String message=e.getMessage();status.setText("Operation failed");JOptionPane.showMessageDialog(this,message==null?e.getClass().getSimpleName():message,"PQ Mail",JOptionPane.ERROR_MESSAGE);}
+    private Path chooseSave(String title,String filename,String... extensions){
+        JFileChooser chooser=new JFileChooser();chooser.setDialogTitle(title);
+        chooser.setAcceptAllFileFilterUsed(false);
+        for(String extension:extensions)chooser.addChoosableFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+            extension.equals("pem")?"PEM certificate (*.pem)":extension.equals("cer")?"DER certificate (*.cer)":extension.equals("p12")?"PKCS#12 identity (*.p12)":"Email message (*.eml)",extension));
+        chooser.setFileFilter(chooser.getChoosableFileFilters()[0]);
+        chooser.setSelectedFile(new java.io.File(filename));
+        chooser.addPropertyChangeListener(JFileChooser.FILE_FILTER_CHANGED_PROPERTY,event->{
+            var selected=chooser.getSelectedFile();
+            if(selected!=null && event.getNewValue() instanceof javax.swing.filechooser.FileNameExtensionFilter filter){
+                String name=selected.getName();
+                for(String extension:extensions)if(name.toLowerCase(java.util.Locale.ROOT).endsWith("."+extension)){
+                    chooser.setSelectedFile(new java.io.File(selected.getParentFile(),name.substring(0,name.length()-extension.length())+filter.getExtensions()[0]));break;
+                }
+            }
+        });
+        if(chooser.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return null;
+        Path selected=chooser.getSelectedFile().toPath();String name=selected.getFileName().toString();
+        for(String extension:extensions)if(name.toLowerCase(java.util.Locale.ROOT).endsWith("."+extension))return selected;
+        String extension=((javax.swing.filechooser.FileNameExtensionFilter)chooser.getFileFilter()).getExtensions()[0];
+        return selected.resolveSibling(name+"."+extension);
+    }
     private Path choose(boolean save,String title){JFileChooser c=new JFileChooser();c.setDialogTitle(title);return (save?c.showSaveDialog(this):c.showOpenDialog(this))==JFileChooser.APPROVE_OPTION?c.getSelectedFile().toPath():null;}
     private static JPanel panel(){JPanel p=new JPanel(new BorderLayout(12,12));p.setBorder(new EmptyBorder(16,8,8,8));return p;}
     private static JPanel row(String name,JComponent field){JPanel p=new JPanel(new BorderLayout(8,0));JLabel l=new JLabel(name);l.setPreferredSize(new Dimension(80,24));p.add(l,BorderLayout.WEST);p.add(field);return p;}

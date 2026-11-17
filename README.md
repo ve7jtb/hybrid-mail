@@ -20,11 +20,10 @@ This is an experimental interoperability application. Generated certificates are
 |---|---|---|
 | Pure 65 / 768 | ML-DSA-65 | ML-KEM-768 |
 | Hybrid 65 / P-256 | MLDSA65-ECDSA-P256-SHA512 | MLKEM768-ECDH-P256-SHA3-256 |
-| RSA token demo | MLDSA65-RSA3072-PSS-SHA512 | ML-KEM-768 or the P-256 hybrid recipient profile |
 | Pure 87 / 1024 | ML-DSA-87 | ML-KEM-1024 |
 | Hybrid 87 / P-384 | MLDSA87-ECDSA-P384-SHA512 | MLKEM1024-ECDH-P384-SHA3-256 |
 
-Software creation offers the pure and ECDSA hybrid profiles. The existing RSA demo uses both signing keys through PKCS#11. The new empty-device provisioning flow always creates all four keys for the 87 / 1024 pure and P-384 hybrid profiles. The dialog choice only determines which identity is selected initially; both identities are saved.
+Software creation offers the pure and ECDSA hybrid profiles. The new empty-device provisioning flow always creates all four keys for the 87 / 1024 pure and P-384 hybrid profiles. The dialog choice only determines which identity is selected initially; both identities are saved.
 
 Messages use opaque CMS SignedData, optionally wrapped in AuthEnvelopedData. Encryption uses KEMRecipientInfo, HKDF-SHA256, AES-256 key wrap and AES-256-GCM. Encryption is performed on the host with the recipient's public key; the recipient's YubiKey performs private-key decapsulation and ECDH during decryption. The host combines hybrid secrets.
 

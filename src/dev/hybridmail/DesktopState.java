@@ -62,7 +62,7 @@ public final class DesktopState {
         X509Certificate signing=Identity.readCertificate(folder.resolve("signing.cer"));
         X509Certificate encryption=Files.exists(folder.resolve("encryption.cer"))?Identity.readCertificate(folder.resolve("encryption.cer")):null;
         String alg=signing.getPublicKey().getAlgorithm();
-        if(!Set.of(Identity.PURE_SIGN,Identity.HYBRID_SIGN,Identity.HYBRID_RSA_SIGN,Identity.PURE_87_SIGN,Identity.HYBRID_87_SIGN).contains(alg))throw new IOException("Unsupported saved signing identity");
+        if(!Set.of(Identity.PURE_SIGN,Identity.HYBRID_SIGN,Identity.HYBRID_RSA_SIGN,Identity.PURE_87_SIGN,Identity.HYBRID_87_SIGN,Identity.PURE_44_SIGN,Identity.HYBRID_44_SIGN,Identity.HYBRID_65_P384_SIGN).contains(alg))throw new IOException("Unsupported saved signing identity");
         if(encryption!=null)Identity.validateEncryptionKey(encryption.getPublicKey());
         return new Identity(signing,null,encryption,null,null);
     }

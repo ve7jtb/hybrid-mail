@@ -30,6 +30,7 @@ public final class ExternalMu {
         public byte[] getEncoded() { return null; }
     }
     public static final Provider PROVIDER = new Provider("ExternalMu", "1.0", "External mu ML-DSA adapter") {{
+        put("Signature.ML-DSA-44", MuSignature.class.getName());
         put("Signature.ML-DSA-65", MuSignature.class.getName());
         put("Signature.ML-DSA-87", MuSignature.class.getName());
         put("Signature.SHA384withECDSA", Ec384Signature.class.getName());

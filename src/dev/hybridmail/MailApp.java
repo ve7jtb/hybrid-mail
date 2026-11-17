@@ -364,19 +364,19 @@ public final class MailApp extends JFrame {
     private void provisionYubiKey(){
         try{
             JTextField serial=new JTextField(state().get("token.serial","")),email=new JTextField(from.getText());
-            JComboBox<String> profile=new JComboBox<>(new String[]{"Use pure ML-DSA-87 + ML-KEM-1024 initially","Use P-384 hybrid signing + encryption initially"});profile.setSelectedIndex(1);
-            JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("Target YubiKey serial"));form.add(serial);form.add(new JLabel("Certificate email address"));form.add(email);form.add(new JLabel("Initial selected identity (both options create all four keys and both identities)"));form.add(profile);
+            JComboBox<TokenProfile> profile=new JComboBox<>(TokenProfile.values());profile.setSelectedItem(TokenProfile.LEVEL5);
+            JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("Target YubiKey serial"));form.add(serial);form.add(new JLabel("Certificate email address"));form.add(email);form.add(new JLabel("Security profile (all options create four keys and both pure/hybrid identities)"));form.add(profile);
             form.add(new JLabel("Requires all 24 user PIV slots empty. Factory attestation is excluded."));
             form.add(new JLabel("No reset, import, deletion or replacement of existing keys is performed."));
             if(JOptionPane.showConfirmDialog(this,form,"Create YubiKey identity",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
-            String number=serial.getText().trim(),address=email.getText().trim();new jakarta.mail.internet.InternetAddress(address,true).validate();boolean hybrid=profile.getSelectedIndex()==1;
-            job("Checking every PIV slot on YubiKey "+number+"…",()->{TokenProvision.check(number);return true;},ok->provisionCredentials(number,address,hybrid));
+            String number=serial.getText().trim(),address=email.getText().trim();new jakarta.mail.internet.InternetAddress(address,true).validate();TokenProfile selected=(TokenProfile)profile.getSelectedItem();
+            job("Checking every PIV slot on YubiKey "+number+"…",()->{TokenProvision.check(number);return true;},ok->provisionCredentials(number,address,selected));
         }catch(Exception e){error(e);}
     }
-    private void provisionCredentials(String serial,String email,boolean hybrid){
+    private void provisionCredentials(String serial,String email,TokenProfile profile){
         JPasswordField pin=new JPasswordField(),management=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default management key",true);
         JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("YubiKey "+serial+" passed the empty-slot check."));
-        form.add(new JLabel("Generate ML-DSA-87 in 9c; ML-KEM-1024 in 9d."));form.add(new JLabel("Also generate ECDSA P-384 in 9a and ECDH P-384 in 82."));
+        form.add(new JLabel("Generate "+profile.ml+" in 9c; "+profile.kem+" in 9d."));form.add(new JLabel("Also generate ECDSA and ECDH "+(profile.category==2?"P-256":"P-384")+" in 9a and 82."));
         form.add(new JLabel("All keys: PIN Always, Touch Never. Private keys never leave the device."));
         form.add(new JLabel("YubiKey PIN"));form.add(pin);form.add(factory);form.add(new JLabel("Management key (hex, only if not factory default)"));form.add(management);
         form.add(new JLabel("Creating keys is not atomic: a failure can leave some slots provisioned. No automatic retry."));
@@ -386,18 +386,18 @@ public final class MailApp extends JFrame {
         job("Generating keys on YubiKey "+serial+"…",()->{
             Path parent=state().directory().resolve("token-setups");Files.createDirectories(parent);Path folder=parent.resolve(java.util.UUID.randomUUID().toString());
             try{
-                var keys=TokenProvision.create(serial,hybrid,folder,secret,admin);
-                var manifest=new java.util.Properties();manifest.setProperty("serial",serial);manifest.setProperty("email",email);manifest.setProperty("hybrid","true");manifest.setProperty("preferHybrid",Boolean.toString(hybrid));
+                var keys=TokenProvision.create(serial,profile,folder,secret,admin);
+                var manifest=new java.util.Properties();manifest.setProperty("serial",serial);manifest.setProperty("email",email);manifest.setProperty("hybrid","true");manifest.setProperty("preferHybrid","true");manifest.setProperty("profile",profile.code);
                 try(var out=Files.newOutputStream(folder.resolve("setup.properties"),StandardOpenOption.CREATE_NEW)){manifest.store(out,"Public setup metadata; keys remain on YubiKey");}
-                return issueTokenIdentities(serial,email,true,keys,hybrid);
+                return issueTokenIdentities(serial,email,true,keys,true,profile);
             }finally{Arrays.fill(secret,'\0');Arrays.fill(admin,'\0');if(identity!=null)state().activateIdentity(identity);}
         },created->{setIdentity(created);refreshSaved();from.setText(email);status.setText("YubiKey identities saved. Keys generated on serial "+serial+"; no private keys stored on this Mac.");});
     }
-    private Identity issueTokenIdentities(String serial,String email,boolean hybrid,java.util.Map<String,java.security.PublicKey> keys,boolean preferHybrid)throws Exception{
+    private Identity issueTokenIdentities(String serial,String email,boolean hybrid,java.util.Map<String,java.security.PublicKey> keys,boolean preferHybrid,TokenProfile profile)throws Exception{
                 state().set("token.serial",serial);state().set("token.rsaSlot","9a");state().set("token.kemSlot","9d");state().set("token.ecdhSlot","82");state().activate();
                 String signer=DesktopState.resources().resolve("adapters/pkcs11-mu.py").toString();Identity selected=null;
                 for(boolean composite:hybrid?new boolean[]{!preferHybrid,preferHybrid}:new boolean[]{false}){
-                    selected=Identity.forToken87(email,keys.get("9c"),composite?keys.get("9a"):null,keys.get("9d"),composite?keys.get("82"):null,ExternalMu.executable(signer));
+                    selected=Identity.forTokenProfile(email,profile,keys.get("9c"),composite?keys.get("9a"):null,keys.get("9d"),composite?keys.get("82"):null,ExternalMu.executable(signer));
                     String id=state().remember(selected,email+" · "+selected.signatureAlgorithm(),null);state().bindToken(id,serial,"9a","9d","82");
                 }return selected;
     }
@@ -407,8 +407,9 @@ public final class MailApp extends JFrame {
             var values=new java.util.Properties();try(var input=Files.newInputStream(manifest)){values.load(input);}
             String serial=values.getProperty("serial",""),email=values.getProperty("email","");boolean hybrid=Boolean.parseBoolean(values.getProperty("hybrid","false"));
             new jakarta.mail.internet.InternetAddress(email,true).validate();
-            var keys=TokenProvision.read(serial,hybrid,manifest.getParent());
-            try{return issueTokenIdentities(serial,email,hybrid,keys,Boolean.parseBoolean(values.getProperty("preferHybrid",Boolean.toString(hybrid))));}finally{if(identity!=null)state().activateIdentity(identity);}
+            TokenProfile profile=TokenProfile.parse(values.getProperty("profile","level5"));
+            var keys=values.containsKey("profile")?TokenProvision.read(serial,profile,manifest.getParent()):TokenProvision.read(serial,hybrid,manifest.getParent());
+            try{return issueTokenIdentities(serial,email,hybrid,keys,Boolean.parseBoolean(values.getProperty("preferHybrid",Boolean.toString(hybrid))),profile);}finally{if(identity!=null)state().activateIdentity(identity);}
         },created->{setIdentity(created);refreshSaved();status.setText("Pending public certificates completed for the existing YubiKey keys");});
     }
     private void generate() {

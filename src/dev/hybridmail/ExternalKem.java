@@ -70,17 +70,18 @@ public final class ExternalKem {
         Identity.validateEncryptionKey(pub);
         boolean hybrid=pub instanceof CompositePublicKey;
         boolean strong=pub.getAlgorithm().equals(Identity.PURE_1024_KEM)||pub.getAlgorithm().equals(Identity.HYBRID_1024_KEM);
-        int mlSize=strong?1568:1088, ecSize=strong?97:65;
+        boolean p384=strong||pub.getAlgorithm().equals(Identity.HYBRID_768_P384_KEM);
+        int mlSize=strong?1568:1088, ecSize=p384?97:65;
         if(ciphertext.length!=mlSize+(hybrid?ecSize:0))throw new GeneralSecurityException("Invalid KEM ciphertext length");
         if(!hybrid)return requireSecret(backend.decapsulate(pub,ciphertext));
         var key=(CompositePublicKey)pub;
         byte[] ml=null,ec=null;
         byte[] traditionalCt=Arrays.copyOfRange(ciphertext,mlSize,mlSize+ecSize);
-        PublicKey peer=point(traditionalCt,strong); // validate before any PIN/device operation
+        PublicKey peer=point(traditionalCt,p384); // validate before any PIN/device operation
         try{
             ml=requireSecret(backend.decapsulate(key.getPublicKeys().get(0),Arrays.copyOf(ciphertext,mlSize)));
             ec=backend.derive(key.getPublicKeys().get(1),peer);
-            if(ec==null||ec.length!=(strong?48:32))throw new GeneralSecurityException("Invalid ECDH shared-secret length");
+            if(ec==null||ec.length!=(p384?48:32))throw new GeneralSecurityException("Invalid ECDH shared-secret length");
             MessageDigest combiner=MessageDigest.getInstance("SHA3-256");
             combiner.update(ml);combiner.update(ec);combiner.update(traditionalCt);
             combiner.update(ECUtil.getUncompressedSubjectPublicKeyBytes(SubjectPublicKeyInfo.getInstance(key.getPublicKeys().get(1).getEncoded()),BouncyCastleProvider.CONFIGURATION));

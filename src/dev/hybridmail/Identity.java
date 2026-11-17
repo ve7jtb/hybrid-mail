@@ -21,6 +21,10 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
     public static final String PURE_SIGN = "ML-DSA-65";
     public static final String HYBRID_SIGN = "MLDSA65-ECDSA-P256-SHA512";
     public static final String HYBRID_RSA_SIGN = "MLDSA65-RSA3072-PSS-SHA512";
+    public static final String PURE_44_SIGN = "ML-DSA-44";
+    public static final String HYBRID_44_SIGN = "MLDSA44-ECDSA-P256-SHA256";
+    public static final String HYBRID_65_P384_SIGN = "MLDSA65-ECDSA-P384-SHA512";
+    public static final String HYBRID_768_P384_KEM = "MLKEM768-ECDH-P384-SHA3-256";
     public static final String PURE_87_SIGN = "ML-DSA-87";
     public static final String HYBRID_87_SIGN = "MLDSA87-ECDSA-P384-SHA512";
     public static final String PURE_1024_KEM = "ML-KEM-1024";
@@ -35,10 +39,10 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
     }
     public static Identity generate(String email,String alg)throws Exception{
         new jakarta.mail.internet.InternetAddress(email,true).validate();
-        if(!Set.of(PURE_SIGN,HYBRID_SIGN,HYBRID_RSA_SIGN,PURE_87_SIGN,HYBRID_87_SIGN).contains(alg))throw new GeneralSecurityException("Unsupported signing profile");
+        if(!Set.of(PURE_SIGN,HYBRID_SIGN,HYBRID_RSA_SIGN,PURE_87_SIGN,HYBRID_87_SIGN,PURE_44_SIGN,HYBRID_44_SIGN,HYBRID_65_P384_SIGN).contains(alg))throw new GeneralSecurityException("Unsupported signing profile");
         boolean hybrid=alg.startsWith("MLDSA");
         KeyPair s=KeyPairGenerator.getInstance(alg,"BC").generateKeyPair();
-        String kem=alg.equals(PURE_87_SIGN)?PURE_1024_KEM:alg.equals(HYBRID_87_SIGN)?HYBRID_1024_KEM:hybrid?HYBRID_KEM:PURE_KEM;
+        String kem=alg.equals(HYBRID_65_P384_SIGN)?HYBRID_768_P384_KEM:alg.equals(PURE_87_SIGN)?PURE_1024_KEM:alg.equals(HYBRID_87_SIGN)?HYBRID_1024_KEM:hybrid?HYBRID_KEM:PURE_KEM;
         KeyPair k=KeyPairGenerator.getInstance(kem,"BC").generateKeyPair();
         X509Certificate sc = cert(email, s.getPublic(), s.getPrivate(), alg, true);
         X509Certificate kc = cert(email, k.getPublic(), s.getPrivate(), alg, false);
@@ -94,16 +98,19 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         return new Identity(certificate,null,null,null,null);
     }
     public static Identity forToken87(String email,PublicKey ml,PublicKey ec,PublicKey kem,PublicKey ecdh,ExternalMu.Backend backend)throws Exception{
+        return forTokenProfile(email,TokenProfile.LEVEL5,ml,ec,kem,ecdh,backend);
+    }
+    static Identity forTokenProfile(String email,TokenProfile profile,PublicKey ml,PublicKey ec,PublicKey kem,PublicKey ecdh,ExternalMu.Backend backend)throws Exception{
         new jakarta.mail.internet.InternetAddress(email,true).validate();
-        if(!PURE_87_SIGN.equals(ml.getAlgorithm()))throw new GeneralSecurityException("Expected ML-DSA-87");
+        if(!profile.ml.equals(ml.getAlgorithm())||!profile.kem.equals(kem.getAlgorithm()))throw new GeneralSecurityException("Token keys do not match selected profile");
         PublicKey signing=ml,encryption=kem;
         if(ec!=null){
-            var params=AlgorithmParameters.getInstance("EC","BC");params.init(new java.security.spec.ECGenParameterSpec("secp384r1"));
+            var params=AlgorithmParameters.getInstance("EC","BC");params.init(new java.security.spec.ECGenParameterSpec(profile.curve));
             var expected=params.getParameterSpec(java.security.spec.ECParameterSpec.class);
-            if(!(ec instanceof java.security.interfaces.ECPublicKey e)||!e.getParams().getCurve().equals(expected.getCurve())||!e.getParams().getOrder().equals(expected.getOrder())||!e.getParams().getGenerator().equals(expected.getGenerator()))throw new GeneralSecurityException("Expected P-384 signing key");
-            signing=new CompositePublicKey(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLDSA87_ECDSA_P384_SHA512,ml,ec);
-            encryption=new CompositePublicKey(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLKEM1024_ECDH_P384_SHA3_256,kem,ecdh);
-        }else if(!PURE_1024_KEM.equals(kem.getAlgorithm()))throw new GeneralSecurityException("Expected ML-KEM-1024");
+            if(!(ec instanceof java.security.interfaces.ECPublicKey e)||!e.getParams().getCurve().equals(expected.getCurve())||!e.getParams().getOrder().equals(expected.getOrder())||!e.getParams().getGenerator().equals(expected.getGenerator())||e.getParams().getCofactor()!=expected.getCofactor())throw new GeneralSecurityException("Wrong ECDSA curve for selected profile");
+            signing=new CompositePublicKey(profile.signingOid,ml,ec);
+            encryption=new CompositePublicKey(profile.kemOid,kem,ecdh);
+        }else if(ecdh!=null)throw new GeneralSecurityException("Both classical components are required for hybrid mode");
         validateEncryptionKey(encryption);
         var sc=cert(email,signing,externalSigner(signing,null,backend),true);sc.verify(signing,"BC");
         var kc=cert(email,encryption,externalSigner(signing,null,backend),false);kc.verify(signing,"BC");
@@ -175,7 +182,7 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         var sc = (X509Certificate)ks.getCertificate("sign");
         if (sc == null) throw new GeneralSecurityException("Missing certificate alias 'sign'");
         String a = sc.getPublicKey().getAlgorithm();
-        if (!a.equalsIgnoreCase(PURE_SIGN) && !a.equalsIgnoreCase(HYBRID_SIGN) && !a.equalsIgnoreCase(HYBRID_RSA_SIGN) && !a.equalsIgnoreCase(PURE_87_SIGN) && !a.equalsIgnoreCase(HYBRID_87_SIGN))
+        if (!a.equalsIgnoreCase(PURE_SIGN) && !a.equalsIgnoreCase(HYBRID_SIGN) && !a.equalsIgnoreCase(HYBRID_RSA_SIGN) && !a.equalsIgnoreCase(PURE_87_SIGN) && !a.equalsIgnoreCase(HYBRID_87_SIGN) && !a.equalsIgnoreCase(PURE_44_SIGN) && !a.equalsIgnoreCase(HYBRID_44_SIGN) && !a.equalsIgnoreCase(HYBRID_65_P384_SIGN))
             throw new GeneralSecurityException("Unsupported signing key: " + a);
         return new Identity(sc, (PrivateKey)ks.getKey("sign", password), (X509Certificate)ks.getCertificate("encrypt"),
             (PrivateKey)ks.getKey("encrypt", password), (PrivateKey)ks.getKey("traditional", password));
@@ -184,8 +191,9 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
     public static void validateEncryptionKey(PublicKey key)throws Exception{
         var spki=SubjectPublicKeyInfo.getInstance(key.getEncoded());
         if(spki.getAlgorithm().getAlgorithm().equals(org.bouncycastle.asn1.nist.NISTObjectIdentifiers.id_alg_ml_kem_1024))return;
-        if(key instanceof CompositePublicKey c && c.getAlgorithmIdentifier().getAlgorithm().equals(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLKEM1024_ECDH_P384_SHA3_256)){
-            if(c.getPublicKeys().size()!=2 || !SubjectPublicKeyInfo.getInstance(c.getPublicKeys().get(0).getEncoded()).getAlgorithm().getAlgorithm().equals(org.bouncycastle.asn1.nist.NISTObjectIdentifiers.id_alg_ml_kem_1024))throw new GeneralSecurityException("Expected ML-KEM-1024 component");
+        if(key instanceof CompositePublicKey c && (c.getAlgorithmIdentifier().getAlgorithm().equals(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLKEM1024_ECDH_P384_SHA3_256)||c.getAlgorithmIdentifier().getAlgorithm().equals(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLKEM768_ECDH_P384_SHA3_256))){
+            var expectedMl=c.getAlgorithmIdentifier().getAlgorithm().equals(org.bouncycastle.asn1.iana.IANAObjectIdentifiers.id_MLKEM768_ECDH_P384_SHA3_256)?org.bouncycastle.asn1.nist.NISTObjectIdentifiers.id_alg_ml_kem_768:org.bouncycastle.asn1.nist.NISTObjectIdentifiers.id_alg_ml_kem_1024;
+            if(c.getPublicKeys().size()!=2 || !SubjectPublicKeyInfo.getInstance(c.getPublicKeys().get(0).getEncoded()).getAlgorithm().getAlgorithm().equals(expectedMl))throw new GeneralSecurityException("Incorrect ML-KEM component");
             var ec=SubjectPublicKeyInfo.getInstance(c.getPublicKeys().get(1).getEncoded());
             if(!ec.getAlgorithm().getAlgorithm().equals(org.bouncycastle.asn1.x9.X9ObjectIdentifiers.id_ecPublicKey)||!org.bouncycastle.asn1.sec.SECObjectIdentifiers.secp384r1.equals(ec.getAlgorithm().getParameters()))throw new GeneralSecurityException("Expected named P-384 component");
             var point=org.bouncycastle.asn1.sec.SECNamedCurves.getByName("secp384r1").getCurve().decodePoint(ec.getPublicKeyData().getBytes());

@@ -18,12 +18,15 @@ This is an experimental interoperability application. Generated certificates are
 
 | Profile | Signing | Encryption / KEM |
 |---|---|---|
+| Level 2 pure | ML-DSA-44 | ML-KEM-768 |
+| Level 2 hybrid | MLDSA44-ECDSA-P256-SHA256 | MLKEM768-ECDH-P256-SHA3-256 |
+| Level 3 hybrid | MLDSA65-ECDSA-P384-SHA512 | MLKEM768-ECDH-P384-SHA3-256 |
 | Pure 65 / 768 | ML-DSA-65 | ML-KEM-768 |
 | Hybrid 65 / P-256 | MLDSA65-ECDSA-P256-SHA512 | MLKEM768-ECDH-P256-SHA3-256 |
 | Pure 87 / 1024 | ML-DSA-87 | ML-KEM-1024 |
 | Hybrid 87 / P-384 | MLDSA87-ECDSA-P384-SHA512 | MLKEM1024-ECDH-P384-SHA3-256 |
 
-Software creation offers the pure and ECDSA hybrid profiles. The new empty-device provisioning flow always creates all four keys for the 87 / 1024 pure and P-384 hybrid profiles. The dialog choice only determines which identity is selected initially; both identities are saved.
+Software creation offers the pure and ECDSA hybrid profiles. The empty-device provisioning flow offers levels 2, 3 and 5. Every option creates four keys and saves both pure and hybrid identities for selection when sending. Level labels refer to the ML-DSA NIST category; ML-KEM-768 is category 3 in both levels 2 and 3. These labels do not claim FIPS validation of the device or application.
 
 Messages use opaque CMS SignedData, optionally wrapped in AuthEnvelopedData. Encryption uses KEMRecipientInfo, HKDF-SHA256, AES-256 key wrap and AES-256-GCM. Encryption is performed on the host with the recipient's public key; the recipient's YubiKey performs private-key decapsulation and ECDH during decryption. The host combines hybrid secrets.
 
@@ -42,12 +45,14 @@ For Gmail, create your own Google OAuth client of type **Desktop app**, add your
 
 **Create identity on empty YubiKey…** checks every user PIV slot before asking for provisioning credentials and checks again under an exclusive device connection before generation. Any occupied or unreadable slot stops the operation. The factory attestation slot is excluded. The flow does not reset a device or replace existing keys.
 
-| Slot | Pure profile | Additional hybrid component |
-|---|---|---|
-| `9c` | ML-DSA-87 signing | — |
-| `9d` | ML-KEM-1024 decryption | — |
-| `9a` | — | ECDSA P-384 signing |
-| `82` | — | ECDH P-384 decryption |
+| Slot | Level 2 | Level 3 | Level 5 |
+|---|---|---|---|
+| `9c` signing | ML-DSA-44 | ML-DSA-65 | ML-DSA-87 |
+| `9a` signing | ECDSA P-256 / SHA-256 | ECDSA P-384 / SHA-384 | ECDSA P-384 / SHA-384 |
+| `9d` decryption | ML-KEM-768 | ML-KEM-768 | ML-KEM-1024 |
+| `82` decryption | ECDH P-256 | ECDH P-384 | ECDH P-384 |
+
+Composite KEM identifiers follow [draft-ietf-lamps-cms-composite-kem-04](https://datatracker.ietf.org/doc/html/draft-ietf-lamps-cms-composite-kem-04), including MLKEM768-ECDH-P384-SHA3-256. ML-DSA categories are defined in [FIPS 204](https://csrc.nist.gov/pubs/fips/204/final); ML-KEM parameters in [FIPS 203](https://nvlpubs.nist.gov/nistpubs/fips/nist.fips.203.pdf).
 
 Keys are generated on the device with PIN policy **Always** and touch policy **Never**. Local identity records contain public certificates, serial and slot bindings, not token private keys. A missing or different device produces a connect/retry prompt. Generation is not atomic: a partial failure leaves generated keys in place and a subsequent creation attempt refuses the nonempty device. **Finish pending certificates…** can resume certificate issuance after successful key generation without generating keys again.
 
@@ -96,7 +101,7 @@ The display name and repository changed to PQ Mail. Existing settings, identity 
 ## Validation and limitations
 
 - Physical Beta0 hardware tests passed for pure ML-DSA-65 and composite MLDSA65-RSA3072-PSS-SHA512 signing through PKCS#11, and pure ML-KEM-768 / hybrid MLKEM768-ECDH-P256 decryption. Saved messages were independently reopened and verified. The earlier ykman external-μ signing demo also passed.
-- Automated tests cover software profiles, simulated external signing/decryption including 87 / 1024 and P-384, serialization, tampering, key matching, PIN cache cleanup, identity bindings, and provisioning refusal/partial failures. Simulators do not establish physical-device support. Fresh-device generation and high-profile hardware round trips still require an empty compatible key.
+- Automated tests cover software profiles, simulated external signing/decryption including all three provisioning levels in pure and hybrid modes, serialization, tampering, key matching, PIN cache cleanup, identity bindings, and provisioning refusal/partial failures. Simulators do not establish physical-device support. Fresh-device generation and high-profile hardware round trips still require an empty compatible key.
 - Gmail OAuth, Keychain restoration after restart, and the ten-message IMAP inbox have been observed in the Mac app. Live SMTP delivery, third-party interoperability, Windows hardware use and a production security audit are not established by these tests.
 - The reader handles signed text/plain mail and AuthEnvelopedData, plus ordinary plain text explicitly marked unsigned. HTML rendering, attachments and legacy EnvelopedData are not supported. Verification/decryption failures are not downgraded to unsigned mail.
 - Trust uses exact certificate fingerprints, validity and key-usage checks. There is no CA chain building or revocation checking. Outer mail headers are not signed or encrypted. The app distinguishes signature validity from trust and flags sender/certificate mismatches.

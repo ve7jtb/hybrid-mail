@@ -7,7 +7,7 @@ def load(name,path):
 SIGN=load('sign87','adapters/pkcs11-mu.py');KEM=load('kem87','adapters/pkcs11-kem.py')
 class Profiles87(unittest.TestCase):
  def test_signature_lengths_options_and_pin_clear(self):
-  for algorithm,publen,hashlen,siglen,option in [('ML-DSA-87',2614,64,4627,'mu:1'),('ECDSA-P384-SHA384',120,48,102,'digest:sha384')]:
+  for algorithm,publen,hashlen,siglen,option in [('ML-DSA-44',1334,64,2420,'mu:1'),('ML-DSA-87',2614,64,4627,'mu:1'),('ECDSA-P384-SHA384',120,48,102,'digest:sha384')]:
    public=b'p'*publen;payload=b'm'*hashlen;pin=bytearray(b'123456')
    request=io.BytesIO(algorithm.encode()+b'\n'+base64.b64encode(public)+b'\n'+base64.b64encode(payload)+b'\n')
    self.assertEqual(SIGN.read_request(request),(algorithm,public,payload))

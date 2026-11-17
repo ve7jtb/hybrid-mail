@@ -29,10 +29,15 @@ fn require_empty(card:&mut impl Card)->Result<()> {
  for slot in Slot::key_slots(){if !card.empty(slot)?{return Err(format!("YubiKey is not empty: PIV slot {:02x} is provisioned. No keys were changed.",slot as u8));}}
  Ok(())
 }
-fn generate(card:&mut impl Card,_hybrid:bool,mut save:impl FnMut(Slot,Vec<u8>)->Result<()>)->Result<()> {
+fn generate(card:&mut impl Card,profile:&str,mut save:impl FnMut(Slot,Vec<u8>)->Result<()>)->Result<()> {
  require_empty(card)?;
- let plan=[(Slot::Signature,KeyType::MlDsa87),(Slot::KeyManagement,KeyType::MlKem1024),
-  (Slot::Authentication,KeyType::EccP384),(Slot::Retired1,KeyType::EccP384)];
+ let (ml,kem,ec)=match profile {
+  "level2"=>(KeyType::MlDsa44,KeyType::MlKem768,KeyType::EccP256),
+  "level3"=>(KeyType::MlDsa65,KeyType::MlKem768,KeyType::EccP384),
+  "level5"|"pure"|"hybrid"=>(KeyType::MlDsa87,KeyType::MlKem1024,KeyType::EccP384),
+  _=>return Err("Unknown provisioning profile".into())
+ };
+ let plan=[(Slot::Signature,ml),(Slot::KeyManagement,kem),(Slot::Authentication,ec),(Slot::Retired1,ec)];
  for (slot,alg) in plan {if !card.empty(slot)?{return Err("Target slot is no longer empty; stopped without overwriting it".into());}save(slot,card.generate(slot,alg)?)?;}
  Ok(())
 }
@@ -50,8 +55,8 @@ fn main_inner()->Result<()> {
  let mut card=found.ok_or("Required YubiKey not found or busy; connect the specified serial and close other token applications")?;
  if card.version().0<6{return Err("PQC YubiKey firmware 6 or later is required".into());}
  if read {
-  if args.len()!=5||!["pure","hybrid"].contains(&args[3].as_str()){return Err("Invalid read profile".into());}
-  let mut slots=vec![Slot::Signature,Slot::KeyManagement];if args[3]=="hybrid"{slots.extend([Slot::Authentication,Slot::Retired1]);}
+  if args.len()!=5||!["pure","hybrid","level2","level3","level5"].contains(&args[3].as_str()){return Err("Invalid read profile".into());}
+  let mut slots=vec![Slot::Signature,Slot::KeyManagement];if args[3]!="pure"{slots.extend([Slot::Authentication,Slot::Retired1]);}
   let mut public=serde_json::Map::new();
   for slot in slots{let m=card.get_slot_metadata(slot).map_err(|_|"Cannot read pending key metadata")?;let der=m.public_key.to_spki().map_err(|_|"Cannot encode public key")?;
    let name=format!("{:02x}",slot as u8);let expected=fs::read(Path::new(&args[4]).join(format!("{name}-public.der"))).map_err(|_|"Missing saved public key")?;
@@ -60,7 +65,7 @@ fn main_inner()->Result<()> {
  }
  require_empty(&mut card)?;
  if !create {println!("EMPTY");return Ok(());}
- if args.len()!=5 || !["pure","hybrid"].contains(&args[3].as_str()){return Err("Invalid creation profile".into());}
+ if args.len()!=5 || !["pure","hybrid","level2","level3","level5"].contains(&args[3].as_str()){return Err("Invalid creation profile".into());}
  let folder=Path::new(&args[4]);fs::create_dir(folder).map_err(|_|"Choose a new public setup directory")?;
  // Read provisioning credentials only after the empty check, never from args/env.
  let mut input=Zeroizing::new(String::new());io::stdin().take(2049).read_to_string(&mut input).map_err(|_|"Cannot read credentials")?;
@@ -74,7 +79,7 @@ fn main_inner()->Result<()> {
  card.authenticate(&key).map_err(|_|"Management-key authentication failed; no retry")?;
  card.verify_pin(&pin).map_err(|_|"PIN verification failed; no retry")?;
  let mut public=serde_json::Map::new();
- generate(&mut card,args[3]=="hybrid",|slot,der|{
+ generate(&mut card,&args[3],|slot,der|{
   let slot=format!("{:02x}",slot as u8);fs::write(folder.join(format!("{slot}-public.der")),&der).map_err(|_|"Cannot save public key; provisioning stopped")?;
   public.insert(slot,serde_json::Value::String(STANDARD.encode(der)));Ok(())
  })?;
@@ -83,10 +88,11 @@ fn main_inner()->Result<()> {
 fn main(){if let Err(error)=main_inner(){eprintln!("{error}");std::process::exit(1);}}
 #[cfg(test)] mod tests {
  use super::*;use std::collections::HashSet;
- struct Fake{occupied:HashSet<u8>,generated:Vec<u8>,fail:bool}
- impl Card for Fake{fn empty(&mut self,s:Slot)->Result<bool>{if self.fail{Err("unknown".into())}else{Ok(!self.occupied.contains(&(s as u8)))}}fn generate(&mut self,s:Slot,_:KeyType)->Result<Vec<u8>>{self.generated.push(s as u8);self.occupied.insert(s as u8);Ok(vec![1])}}
- #[test]fn refuses_every_occupied_slot(){for s in Slot::key_slots(){let mut f=Fake{occupied:HashSet::from([s as u8]),generated:vec![],fail:false};assert!(generate(&mut f,true,|_,_|Ok(())).is_err());assert!(f.generated.is_empty());}}
- #[test]fn unknown_is_not_empty(){let mut f=Fake{occupied:HashSet::new(),generated:vec![],fail:true};assert!(generate(&mut f,true,|_,_|Ok(())).is_err());assert!(f.generated.is_empty());}
- #[test]fn profiles_and_no_rerun(){for hybrid in [false,true]{let mut f=Fake{occupied:HashSet::new(),generated:vec![],fail:false};generate(&mut f,hybrid,|_,_|Ok(())).unwrap();assert_eq!(f.generated,vec![0x9c,0x9d,0x9a,0x82]);assert!(generate(&mut f,hybrid,|_,_|Ok(())).is_err());}}
- #[test]fn partial_failure_never_retries(){let mut f=Fake{occupied:HashSet::new(),generated:vec![],fail:false};assert!(generate(&mut f,true,|_,_|Err("disk failure".into())).is_err());assert_eq!(f.generated.len(),1);assert!(generate(&mut f,true,|_,_|Ok(())).is_err());assert_eq!(f.generated.len(),1);}
+ struct Fake{occupied:HashSet<u8>,generated:Vec<u8>,fail:bool,algorithms:Vec<KeyType>}
+ impl Card for Fake{fn empty(&mut self,s:Slot)->Result<bool>{if self.fail{Err("unknown".into())}else{Ok(!self.occupied.contains(&(s as u8)))}}fn generate(&mut self,s:Slot,alg:KeyType)->Result<Vec<u8>>{self.generated.push(s as u8); self.algorithms.push(alg);self.occupied.insert(s as u8);Ok(vec![1])}}
+ #[test]fn refuses_every_occupied_slot(){for s in Slot::key_slots(){let mut f=Fake{occupied:HashSet::from([s as u8]),generated:vec![],algorithms:vec![],fail:false};assert!(generate(&mut f,"level5",|_,_|Ok(())).is_err());assert!(f.generated.is_empty());}}
+ #[test]fn unknown_is_not_empty(){let mut f=Fake{occupied:HashSet::new(),generated:vec![],algorithms:vec![],fail:true};assert!(generate(&mut f,"level5",|_,_|Ok(())).is_err());assert!(f.generated.is_empty());}
+ #[test]fn profiles_and_no_rerun(){for profile in ["pure","hybrid","level2","level3","level5"]{let mut f=Fake{occupied:HashSet::new(),generated:vec![],algorithms:vec![],fail:false};generate(&mut f,profile,|_,_|Ok(())).unwrap();assert_eq!(f.generated,vec![0x9c,0x9d,0x9a,0x82]);
+ let expected=match profile{"level2"=>vec![KeyType::MlDsa44,KeyType::MlKem768,KeyType::EccP256,KeyType::EccP256],"level3"=>vec![KeyType::MlDsa65,KeyType::MlKem768,KeyType::EccP384,KeyType::EccP384],_=>vec![KeyType::MlDsa87,KeyType::MlKem1024,KeyType::EccP384,KeyType::EccP384]};assert_eq!(f.algorithms,expected);assert!(generate(&mut f,profile,|_,_|Ok(())).is_err());}}
+ #[test]fn partial_failure_never_retries(){let mut f=Fake{occupied:HashSet::new(),generated:vec![],algorithms:vec![],fail:false};assert!(generate(&mut f,"level5",|_,_|Err("disk failure".into())).is_err());assert_eq!(f.generated.len(),1);assert!(generate(&mut f,"level5",|_,_|Ok(())).is_err());assert_eq!(f.generated.len(),1);}
 }

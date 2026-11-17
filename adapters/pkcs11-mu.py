@@ -138,7 +138,7 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
             raise AdapterError("PKCS#11 selected slot public key does not match this identity")
         config_file.write_text(config,encoding="utf-8")
         mu_file.write_bytes(mu)
-        terminal.write(("\nHybrid Mail: PKCS#11 " + algorithm + " signing. Enter PIN and touch the key.\n").encode())
+        terminal.write(("\nPQ Mail: PKCS#11 " + algorithm + " signing. Enter PIN and touch the key.\n").encode())
         terminal.flush()
         options = ["-pkeyopt","mu:1"] if algorithm.startswith("ML-DSA-") else ["-pkeyopt","digest:sha384" if algorithm=="ECDSA-P384-SHA384" else "digest:sha256"]
         if algorithm == "RSA3072-PSS-SHA256":
@@ -204,7 +204,7 @@ def main():
     except (AdapterError,OSError,subprocess.SubprocessError) as error:
         message=str(error) if isinstance(error,AdapterError) else "PKCS#11 adapter I/O failure or timeout"
         stream=sys.stderr.buffer if os.environ.get("HYBRID_MAIL_PIN_STDIN")=="1" else (terminal if terminal is not None else sys.stderr.buffer)
-        stream.write(("Hybrid Mail: "+message+"\n").encode());stream.flush()
+        stream.write(("PQ Mail: "+message+"\n").encode());stream.flush()
         return 1
     finally:
         if pin is not None:pin[:]=b"\0"*len(pin)

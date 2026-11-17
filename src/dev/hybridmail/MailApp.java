@@ -45,10 +45,10 @@ public final class MailApp extends JFrame {
     private final JLabel status = new JLabel("Create or load an identity to begin. No network connection is made on startup.");
     private final JTabbedPane tabs = new JTabbedPane();
     public MailApp() {
-        super("Hybrid Mail · S/MIME lab");
+        super("PQ Mail · S/MIME lab");
         setDefaultCloseOperation(EXIT_ON_CLOSE); setSize(1060, 800); setMinimumSize(new Dimension(850,650)); setLocationRelativeTo(null);
         JPanel root = new JPanel(new BorderLayout(0,18)); root.setBorder(new EmptyBorder(22,28,18,28)); setContentPane(root);
-        JPanel heading = new JPanel(new BorderLayout()); JLabel title = new JLabel("Hybrid Mail"); title.setFont(title.getFont().deriveFont(Font.BOLD, 30f));
+        JPanel heading = new JPanel(new BorderLayout()); JLabel title = new JLabel("PQ Mail"); title.setFont(title.getFont().deriveFont(Font.BOLD, 30f));
         heading.add(title, BorderLayout.NORTH); heading.add(new JLabel("ML-DSA & composite S/MIME  /  local development build"), BorderLayout.SOUTH); root.add(heading,BorderLayout.NORTH);
         tabs.addTab("Compose", composePanel()); tabs.addTab("Read & verify", readPanel()); tabs.addTab("Keys & token", keysPanel()); tabs.addTab("Inbox",inboxPanel()); tabs.addTab("Certificates",certificatesPanel()); root.add(tabs);
         status.setBorder(new EmptyBorder(10,0,0,0)); root.add(status, BorderLayout.SOUTH);
@@ -137,7 +137,7 @@ public final class MailApp extends JFrame {
         JTextField clientId=new JTextField(42);JPasswordField secret=new JPasswordField(42);
         JPanel fields=new JPanel(new GridLayout(0,1,0,8));fields.add(new JLabel("Use the client ID and secret from a Google Desktop app OAuth client."));
         fields.add(row("Client ID",clientId));fields.add(row("Client secret",secret));
-        fields.add(new JLabel("Saved only in this Mac's Hybrid Mail configuration; not uploaded to GitHub."));
+        fields.add(new JLabel("Saved only in this Mac's PQ Mail configuration; not uploaded to GitHub."));
         if(JOptionPane.showConfirmDialog(this,fields,"Google Desktop client credentials",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)!=JOptionPane.OK_OPTION){secret.setText("");return;}
         char[] value=secret.getPassword();secret.setText("");
         try{GoogleSession.saveClient(new GoogleOAuth.Client(clientId.getText().trim(),new String(value).trim()));Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in "+credentialStore()+". Choose Sign in with Google.");}
@@ -535,7 +535,7 @@ public final class MailApp extends JFrame {
         status.setText(label);setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));setEnabled(false);
         new SwingWorker<T,Void>(){protected T doInBackground()throws Exception{return task.call();}protected void done(){setEnabled(true);setCursor(Cursor.getDefaultCursor());try{T result=get();status.setText("Ready");success.accept(result);}catch(Exception e){error(e.getCause()==null?e:e.getCause());}}}.execute();
     }
-    private void error(Throwable e){String message=e.getMessage();status.setText("Operation failed");JOptionPane.showMessageDialog(this,message==null?e.getClass().getSimpleName():message,"Hybrid Mail",JOptionPane.ERROR_MESSAGE);}
+    private void error(Throwable e){String message=e.getMessage();status.setText("Operation failed");JOptionPane.showMessageDialog(this,message==null?e.getClass().getSimpleName():message,"PQ Mail",JOptionPane.ERROR_MESSAGE);}
     private Path choose(boolean save,String title){JFileChooser c=new JFileChooser();c.setDialogTitle(title);return (save?c.showSaveDialog(this):c.showOpenDialog(this))==JFileChooser.APPROVE_OPTION?c.getSelectedFile().toPath():null;}
     private static JPanel panel(){JPanel p=new JPanel(new BorderLayout(12,12));p.setBorder(new EmptyBorder(16,8,8,8));return p;}
     private static JPanel row(String name,JComponent field){JPanel p=new JPanel(new BorderLayout(8,0));JLabel l=new JLabel(name);l.setPreferredSize(new Dimension(80,24));p.add(l,BorderLayout.WEST);p.add(field);return p;}

@@ -10,7 +10,7 @@ DEST="${HYBRID_MAIL_PACKAGE_DIR:-$PWD/dist}"
 for file in native/pkcs11.dylib native/libykcs11.dylib "$OPENSSL_ROOT/bin/openssl" "$OPENSSL_ROOT/lib/libcrypto.3.dylib" "$OPENSSL_ROOT/lib/libssl.3.dylib"; do
   [[ -f "$file" ]] || { echo "Missing dependency: $file" >&2; exit 1; }
 done
-[[ ! -e "$DEST/Hybrid Mail.app" ]] || { echo 'Destination app exists; choose another HYBRID_MAIL_PACKAGE_DIR.' >&2; exit 1; }
+[[ ! -e "$DEST/PQ Mail.app" ]] || { echo 'Destination app exists; choose another HYBRID_MAIL_PACKAGE_DIR.' >&2; exit 1; }
 /usr/bin/python3 --version >/dev/null
 mkdir -p "$DEST"
 stage=$(mktemp -d)
@@ -39,10 +39,10 @@ for binary in "$stage/native/bin/openssl" "$stage/native/lib/"*.dylib; do
   if otool -l "$binary" | grep -q LC_ID_DYLIB; then install_name_tool -id "@rpath/$(basename "$binary")" "$binary"; fi
   codesign --force --sign - "$binary"
 done
-jpackage --type app-image --name 'Hybrid Mail' --input "$stage" \
+jpackage --type app-image --name 'PQ Mail' --input "$stage" \
   --main-jar hybrid-mail.jar --main-class dev.hybridmail.MailApp \
-  --dest "$DEST" --app-version 1.1.0 --mac-package-identifier dev.hybridmail.desktop \
+  --dest "$DEST" --app-version 1.2.0 --mac-package-identifier dev.hybridmail.desktop \
   --add-modules java.desktop,java.naming,java.security.jgss,java.security.sasl,java.net.http,jdk.httpserver,jdk.crypto.ec,jdk.unsupported
-codesign --force --deep --sign - "$DEST/Hybrid Mail.app"
-codesign --verify --deep --strict "$DEST/Hybrid Mail.app"
-echo "Ready: $DEST/Hybrid Mail.app"
+codesign --force --deep --sign - "$DEST/PQ Mail.app"
+codesign --verify --deep --strict "$DEST/PQ Mail.app"
+echo "Ready: $DEST/PQ Mail.app"

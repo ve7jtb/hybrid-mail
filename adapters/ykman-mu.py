@@ -52,7 +52,7 @@ def sign(spki, mu, executable, serial, slot, terminal, run=subprocess.run):
         if public_file.stat().st_size > 4096 or not hmac.compare_digest(public_file.read_bytes(), spki):
             raise AdapterError("Slot 9c public key does not match this mail identity")
         mu_file.write_bytes(mu)
-        terminal.write(b"\nHybrid Mail: signing with ML-DSA-65 in slot 9c. Enter PIN if prompted, then touch the key.\n")
+        terminal.write(b"\nPQ Mail: signing with ML-DSA-65 in slot 9c. Enter PIN if prompted, then touch the key.\n")
         terminal.flush()
         # stdin and stderr go only to the user's controlling terminal. Protocol
         # stdout stays clean, and ykman's native hidden PIN prompt handles secrets.
@@ -77,7 +77,7 @@ def main():
         try:
             terminal = open("/dev/tty", "r+b", buffering=0)
         except OSError as error:
-            raise AdapterError("Launch Hybrid Mail from Terminal for the YubiKey PIN/touch prompts") from error
+            raise AdapterError("Launch PQ Mail from Terminal for the YubiKey PIN/touch prompts") from error
         result = sign(spki, mu, executable, serial, slot, terminal)
         sys.stdout.buffer.write(base64.b64encode(result) + b"\n")
         sys.stdout.buffer.flush()
@@ -86,7 +86,7 @@ def main():
         # Never echo request bytes, subprocess stderr, or credentials.
         message = str(error) if isinstance(error, AdapterError) else "YubiKey adapter I/O failure or timeout"
         stream = terminal if terminal is not None else sys.stderr.buffer
-        stream.write(("Hybrid Mail: " + message + "\n").encode())
+        stream.write(("PQ Mail: " + message + "\n").encode())
         stream.flush()
         return 1
     finally:

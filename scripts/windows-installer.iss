@@ -3,11 +3,11 @@
 #endif
 [Setup]
 AppId=HybridMail-{#TargetArch}
-AppName=Hybrid Mail
+AppName=PQ Mail
 AppVersion=1.2.0
-AppPublisher=Hybrid Mail
-DefaultDirName={localappdata}\Programs\Hybrid Mail
-DefaultGroupName=Hybrid Mail
+AppPublisher=PQ Mail
+DefaultDirName={localappdata}\Programs\PQ Mail
+DefaultGroupName=PQ Mail
 PrivilegesRequired=lowest
 #if TargetArch == "arm64"
 ArchitecturesAllowed=arm64
@@ -17,14 +17,14 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 #endif
 OutputDir=..\dist\windows
-OutputBaseFilename=Hybrid-Mail-1.2.0-Windows-{#TargetArch}-Setup
+OutputBaseFilename=PQ-Mail-1.2.0-Windows-{#TargetArch}-Setup
 Compression=lzma2
 SolidCompression=yes
-UninstallDisplayIcon={app}\Hybrid Mail.exe
+UninstallDisplayIcon={app}\PQ Mail.exe
 [Files]
-Source: "..\build\windows-image\Hybrid Mail\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\build\windows-image\PQ Mail\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
-Name: "{group}\Hybrid Mail"; Filename: "{app}\Hybrid Mail.exe"
-Name: "{userdesktop}\Hybrid Mail"; Filename: "{app}\Hybrid Mail.exe"
+Name: "{group}\PQ Mail"; Filename: "{app}\PQ Mail.exe"
+Name: "{userdesktop}\PQ Mail"; Filename: "{app}\PQ Mail.exe"
 [Run]
-Filename: "{app}\Hybrid Mail.exe"; Description: "Launch Hybrid Mail"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\PQ Mail.exe"; Description: "Launch PQ Mail"; Flags: nowait postinstall skipifsilent

@@ -104,7 +104,7 @@ def main():
         sys.stdout.buffer.write(secret);sys.stdout.buffer.flush();return 0
     except (AdapterError,OSError,subprocess.SubprocessError) as error:
         message=str(error) if isinstance(error,AdapterError) else 'PKCS#11 KEM I/O failure or timeout'
-        print('Hybrid Mail: '+message,file=sys.stderr);return 1
+        print('PQ Mail: '+message,file=sys.stderr);return 1
     finally:
         if pin is not None:pin[:]=b'\0'*len(pin)
 

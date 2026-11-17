@@ -1,7 +1,7 @@
 HYBRID MAIL — LOCAL DEVELOPMENT APP
 
 Launch
-  Run ./run.sh after building, or open dist/Hybrid Mail.app after packaging.
+  Run ./run.sh after building, or open dist/PQ Mail.app after packaging.
   The packaged app includes Java, OpenSSL and the built PKCS#11 modules.
   It is ad-hoc signed for local testing, not notarized. Python 3 must be installed.
   See docs/DESKTOP.md for saved identities, inbox and Google OAuth setup.
@@ -95,7 +95,7 @@ Local stack provenance
   Jakarta Activation API 2.2.0-M2; Angus Activation 2.1.0-M1.
   Library jars built/downloaded by the earlier local stack setup; copied into lib/.
   Third-party license notices are retained inside their jars.
-  Source repository: https://github.com/ve7jtb/hybrid-mail
+  Source repository: https://github.com/ve7jtb/pq-mail
 
 Beta0 hardware signing
   Launch from Terminal with YKMAN_SERIAL set and load a token identity. Choose

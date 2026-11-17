@@ -68,11 +68,11 @@ public final class GoogleOAuth {
         HttpServer server=HttpServer.create(new InetSocketAddress(InetAddress.getByName("127.0.0.1"),0),0);
         String redirect="http://127.0.0.1:"+server.getAddress().getPort()+"/oauth2/callback";
         server.createContext("/oauth2/callback",exchange->{
-            int status=400;String message="Sign-in was not completed. Return to Hybrid Mail.";
+            int status=400;String message="Sign-in was not completed. Return to PQ Mail.";
             try{
                 if(!exchange.getRequestMethod().equals("GET")||!exchange.getRequestURI().getPath().equals("/oauth2/callback"))throw new IOException("Invalid callback");
                 String callbackCode=code(exchange.getRequestURI().getRawQuery(),state);
-                if(response.complete(callbackCode)){status=200;message="Google authorization received. You can close this window and return to Hybrid Mail.";}
+                if(response.complete(callbackCode)){status=200;message="Google authorization received. You can close this window and return to PQ Mail.";}
             }catch(IOException e){
                 // A mismatched or malformed callback must not abort the legitimate browser flow.
                 try{var fields=query(exchange.getRequestURI().getRawQuery());if(state.equals(fields.get("state"))&&fields.containsKey("error"))response.completeExceptionally(new IOException("Google sign-in was denied or cancelled"));}catch(Exception ignored){}

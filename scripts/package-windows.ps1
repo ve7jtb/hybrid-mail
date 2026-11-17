@@ -29,7 +29,7 @@ $helper="$stage/native/bin/hybrid-mail-credentials.exe"
 $read=& $helper get self-test; Checked
 if($read.Trim() -ne 'installer-disposable-test'){throw 'Credential store roundtrip failed'}
 & $helper delete self-test; Checked
-& "$env:JAVA_HOME/bin/jpackage.exe" --type app-image --name 'Hybrid Mail' --input $stage --main-jar hybrid-mail.jar --main-class dev.hybridmail.MailApp --dest build/windows-image --app-version 1.2.0 --add-modules java.desktop,java.naming,java.security.jgss,java.security.sasl,java.net.http,jdk.httpserver,jdk.crypto.ec,jdk.unsupported; Checked
+& "$env:JAVA_HOME/bin/jpackage.exe" --type app-image --name 'PQ Mail' --input $stage --main-jar hybrid-mail.jar --main-class dev.hybridmail.MailApp --dest build/windows-image --app-version 1.2.0 --add-modules java.desktop,java.naming,java.security.jgss,java.security.sasl,java.net.http,jdk.httpserver,jdk.crypto.ec,jdk.unsupported; Checked
 $iscc=Get-ChildItem 'C:/Program Files (x86)/Inno Setup*/ISCC.exe','C:/Program Files/Inno Setup*/ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
 if(!$iscc){
  Invoke-WebRequest https://files.jrsoftware.org/is/6/innosetup-6.4.3.exe -OutFile build/inno-setup.exe

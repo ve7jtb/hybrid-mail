@@ -1,6 +1,6 @@
 # macOS app, inbox and Google setup
 
-Launch **Hybrid Mail.app** from Finder. Java, OpenSSL and the patched native PKCS#11 libraries are bundled. Python 3 uses `/usr/bin/python3` by default; change its absolute path under **Keys & token → YubiKey configuration → Advanced** if necessary. The package is ad-hoc signed for local testing, not notarized.
+Launch **PQ Mail.app** from Finder. Java, OpenSSL and the patched native PKCS#11 libraries are bundled. Python 3 uses `/usr/bin/python3` by default; change its absolute path under **Keys & token → YubiKey configuration → Advanced** if necessary. The package is ad-hoc signed for local testing, not notarized.
 
 ## Saved identities and configuration
 

@@ -29,7 +29,7 @@ public final class DesktopState {
     public void set(String name,String value){if(value==null)values.remove(name);else values.setProperty(name,value);}
     public void save()throws IOException{
         PrivateFiles.directory(directory);
-        ByteArrayOutputStream out=new ByteArrayOutputStream();values.store(out,"Hybrid Mail — non-secret preferences; no PINs or passwords");
+        ByteArrayOutputStream out=new ByteArrayOutputStream();values.store(out,"PQ Mail — non-secret preferences; no PINs or passwords");
         write(directory.resolve("settings.properties"),out.toByteArray());
     }
     private static void write(Path path,byte[] bytes)throws IOException{

@@ -1,4 +1,4 @@
-Hybrid Mail third-party components
+PQ Mail third-party components
 
 Java runtime: Eclipse Temurin/OpenJDK (GPLv2 with Classpath Exception).
 Runtime license and legal files are retained in the packaged Java runtime.

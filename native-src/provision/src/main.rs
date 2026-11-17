@@ -41,14 +41,26 @@ fn generate(card:&mut impl Card,profile:&str,mut save:impl FnMut(Slot,Vec<u8>)->
  for (slot,alg) in plan {if !card.empty(slot)?{return Err("Target slot is no longer empty; stopped without overwriting it".into());}save(slot,card.generate(slot,alg)?)?;}
  Ok(())
 }
+// Read the actual beta version before opening PIV, as ykman does. The
+// override only applies to the development placeholder, and is reset per reader.
+fn open_piv(conn:PcscSmartCardConnection)->Result<PivSession<PcscSmartCardConnection>> {
+ use yubikit::{core::{set_override_version,Version},management::ManagementSession};
+ set_override_version(Version(0,0,1));
+ let mut management=ManagementSession::new(conn).map_err(|(e,_)|format!("Cannot initialize YubiKey management: {e}"))?;
+ let info=management.read_device_info().map_err(|e|format!("Cannot read YubiKey firmware information: {e}"))?;
+ set_override_version(info.version_qualifier.version);
+ let result=PivSession::new(management.into_connection()).map_err(|(e,_)|format!("Cannot initialize YubiKey PIV: {e}"));
+ set_override_version(Version(0,0,1));
+ result
+}
 fn main_inner()->Result<()> {
  let args:Vec<String>=env::args().collect();
  if args.len()==2&&args[1]=="detect" {
   let mut found=None;
   for reader in list_readers().map_err(|_|"Cannot enumerate smart card readers")? {
    let conn=PcscSmartCardConnection::new(&reader,true).map_err(|_|"Cannot access an inserted smart card; close other token applications and insert only the intended YubiKey")?;
-   let Ok(mut piv)=PivSession::new(conn) else {continue};
-   let Ok(serial)=piv.get_serial() else {continue};
+   let mut piv=open_piv(conn)?;
+   let serial=piv.get_serial().map_err(|e|format!("Cannot read YubiKey PIV serial: {e}"))?;
    if found.is_some(){return Err("Multiple YubiKeys detected; insert only the key to provision".into());}
    found=Some((serial,piv));
   }
@@ -63,7 +75,7 @@ fn main_inner()->Result<()> {
  let mut found=None;
  for reader in list_readers().map_err(|_|"Cannot enumerate smart card readers")? {
   let Ok(conn)=PcscSmartCardConnection::new(&reader,true) else {continue};
-  let Ok(mut piv)=PivSession::new(conn) else {continue};
+  let mut piv=open_piv(conn)?;
   if piv.get_serial().ok()==Some(serial){found=Some(piv);break;}
  }
  let mut card=found.ok_or("Required YubiKey not found or busy; connect the specified serial and close other token applications")?;

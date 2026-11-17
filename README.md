@@ -51,7 +51,7 @@ Bouncy Castle computes ML-DSA external μ, including composite domain separation
 
 ## Getting started on desktop
 
-1. In **Keys & token**, select or create a software identity, or select a saved YubiKey identity. Software creation requires a new `.p12` file and a password of at least 12 characters.
+1. In **Keys**, select or create a software identity, or select a saved YubiKey identity. Software creation requires a new `.p12` file and a password of at least 12 characters.
 2. In **Certificates**, import the recipient's encryption certificate. Check its fingerprint through a trusted channel. Signing-certificate trust is an explicit, separate action.
 3. In **Compose**, choose **Sign with**, enter matching sender/recipient addresses, and optionally enable **Also encrypt for recipient** and select **Encrypt to**.
 4. Save the message locally or send it with SMTP. Use **Read & verify** for a local message or open a message from **Inbox**.

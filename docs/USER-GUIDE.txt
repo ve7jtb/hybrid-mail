@@ -18,7 +18,7 @@ Implemented profiles
   Composite encodings/OIDs are those implemented by the pinned BC snapshot below.
 
 Try without a server
-  1. Keys & token → Create identity. Create Alice and Bob identities with their
+  1. Keys → Create identity. Create Alice and Bob identities with their
      email addresses and unique .p12 filenames. Choose Pure or Hybrid for each.
   2. With Alice loaded, export her signing certificate. With Bob loaded, export
      his encryption certificate. Choose .cer for DER or .pem for PEM; both contain public certificates.
@@ -98,8 +98,9 @@ Local stack provenance
   Source repository: https://github.com/ve7jtb/pq-mail
 
 Beta0 hardware signing
-  Launch from Terminal with YKMAN_SERIAL set and load a token identity. Choose
-  adapters/ykman-mu.py under Keys & token. PIN/touch prompts appear in Terminal.
+  The desktop app uses its bundled PKCS#11 backend automatically for saved
+  YubiKey identities selected under Keys. The legacy ykman adapter is available
+  through the Terminal test launcher; its PIN/touch prompts appear in Terminal.
   scripts/test-beta0.sh creates local test certificates and verifies pure/hybrid
   signed .eml messages, then opens the UI with the pure token identity loaded.
   No token provisioning and no mail sending occur. See README.md for commands.

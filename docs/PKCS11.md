@@ -53,7 +53,7 @@ The app passes a short-lived PIN copy through the adapter's stdin pipe; the adap
 
 The test re-parses and verifies both signed `.eml` files and writes `result.txt`. No email is sent and the signing test writes no token key or certificate. There is no automatic retry. On success it opens the mail UI with the chosen identity and adapter selected; add `--no-ui` to suppress that final window (the PIN dialogs still appear on a graphical desktop).
 
-For later use, configure the same environment variables, run `./run.sh`, load the identity, and select `adapters/pkcs11-mu.py` under **Keys & token**. The PKCS#11 app signing path no longer needs Terminal for PIN entry. The demo launchers still use Terminal for the separate local identity-file password. Standalone adapter calls without app PIN mode use the provider's native terminal PIN prompt.
+For later use, configure the same environment variables, run `./run.sh`, select the saved YubiKey identity under **Keys**; the bundled PKCS#11 signing backend is used automatically. The PKCS#11 app signing path no longer needs Terminal for PIN entry. The demo launchers still use Terminal for the separate local identity-file password. Standalone adapter calls without app PIN mode use the provider's native terminal PIN prompt.
 
 ## Validation
 

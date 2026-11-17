@@ -1,6 +1,6 @@
 # macOS app, inbox and Google setup
 
-Launch **PQ Mail.app** from Finder. Java, OpenSSL and the patched native PKCS#11 libraries are bundled. Python 3 uses `/usr/bin/python3` by default; change its absolute path under **Keys & token → YubiKey configuration → Advanced** if necessary. The package is ad-hoc signed for local testing, not notarized.
+Launch **PQ Mail.app** from Finder. Java, OpenSSL and the patched native PKCS#11 libraries are bundled. Python 3 uses `/usr/bin/python3` by default; change its absolute path under **Keys → YubiKey configuration → Advanced** if necessary. The package is ad-hoc signed for local testing, not notarized.
 
 ## Saved identities and configuration
 
@@ -54,7 +54,7 @@ References: [Google desktop OAuth](https://developers.google.com/identity/protoc
 
 ## ML-DSA-87 software identities
 
-Choose **Keys & token → Create software identity…** and select Level 2, 3 or 5, matching the YubiKey profiles below. Every choice generates four software keys and saves both pure and hybrid identities in one password-protected `.p12` file. Both are remembered and appear under **Sign with**. The PQ keys are shared between the pure and hybrid profiles; importing the bundle restores both. Existing single-identity `.p12` files remain supported. Software creation does not alter token keys.
+Choose **Keys → Create software identity…** and select Level 2, 3 or 5, matching the YubiKey profiles below. Every choice generates four software keys and saves both pure and hybrid identities in one password-protected `.p12` file. Both are remembered and appear under **Sign with**. The PQ keys are shared between the pure and hybrid profiles; importing the bundle restores both. Existing single-identity `.p12` files remain supported. Software creation does not alter token keys.
 
 Validation: native Keychain write/read/delete passed in the packaged app. After user consent, the app was fully quit and relaunched; Connect Gmail restored its refresh token from Keychain and loaded the inbox without browser authorization. Pure ML-DSA-87 and composite ML-DSA-87/P-384 certificate, PKCS#12, signed-only and encrypted S/MIME round trips passed.
 

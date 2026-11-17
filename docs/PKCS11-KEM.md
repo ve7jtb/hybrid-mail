@@ -41,7 +41,7 @@ The script exports the encryption public keys through PKCS#11, prompts for the e
 
 For each pure/hybrid profile it signs and encrypts a message, saves the `.eml`, reopens it from disk, decrypts through the token, checks the AES-GCM authentication tag, and verifies the inner S/MIME signature and sender binding. Expected test plaintext is also saved locally. Nothing is sent over SMTP or IMAP. Expect six app PIN prompts: certificate signing, message signing and decryption for each profile. Each hybrid operation shares its PIN across its two components and clears its cache afterward.
 
-On success the UI opens with the hybrid identity, signing adapter, KEM adapter and own recipient certificate selected. For manual use, load the new identity and select `adapters/pkcs11-kem.py` in **Keys & token → Token decryption**. Import another user's encryption certificate to send to that user. Reopening an encrypted message requests one decryption PIN. A missing/failing token backend never falls back to software private keys.
+On success the UI opens with the hybrid identity, signing adapter, KEM adapter and own recipient certificate selected. For manual use, select the new YubiKey identity under **Keys**; the bundled PKCS#11 decryption backend is used automatically. Import another user's encryption certificate to send to that user. Reopening an encrypted message requests one decryption PIN. A missing/failing token backend never falls back to software private keys.
 
 ## Recovery details and validation
 

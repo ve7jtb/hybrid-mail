@@ -17,8 +17,9 @@ message-signing on it. This is pure ML-DSA with external mu, not HashML-DSA.
 The host verifies every returned signature against the exact mu and public key.
 It also verifies the complete outgoing CMS signature before encryption/sending.
 
-Executable integration (available in Keys & token)
-  Select an executable by absolute path. It is spawned directly, without a shell
+Executable integration (developer API and legacy test launchers)
+  The desktop UI uses bundled PKCS#11 automatically; it has no adapter selector.
+  The API accepts an executable by absolute path, spawned directly without a shell
   or command-line arguments. Use a wrapper executable for fixed device/slot config.
   stdin: exactly three newline-terminated ASCII lines, followed by EOF:
     ML-DSA-65

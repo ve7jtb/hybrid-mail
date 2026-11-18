@@ -26,7 +26,22 @@ java scripts/CheckJava.java "$image/PQ Mail/lib/runtime" "$out/java-runtime-$arc
 cp -a "$image/PQ Mail" "$PWD/build/linux-smoke"
 sed -i 's/app.mainclass=dev.hybridmail.MailApp/app.mainclass=dev.hybridmail.SoftwareProfilesTest/' 'build/linux-smoke/lib/app/PQ Mail.cfg'
 'build/linux-smoke/bin/PQ Mail'
-jpackage --type deb --name 'PQ Mail' --app-image "$image/PQ Mail" --dest "$out" --app-version 1.2.1 --linux-package-name pq-mail --linux-deb-maintainer ve7jtb@gmail.com --vendor 'PQ Mail' --linux-menu-group Network --linux-shortcut --linux-package-deps 'python3, pcscd, libccid, libsecret-1-0, xdg-utils' --install-dir /opt
+jpackage --type deb --name 'PQ Mail' --icon assets/pq-mail.png --resource-dir assets/linux --app-image "$image/PQ Mail" --dest "$out" --app-version 1.2.1 --linux-package-name pq-mail --linux-deb-maintainer ve7jtb@gmail.com --vendor 'PQ Mail' --linux-menu-group Network --linux-shortcut --linux-package-deps 'python3, pcscd, libccid, libsecret-1-0, xdg-utils' --install-dir /opt
 mv "$out/"*.deb "$out/PQ-Mail-1.2.1-Linux-$arch.deb"
+# jpackage's Debian step can generate a separate launcher icon; verify that
+# the desktop entry points to our artwork, not the default Java icon.
+icon_check=$(mktemp -d)
+dpkg-deb --extract "$out/PQ-Mail-1.2.1-Linux-$arch.deb" "$icon_check"
+python3 - "$icon_check" <<'PYICON'
+from pathlib import Path
+import sys
+root=Path(sys.argv[1])
+entry=next(root.glob('opt/pq-mail/lib/*.desktop'))
+assert 'StartupWMClass=PQ Mail' in entry.read_text(), 'Missing desktop window association'
+icon=next(line[5:] for line in entry.read_text().splitlines() if line.startswith('Icon='))
+assert (root/icon.lstrip('/')).read_bytes()==Path('assets/pq-mail.png').read_bytes(), 'Debian desktop launcher uses the wrong icon'
+print('PASS Debian desktop launcher uses the custom PQ Mail icon')
+PYICON
+rm -rf "$icon_check"
 tar -czf "$out/PQ-Mail-1.2.1-Linux-$arch.tar.gz" -C "$image" 'PQ Mail'
 (cd "$out" && sha256sum *.deb *.tar.gz > SHA256SUMS)

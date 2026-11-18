@@ -88,7 +88,8 @@ must be present and share a consistent key/slot set.
   bounds GET DATA and its GET RESPONSE continuations to 240 response-data bytes,
   below the observed Pixel 10 truncation boundary; USB behavior is unchanged.
 
-Updates write/read-back the inactive bank and commit its manifest last. The older
+Updates write/read-back the inactive bank and commit its manifest last. Previous-bank and unused chunk contents can remain publicly readable; saving is
+not a secure-erase operation. The older
 bank remains available after a failed write, including a torn new manifest. The
 signature provides integrity/key binding, not external trust or rollback
 protection. Shared device capacity can still reject a write; no claim of an atomic

@@ -22,12 +22,21 @@ final class PivDiagnostic extends GeneralSecurityException {
         private final java.util.ArrayDeque<String> frames=new java.util.ArrayDeque<>();
         Connection(SmartCardConnection delegate){this.delegate=delegate;}
         public byte[] sendAndReceive(byte[] apdu)throws IOException{
-            // Limit only NFC PIV metadata reads (F7) and their C0 continuations.
+            // Limit NFC PIV metadata (F7), data-object reads (CB), and their C0 continuations.
             // 240 data bytes + SW fit below the observed 253-byte truncation boundary.
             // Private-operation responses and USB retain their existing behavior.
+            boolean objectRead=apdu.length>=10 && apdu[0]==0 && (apdu[1]&255)==0xcb && (apdu[2]&255)==0x3f && (apdu[3]&255)==0xff;
+            if(objectRead && getTransport()==Transport.NFC){
+                // SDK may encode case 3 (no Le) or extended length. Preserve the selector,
+                // request <=240 bytes in a short case-4 APDU, then honor SW=61xx.
+                int offset=apdu[4]==0?7:5;
+                int length=apdu[4]==0 && apdu.length>=7?((apdu[5]&255)<<8)|(apdu[6]&255):(apdu[4]&255);
+                if(length!=5 || apdu.length<offset+length || apdu[offset]!=0x5c || apdu[offset+1]!=3)throw new IOException("Malformed PIV object selector");
+                byte[] bounded=new byte[11];System.arraycopy(apdu,0,bounded,0,4);bounded[4]=5;System.arraycopy(apdu,offset,bounded,5,5);bounded[10]=(byte)NFC_PUBLIC_READ_LIMIT;apdu=bounded;
+            }
             boolean shortCommand=apdu.length==5 && apdu[0]==0;
             boolean getResponse=shortCommand && (apdu[1]&255)==0xc0 && apdu[2]==0 && apdu[3]==0;
-            if(!getResponse)publicMetadataChain=shortCommand && (apdu[1]&255)==0xf7;
+            if(!getResponse)publicMetadataChain=objectRead || shortCommand && (apdu[1]&255)==0xf7;
             if(getTransport()==Transport.NFC && shortCommand){
                 int requested=apdu[4]&255;
                 if(requested==0)requested=256;

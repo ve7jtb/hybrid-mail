@@ -104,7 +104,7 @@ Definitions and OIDs match desktop `TokenProfile.java`:
 
 The level label refers to ML-DSA's NIST category, not every component. Each
 identity has four independent keys so pure and hybrid modes can use the same keys.
-The corresponding YubiKey slots remain 9c, 9a, 9d and 82.
+New credentials use 9c, 83, 9d and 82; imported legacy credentials keep their explicit 9a mapping until migration.
 
 ## Crypto implementation
 

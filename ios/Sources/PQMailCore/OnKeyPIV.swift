@@ -25,7 +25,12 @@ actor OnKeyPIV:OnKeyCard {
         _ = try await operation.command(0xdb,0x3f,0xff,PIVTLV.encode(0x5c,OnKeyBundle.number(tag,3))+PIVTLV.encode(0x53,data))
     }
     func authenticate(_ management:Data)async throws{
+        // Resolve Beta0's 0.0.1 placeholder from this same device before the SDK
+        // chooses the management-key algorithm. Do not assume legacy TDES.
+        let managementSession=try await Management.Session.makeSession(connection:connection.connection)
+        _ = try await managementSession.getDeviceInfo()
         let session=try await PIVSession.makeSession(connection:connection.connection)
+        try require(await session.version >= Version("5.3.0")!,"Cannot establish management-key metadata support")
         try await session.authenticate(with:management)
     }
     func migrate(_ credentials:[YubiKeyCredential],_ management:Data)async throws {

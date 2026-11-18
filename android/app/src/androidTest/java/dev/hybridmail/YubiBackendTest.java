@@ -182,4 +182,29 @@ public class YubiBackendTest {
   assertEquals(before,card.verifies);
  }
 
+ @Test public void intermediateFailuresAreRecordedBeforeRecoveryWithoutExceptionPayloads()throws Exception {
+  Card card=new Card(TokenProfile.LEVEL3){int calls;
+   public Transport getTransport(){return Transport.NFC;}
+   public byte[] sendAndReceive(byte[] a)throws IOException{if(calls++<2)throw new IOException("SECRET_SENTINEL");return super.sendAndReceive(a);}
+  };
+  List<Integer> attempts=new ArrayList<>();
+  var source=new YubiBackend.DeviceSource(){
+   public YubiKeyDevice get(){return card;}
+   public void setupFailed(String op,int attempt,String frames){attempts.add(attempt);assertEquals(0,card.verifies);assertTrue(op.contains("signing"));assertTrue(frames.contains("INS=A4"));assertTrue(frames.contains("tx="));assertTrue(frames.contains("rx=-1"));assertFalse(frames.contains("SECRET_SENTINEL"));}
+   public boolean retryBeforePin(String d){assertEquals(card.closes,attempts.size());return true;}
+  };
+  var backend=new YubiBackend(source,l->"123456".toCharArray(),12345,card.publicKeys());
+  backend.sign(card.keys.get(Slot.SIGNATURE).getPublic(),new byte[64]);backend.clearSecrets();
+  assertEquals(List.of(1,2),attempts);assertEquals(1,card.verifies);
+ }
+ @Test public void retryHistoryPersistsAndIsBounded()throws Exception {
+  var context=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().getTargetContext();
+  var prefs=context.getSharedPreferences("nfc-retries-test",0);prefs.edit().clear().commit();
+  try{
+   for(int i=1;i<=52;i++)NfcRetryHistory.append(prefs,12345,"profile","signing",i,"INS=F7");
+   var saved=new org.json.JSONArray(context.getSharedPreferences("nfc-retries-test",0).getString("history","[]"));
+   assertEquals(50,saved.length());assertEquals(3,saved.getJSONObject(0).getInt("attempt"));assertEquals(52,saved.getJSONObject(49).getInt("attempt"));assertTrue(saved.getJSONObject(49).getBoolean("beforePin"));
+  }finally{prefs.edit().clear().commit();}
+ }
+
 }

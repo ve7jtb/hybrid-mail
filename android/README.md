@@ -79,15 +79,21 @@ Tests generate temporary software keys only. They cover all profiles, `.p12` rel
 
 ## Current physical-device status
 
-On November 17, 2026, Pixel 10 / Android 17 and a PQC Ready YubiKey Beta0 passed:
+The latest controlled comparison used the **identical APK** (verified by SHA-256), the same Level 3 PQC Ready YubiKey Beta0, and the same public certificates/slot mappings on two phones running Android 17:
 
-- Three consecutive Level 5 NFC public-key checks: ten cycles per run, 200 APDU exchanges each, serial and bound public keys matched.
-- Level 5 pure S/MIME over NFC: ML-DSA-87 signing verified and ML-KEM-1024 decryption succeeded.
-- Level 5 hybrid S/MIME over NFC: ML-DSA-87 + ECDSA P-384 signing verified and ML-KEM-1024 + ECDH P-384 decryption succeeded.
+| Saved S/MIME results, November 17, 2026 | Pixel 9 | Pixel 10 |
+|---|---|---|
+| Complete NFC signing/decryption passes | 5: three hybrid, two pure | 1 hybrid |
+| Failed runs | 0 | 3 hybrid |
+| Recorded pre-PIN setup failures | 0 | 7 |
 
-No email was sent and no token keys were changed. Earlier Level 3 pure/hybrid NFC round trips passed, with intermittent transport failures in subsequent runs; Level 3 pure/hybrid USB controls each passed twice. The latest three public-read passes and two S/MIME passes are encouraging but do not prove universal NFC reliability.
+Every successful run verified the signature and decrypted the message; no email was sent or token keys changed. The Pixel 9 has no saved PIN-free diagnostic runs: its five records are full round trips. Its retry-history file was absent, consistent with no recorded pre-PIN retries. This is a small, unequal sample, not a failure-rate estimate. It points toward a phone-dependent NFC interaction without identifying hardware, firmware, RF coupling or Android as the root cause.
 
-The app uses unmodified YubiKit 3.3.0 with application-side lifecycle and APDU-wrapper changes. It waits for removal before a fresh tap, honors NFC `61xx` continuation lengths, checks serial/public keys before PIN submission, and retains verified key types only within the current connection. The public-read diagnostic now initializes PIV once and reads serial/public keys ten times. Eighteen focused emulator tests passed. See the [technical integration report](../docs/ANDROID-NFC-YUBIKIT.md) for evidence, changes, limitations and possible upstream follow-up.
+Earlier Pixel 10 Level 5 tests completed three ten-cycle public-read checks and pure/hybrid round trips. Level 3 pure/hybrid USB controls also passed twice each. Those earlier successes do not establish reliable NFC on Pixel 10: later transport failures persisted even with smaller response requests.
+
+The app uses unmodified YubiKit 3.3.0 with application-side lifecycle and APDU-wrapper changes. It waits for removal before a fresh tap, caps NFC public-metadata reads and their continuations at 240 data bytes, checks serial/public keys before PIN submission, and retains verified key types only within the current connection. Pixel 10 traces confirm `Le=240` produced 242-byte responses including status; later continuations could still fail. The public-read diagnostic initializes PIV once and reads serial/public keys ten times. **22 focused emulator tests passed.** See the [technical integration report](../docs/ANDROID-NFC-YUBIKIT.md).
+
+Pre-PIN transport failures are saved before the recovery prompt, including failures that precede an eventual success and the final exhausted attempt. App-private `nfc-retries` preferences retain up to 50 timestamped entries with expected serial, profile, operation, attempt number, failing command headers, request/response lengths, status and timing. No PINs or APDU payloads are recorded. These entries do not include detailed failures after PIN submission, and successful round trips do not persist complete APDU traces. Retry behavior remains limited to two user-confirmed fresh taps during read-only setup; VERIFY/private commands are not automatically retried.
 
 During the local round-trip test:
 

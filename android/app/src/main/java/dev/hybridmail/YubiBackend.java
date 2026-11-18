@@ -12,6 +12,7 @@ import java.util.*;
 final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
     interface DeviceSource {
         YubiKeyDevice get() throws Exception;
+        default void setupFailed(String operation,int attempt,String frames)throws Exception{}
         default boolean retryBeforePin(String detail)throws Exception{return false;}
     }
     interface PinSource { char[] get(String algorithm) throws Exception; }
@@ -75,7 +76,7 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
             // Preserve the operation PIN only while offering a bounded fresh-tap recovery.
             // No VERIFY has happened in connect(). All terminal exits clear it in the caller.
             char[] enteredPin=pin;pin=null;clearSecrets();pin=enteredPin;
-            throw new PivDiagnostic(stage+" failed before PIN submission.\n"+detail+"\n"+e.getMessage(),e,retryable);
+            throw new PivDiagnostic(stage+" failed before PIN submission.\n"+detail+"\n"+e.getMessage(),e,retryable,stage+"\n"+detail);
         }
     }
     private Slot slotFor(PublicKey key)throws GeneralSecurityException{
@@ -89,6 +90,7 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
         for(int attempt=0;;attempt++){
             try{connect();break;}
             catch(PivDiagnostic e){
+                if(e.retryableBeforePin)devices.setupFailed(label,attempt+1,e.frameDetail);
                 if(!e.retryableBeforePin||attempt>=2||!devices.retryBeforePin(e.getMessage()))throw e;
             }
         } // Recovery is limited to read-only setup, before VERIFY or private-key commands.

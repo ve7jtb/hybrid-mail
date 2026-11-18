@@ -245,6 +245,9 @@ public final class MainActivity extends Activity {
     }
     private YubiBackend.DeviceSource recoverableDeviceSource(){return new YubiBackend.DeviceSource(){
         public YubiKeyDevice get()throws Exception{return requireDevice();}
+        public void setupFailed(String operation,int attempt,String frames)throws Exception{
+            NfcRetryHistory.append(getSharedPreferences("nfc-retries",0),selected.serial(),identity.signatureAlgorithm(),operation,attempt,frames);
+        }
         public boolean retryBeforePin(String detail)throws Exception{
             var result=new CompletableFuture<Void>();pendingStage=result;
             runOnUiThread(()->{

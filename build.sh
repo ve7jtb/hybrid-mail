@@ -7,6 +7,7 @@ command -v javac >/dev/null || { echo 'Install JDK 25 and set JAVA_HOME.' >&2; e
 mkdir -p build/classes
 if [[ "$(uname -s)" == Darwin ]]; then
   mkdir -p build/native
+  bash scripts/build-share-helper.sh
   clang -x objective-c -fobjc-arc -fblocks -O2 -framework LocalAuthentication -framework Foundation -framework Security -framework CoreFoundation native-src/keychain.c -o build/native/hybrid-mail-keychain
   codesign --force --sign - --identifier dev.hybridmail.keychain build/native/hybrid-mail-keychain
 fi
@@ -22,7 +23,9 @@ if [[ "${1:-}" == test ]]; then
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.DesktopStateTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.MailAccountTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.GmailApiTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.CertificateBundleTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.ConventionalTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.SoftwareProfilesTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.OpenPgpTest
   python3 -m unittest discover -s tests -v
 fi

@@ -1,0 +1,23 @@
+{
+  "originHash" : "21d71c63125ad0e9339c2cc0335b49a567bd750bda0d733d81ba979c455b3f1e",
+  "pins" : [
+    {
+      "identity" : "swift-log",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-log",
+      "state" : {
+        "revision" : "c7413d967b97aae67c46452bf7645bdb7b200e8e",
+        "version" : "1.17.2"
+      }
+    },
+    {
+      "identity" : "yubikit-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Yubico/yubikit-swift",
+      "state" : {
+        "revision" : "e19212f2efbca9af280e57542e669885de5acdc1"
+      }
+    }
+  ],
+  "version" : 3
+}

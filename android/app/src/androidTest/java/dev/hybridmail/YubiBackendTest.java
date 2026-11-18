@@ -99,5 +99,17 @@ public class YubiBackendTest {
   try{new YubiBackend(()->card,pins,12345,bound).sign(bound.get(Slot.SIGNATURE),new byte[64]);fail();}catch(GeneralSecurityException expected){}assertEquals(2,prompts[0]);
   card.rejectPin=true;try{new YubiBackend(()->card,pins,12345,card.publicKeys()).sign(key,new byte[64]);fail();}catch(com.yubico.yubikit.core.application.InvalidPinException expected){}
   assertEquals(3,prompts[0]);assertEquals(1,card.verifies);assertEquals(0,card.privateOps);
+ } @Test public void openPgpUsesRealPivAdapter()throws Exception {
+  Card card=new Card(TokenProfile.LEVEL3);int[] prompts={0};
+  var backend=new YubiBackend(()->card,label->{prompts[0]++;return "123456".toCharArray();},12345,card.publicKeys());
+  var keys=card.publicKeys();
+  Identity identity=Identity.forTokenProfile("pgp@example.com",TokenProfile.LEVEL3,keys.get(Slot.SIGNATURE),keys.get(Slot.AUTHENTICATION),keys.get(Slot.KEY_MANAGEMENT),keys.get(Slot.RETIRED1),backend,List.of());
+  prompts[0]=0;int start=card.privateOps;
+  var own=OpenPgp.create(identity,backend);
+  byte[] message=OpenPgp.compose(identity,own,own,"pgp@example.com","pgp@example.com","OpenPGP","YubiKit OpenPGP test",backend);
+  var opened=OpenPgp.open(message,own,own,identity,backend);
+  assertEquals("YubiKit OpenPGP test",opened.text());assertTrue(opened.encrypted());
+  assertEquals(3,prompts[0]);assertEquals(10,card.privateOps-start);
  }
+
 }

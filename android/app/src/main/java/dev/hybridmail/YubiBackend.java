@@ -34,9 +34,12 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
         return KeyFactory.getInstance(algorithm,"BC").generatePublic(new X509EncodedKeySpec(metadata.getPublicKeyValues().getEncoded()));
     }
     static Map<Slot,PublicKey> keys(Identity identity) {
+        return keys(identity,new String[]{"9c","9a","9d","82"});
+    }
+    static Map<Slot,PublicKey> keys(Identity identity,String[] slots){
         Map<Slot,PublicKey> keys=new EnumMap<>(Slot.class);
-        add(keys,identity.signingCert().getPublicKey(),Slot.SIGNATURE,Slot.AUTHENTICATION);
-        if(identity.encryptionCert()!=null)add(keys,identity.encryptionCert().getPublicKey(),Slot.KEY_MANAGEMENT,Slot.RETIRED1);
+        add(keys,identity.signingCert().getPublicKey(),Slot.fromValue(Integer.parseInt(slots[0],16)),Slot.fromValue(Integer.parseInt(slots[1],16)));
+        if(identity.encryptionCert()!=null)add(keys,identity.encryptionCert().getPublicKey(),Slot.fromValue(Integer.parseInt(slots[2],16)),Slot.fromValue(Integer.parseInt(slots[3],16)));
         return keys;
     }
     private static void add(Map<Slot,PublicKey> keys,PublicKey key,Slot pq,Slot ec) {
@@ -57,6 +60,10 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
                 throw new GeneralSecurityException("YubiKey slot "+e.getKey()+" does not match this identity");}
         }catch(Exception e){String detail=connection instanceof PivDiagnostic.Connection c?c.detail():"connection unavailable";clearSecrets();throw new PivDiagnostic(stage+" failed before PIN submission.\n"+detail+"\n"+e.getMessage(),e);}
     }
+    private Slot slotFor(PublicKey key)throws GeneralSecurityException{
+        for(var entry:expected.entrySet())if(MessageDigest.isEqual(entry.getValue().getEncoded(),key.getEncoded()))return entry.getKey();
+        throw new GeneralSecurityException("Unbound token key");
+    }
     private KeyType authorize(Slot slot,PublicKey key,String label)throws Exception {
         PublicKey bound=expected.get(slot);
         if(bound==null||!MessageDigest.isEqual(bound.getEncoded(),key.getEncoded()))throw new GeneralSecurityException("Unbound token key");
@@ -72,23 +79,23 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
         }catch(Exception e){clearSecrets();throw e;}
     }
     private byte[] sessionSign(PublicKey key,byte[] mu)throws Exception {
-        KeyType type=authorize(Slot.SIGNATURE,key,key.getAlgorithm()+" signing");
-        return session.rawSignExternalMu(Slot.SIGNATURE,type,mu);
+        KeyType type=authorize(slotFor(key),key,key.getAlgorithm()+" signing");
+        return session.rawSignExternalMu(slotFor(key),type,mu);
     }
     public byte[] signEcdsa(PublicKey key,byte[] digest)throws Exception {
-        try {KeyType type=authorize(Slot.AUTHENTICATION,key,"ECDSA signing");
+        try {KeyType type=authorize(slotFor(key),key,"ECDSA signing");
             if(digest.length!=(type==KeyType.ECCP384?48:32))throw new GeneralSecurityException("Incorrect ECDSA digest size");
-            return session.rawSignOrDecrypt(Slot.AUTHENTICATION,type,digest);
+            return session.rawSignOrDecrypt(slotFor(key),type,digest);
         }catch(Exception e){clearSecrets();throw e;}
     }
     public byte[] decapsulate(PublicKey key,byte[] ciphertext)throws Exception {
-        try {KeyType type=authorize(Slot.KEY_MANAGEMENT,key,key.getAlgorithm()+" decryption");
-            return session.decapsulate(Slot.KEY_MANAGEMENT,type,ciphertext);
+        try {KeyType type=authorize(slotFor(key),key,key.getAlgorithm()+" decryption");
+            return session.decapsulate(slotFor(key),type,ciphertext);
         }catch(Exception e){clearSecrets();throw e;}
     }
     public byte[] derive(PublicKey key,PublicKey peer)throws Exception {
-        try {authorize(Slot.RETIRED1,key,"ECDH decryption");
-            return session.calculateSecret(Slot.RETIRED1,PublicKeyValues.fromPublicKey(peer));
+        try {authorize(slotFor(key),key,"ECDH decryption");
+            return session.calculateSecret(slotFor(key),PublicKeyValues.fromPublicKey(peer));
         }catch(Exception e){clearSecrets();throw e;}
     }
     public void clearSecrets() {

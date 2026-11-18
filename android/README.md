@@ -106,3 +106,26 @@ Import a recipient certificate or use **Trust signer for encryption** on verifie
 The reader accepts signed messages inside AuthEnvelopedData or conventional EnvelopedData (including AES-CBC), and plain-text content in common mixed/alternative/related MIME layouts. HTML is not rendered. Encrypted messages without a signature are shown explicitly as unsigned and cannot be used to establish signer trust. Encryption to a conventional recipient does not provide post-quantum confidentiality, even when the message carries a PQ signature.
 
 The attachment and conventional S/MIME update passed Android build/lint and emulator instrumentation tests on November 17, 2026. Physical YubiKey tests of these new features and third-party mail-client interoperability remain pending.
+
+## Share certificates between instances
+
+Select a saved **YubiKey identity**, then choose **Share certificates…** (Mac: **Keys**; Android: **Identities & certificates**). PQ Mail gathers the saved pure/hybrid profiles for the same device and PQ key pair and shows the email addresses, algorithms, fingerprints, serial and all four PIV slots before sharing. A normal pure/hybrid pair contains four public certificates. If only one profile is saved, only that profile can be shared; no new certificates or keys are generated.
+
+The versioned `.pqcert` bundle contains public signing/encryption certificates and YubiKey serial/slot mappings. It contains **no private keys, PINs, passwords, OAuth credentials or trust decisions**. The Mac opens its native sharing picker, including AirDrop when available, and also offers **Save bundle…**. Android opens its system share sheet, including Quick Share when available. Transport availability depends on the OS/device; this feature does not implement AirDrop itself.
+
+On the receiving Mac, open the `.pqcert` file with PQ Mail or use **Import certificate bundle…**. On Android, share/open it with PQ Mail when offered, or select it with **Import certificate bundle…**. Review all fingerprints and device mappings, then choose:
+
+- **Use with my YubiKey / My YubiKey**: save public-only identities for that device. Select the imported pure or hybrid identity afterward. The existing signing/decryption backend checks serial and public keys when the key is used; imported metadata alone does not prove possession.
+- **Add contact certificates / Contact certificates**: save certificates for another person's mailbox. Mark fingerprints trusted separately after confirming them with the owner.
+
+Existing trust decisions are preserved, but imports never grant new trust. Repeated identity imports are idempotent; conflicting existing bindings are rejected. No YubiKey slots are written or provisioned. ML-DSA signing currently uses slot `9c`; the traditional-signing, ML-KEM and ECDH mappings travel with each profile. Software private identities remain separate `.p12` imports.
+
+Validation covers public-only bundle round trips, malformed/oversized input, conflicting mappings, idempotent imports, trust separation, Android provider access restrictions and simulated token operations. Physical Mac–Android AirDrop/Quick Share delivery still requires testing on the two devices.
+
+## OpenPGP alternative
+
+Select a Level 3 hybrid identity, then open **OpenPGP public identities** to create or import its public identity. Export its `.asc` file for another installation or correspondent; import recipient/signer public identities and review their fingerprints. In Compose, enable **OpenPGP** and optionally encryption. The existing SMTP send and local file workflows use the selected format. Incoming OpenPGP messages use the imported signer public identity for verification.
+
+Software keys stay in the password-protected `.p12`; YubiKey signing/decryption uses the same YubiKit PIV adapter. No OpenPGP applet or new token keys are required. OpenPGP is currently plain-text, one-recipient, Level 3 hybrid only; use S/MIME for attachments and other profiles. A valid signature does not establish correspondent trust. See [the shared OpenPGP guide](../docs/OPENPGP.md).
+
+The OpenPGP build passed eight Android emulator instrumentation tests, including the simulated PIV backend. Physical NFC/USB OpenPGP tests remain pending.

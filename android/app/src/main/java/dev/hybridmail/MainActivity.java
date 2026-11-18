@@ -36,6 +36,8 @@ public final class MainActivity extends Activity {
     private byte[] outgoing;
     private final List<MailEngine.Attachment> attachments=new ArrayList<>();
     private boolean encryptDraft;
+    private boolean openPgpDraft;
+    private OpenPgp.PublicIdentity pgpRecipient,pgpSigner;
     private volatile boolean busy;
     private volatile CompletableFuture<char[]> pendingPin;
     private volatile CompletableFuture<Void> pendingStage;
@@ -51,7 +53,7 @@ public final class MainActivity extends Activity {
         Security.removeProvider("BC");Security.insertProviderAt(new BouncyCastleProvider(),1);MailEngine.init();
         try {store=new AndroidStore(this);manager=new YubiKitManager(this);
             manager.startUsbDiscovery(new UsbConfiguration().handlePermissions(true),this::discovered);
-            home();
+            home();if(saved==null)receiveBundle(getIntent());
         }catch(Exception e){error(e);}
     }
     @Override protected void onResume(){super.onResume();if(manager!=null)try{manager.startNfcDiscovery(new NfcConfiguration().skipNdefCheck(true).timeout(15000),this,this::discovered);}catch(Exception ignored){}}
@@ -73,17 +75,19 @@ public final class MainActivity extends Activity {
     private void error(Throwable e){Throwable last=e;while(last.getCause()!=null && !(last instanceof PivDiagnostic))last=last.getCause();String message=last.getMessage();new AlertDialog.Builder(this).setTitle("PQ Mail").setMessage(message==null?last.getClass().getSimpleName():message).setPositiveButton("OK",null).show();}
     private void work(String message,Work action){if(busy)return;busy=true;notice(message);worker.execute(()->{try{action.run();}catch(Exception e){runOnUiThread(()->error(e));}finally{busy=false;runOnUiThread(()->{dismissHolding();notice("Ready — you can remove the YubiKey.");});}});}
     private void home(){page("PQ Mail");text("Android preview • S/MIME with software keys or YubiKey USB/NFC\n"+(identity==null?"Select an identity to begin.":identity.signatureAlgorithm()+"\n"+(selected.serial()==0?"Software identity unlocked":"YubiKey "+selected.serial())));
-        button("Identities & certificates",this::identities);button("Compose signed mail",this::compose);button("Open and verify / decrypt .eml",()->pick(uri->openMessage(read(uri))));button("IMAP inbox & SMTP",this::account);
+        button("OpenPGP public identities",this::openPgpKeys);button("Identities & certificates",this::identities);button("Compose signed mail",this::compose);button("Open and verify / decrypt .eml",()->pick(uri->openMessage(read(uri))));button("IMAP inbox & SMTP",this::account);
         button("Lock software identity",()->{identity=null;selected=null;outgoing=null;home();});
     }
     private void identities(){page("Identities & certificates");
         button("Import and trust signing certificate",()->importTrustedCertificate("signing"));
         button("Import and trust encryption certificate",()->importTrustedCertificate("encryption"));
+        button("Share certificates…",this::shareCertificates);
+        button("Import certificate bundle…",()->pick(uri->reviewBundle(readBundle(uri))));
         button("Create software .p12 — four keys",()->identityForm(false));
         button("Import software .p12",()->pick(uri->{byte[] data=read(uri);runOnUiThread(()->password("Unlock imported .p12",p->importBundle(data,p)));}));
         button("Use existing YubiKey keys — issue certificates",()->identityForm(true));
         button("Import existing YubiKey certificate pair",this::importTokenCertificates);
-        try{for(var certificate:store.encryptionContacts())button("Use trusted encryption certificate: "+certificate.getSubjectX500Principal()+" • "+certificate.getPublicKey().getAlgorithm(),()->{recipient=certificate;notice("Recipient encryption certificate selected");});}catch(Exception e){error(e);}
+        try{for(var certificate:store.encryptionContacts())button("Use saved encryption certificate: "+certificate.getSubjectX500Principal()+" • "+certificate.getPublicKey().getAlgorithm(),()->{recipient=certificate;notice("Recipient encryption certificate selected");});}catch(Exception e){error(e);}
         text("YubiKey: existing slots 9c (ML-DSA), 9a (ECDSA), 9d (ML-KEM), 82 (ECDH). This Android preview never generates or replaces token keys. Certificates are saved locally; private keys stay on the YubiKey.");
         try{for(var entry:store.entries())button(entry.toString(),()->select(entry));}catch(Exception e){error(e);}
         if(identity!=null){button("Export signing certificate",()->exportCert(identity.signingCert(),"signing.cer"));button("Export encryption certificate",()->exportCert(identity.encryptionCert(),"encryption.cer"));
@@ -182,7 +186,7 @@ public final class MainActivity extends Activity {
             return key;}
         finally{deviceGate.cancel();}
     }
-    private YubiBackend backend(){return new YubiBackend(this::requireDevice,label->requestPin((label.contains("decryption")?identity.encryptionCert().getPublicKey().getAlgorithm():identity.signatureAlgorithm())+" / "+label),selected.serial(),YubiBackend.keys(identity));}
+    private YubiBackend backend(){return new YubiBackend(this::requireDevice,label->requestPin((label.contains("decryption")?identity.encryptionCert().getPublicKey().getAlgorithm():identity.signatureAlgorithm())+" / "+label),selected.serial(),YubiBackend.keys(identity,store.slots(selected)));}
     private char[] requestPin(String algorithm)throws Exception {
         CompletableFuture<char[]> result=new CompletableFuture<>();pendingPin=result;
         runOnUiThread(()->{
@@ -211,6 +215,36 @@ public final class MainActivity extends Activity {
             var e=new AndroidStore.Entry(id,"Imported "+loaded.get(loaded.size()-1).signatureAlgorithm(),p.getFileName().toString(),0,"","");store.add(e);runOnUiThread(()->chooseView(e,loaded));
         }catch(Exception e){Files.deleteIfExists(p);throw e;}
     }
+    private byte[] readBundle(Uri uri)throws Exception{
+        try(var in=getContentResolver().openInputStream(uri);var out=new ByteArrayOutputStream()){
+            if(in==null)throw new IOException("Cannot open certificate bundle");byte[] buffer=new byte[8192];int n;
+            while((n=in.read(buffer))!=-1){if(out.size()+n>CertificateBundle.MAX_BYTES)throw new IOException("Bundle exceeds 512 KiB");out.write(buffer,0,n);}return out.toByteArray();
+        }
+    }
+    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);receiveBundle(intent);}
+    private void receiveBundle(Intent intent){
+        if(intent==null||busy)return;Uri uri=null;
+        if(Intent.ACTION_SEND.equals(intent.getAction()))uri=intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        else if(Intent.ACTION_VIEW.equals(intent.getAction()))uri=intent.getData();
+        if(uri==null)return;if(!"content".equals(uri.getScheme())){error(new IOException("Use the document picker to open this certificate bundle"));return;}
+        Uri source=uri;work("Reading shared certificate bundle…",()->reviewBundle(readBundle(source)));
+    }
+    private void shareCertificates(){work("Preparing public certificate profiles…",()->{
+        var entries=store.certificateBundle(selected,identity);byte[] bytes=CertificateBundle.encode(entries);String review=CertificateBundle.review(entries);
+        runOnUiThread(()->new AlertDialog.Builder(this).setTitle("Share public certificates?").setMessage(review).setNegativeButton("Cancel",null).setPositiveButton("Share…",(d,w)->{
+            try{Files.write(getCacheDir().toPath().resolve("PQ-Mail-certificates.pqcert"),bytes);
+                Uri uri=Uri.parse("content://"+getPackageName()+".certificates/PQ-Mail-certificates.pqcert");
+                Intent share=new Intent(Intent.ACTION_SEND).setType(CertificateBundle.MIME).putExtra(Intent.EXTRA_STREAM,uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                share.setClipData(ClipData.newRawUri("Public certificate bundle",uri));startActivity(Intent.createChooser(share,"Share certificates — Quick Share"));
+            }catch(Exception e){error(e);}
+        }).show());
+    });}
+    private void reviewBundle(byte[] bytes)throws Exception{
+        var entries=CertificateBundle.decode(bytes);String review=CertificateBundle.review(entries);
+        runOnUiThread(()->new AlertDialog.Builder(this).setTitle("Review public certificate bundle").setMessage(review)
+            .setNeutralButton("Cancel",null).setPositiveButton("My YubiKey",(d,w)->work("Importing public identities…",()->{store.importCertificateBundle(entries,true);runOnUiThread(this::identities);}))
+            .setNegativeButton("Contact certificates",(d,w)->work("Importing contact certificates…",()->{store.importCertificateBundle(entries,false);runOnUiThread(this::identities);})).show());
+    }
     private void importTrustedCertificate(String role){pick(uri->{
         var cert=(X509Certificate)java.security.cert.CertificateFactory.getInstance("X.509","BC").generateCertificate(new ByteArrayInputStream(read(uri)));
         Identity.validateCertificatePurpose(cert,role);String fingerprint=Identity.fingerprint(cert);
@@ -222,9 +256,28 @@ public final class MainActivity extends Activity {
         else password("Unlock software .p12",pass->{var ids=Identity.loadProfiles(store.root.resolve(e.bundle()),pass);runOnUiThread(()->chooseView(e,ids));});}
     private void chooseView(AndroidStore.Entry e,List<Identity> ids){String[] labels=ids.stream().map(Identity::signatureAlgorithm).toArray(String[]::new);
         new AlertDialog.Builder(this).setTitle("Outgoing identity profile").setItems(labels,(d,n)->{identity=ids.get(n);selected=e;try{for(var san:identity.signingCert().getSubjectAlternativeNames())if(Integer.valueOf(1).equals(san.get(0))){from=(String)san.get(1);break;}}catch(Exception ignored){}home();}).show();}
+    private void openPgpKeys(){
+        page("OpenPGP public identities");
+        text("Level 3 hybrid draft-05: ML-DSA-65 + P-384 / ML-KEM-768 + P-384. Existing keys are reused; no YubiKey slots change. Public identities are separate from X.509 certificates.");
+        if(OpenPgp.supported(identity)){
+            button("Create OpenPGP public identity",()->work("Creating three hybrid binding signatures; keep the key connected…",()->{var own=OpenPgp.createOwn(store.root,identity,selected.serial()==0?null:backend());String detail=own.description();runOnUiThread(()->new AlertDialog.Builder(this).setTitle("OpenPGP identity ready").setMessage(detail).setPositiveButton("OK",null).show());}));
+            button("Import my existing OpenPGP public identity",()->pick(uri->{var own=OpenPgp.saveOwn(store.root,identity,read(uri));runOnUiThread(()->notice("Own OpenPGP public identity imported."));}));
+            button("Export my OpenPGP public key",()->work("Exporting public key…",()->{byte[] data=OpenPgp.loadOwn(store.root,identity).export();runOnUiThread(()->export(data,"PQ-Mail-public.asc","application/pgp-keys"));}));
+            button("Use my OpenPGP key as recipient",()->{try{pgpRecipient=OpenPgp.loadOwn(store.root,identity);to=pgpRecipient.email;notice("Own OpenPGP recipient selected.");}catch(Exception e){error(e);}});
+        }else text("Select a Level 3 hybrid software or YubiKey identity first.");
+        button("Import recipient OpenPGP public key",()->importPgpContact(true));
+        button("Import sender OpenPGP public key",()->importPgpContact(false));
+        button("Verify with my OpenPGP key",()->{pgpSigner=null;notice("Verification uses your selected OpenPGP identity.");});
+        text("Confirm public fingerprints independently. Import verifies self-signatures, not trust. When moving existing keys between devices, import the same OpenPGP public identity to preserve its fingerprints.");
+    }
+    private void importPgpContact(boolean recipientRole){
+        pick(uri->{var key=new OpenPgp.PublicIdentity(read(uri));String description=key.description();runOnUiThread(()->new AlertDialog.Builder(this).setTitle("Use OpenPGP public key?").setMessage(description).setNegativeButton("Cancel",null).setPositiveButton("Use key",(d,w)->{if(recipientRole){pgpRecipient=key;to=key.email;}else pgpSigner=key;notice("OpenPGP public key selected; trust not established.");}).show());});
+    }
     private void compose(){if(identity==null){error(new Exception("Select an identity first"));return;}outgoing=null;page("Compose signed mail");text(identity.signatureAlgorithm()+" • "+(selected.serial()==0?"software":"YubiKey "+selected.serial()));
         EditText f=field("From",from),t=field("To",to),s=field("Subject",subject),b=field("Message",body);b.setSingleLine(false);b.setMinLines(5);
-        CheckBox encrypt=new CheckBox(this);encrypt.setText("Encrypt body and attachments with recipient certificate");encrypt.setChecked(encryptDraft);encrypt.setOnCheckedChangeListener((v,checked)->encryptDraft=checked);page.addView(encrypt);
+        CheckBox format=new CheckBox(this);format.setText("Use OpenPGP (Level 3 hybrid draft; plain text only)");format.setChecked(openPgpDraft);format.setEnabled(OpenPgp.supported(identity));if(!OpenPgp.supported(identity)){openPgpDraft=false;format.setChecked(false);}format.setOnCheckedChangeListener((v,checked)->openPgpDraft=checked);page.addView(format);
+        CheckBox encrypt=new CheckBox(this);encrypt.setText("Also encrypt (S/MIME certificate or OpenPGP recipient key)");encrypt.setChecked(encryptDraft);encrypt.setOnCheckedChangeListener((v,checked)->encryptDraft=checked);page.addView(encrypt);
+        text(pgpRecipient==null?"No OpenPGP recipient selected; use OpenPGP public identities from Home.":"OpenPGP recipient: "+pgpRecipient.email);
         text(recipient==null?"No recipient certificate loaded":recipient.getSubjectX500Principal()+"\n"+recipient.getPublicKey().getAlgorithm());
         button("Import recipient encryption certificate",()->{from=f.getText().toString();to=t.getText().toString();subject=s.getText().toString();body=b.getText().toString();pick(uri->{byte[] data=read(uri);var cert=(X509Certificate)java.security.cert.CertificateFactory.getInstance("X.509","BC").generateCertificate(new ByteArrayInputStream(data));Identity.validateCertificatePurpose(cert,"encryption");recipient=cert;runOnUiThread(this::compose);});});
         text("Attachments are signed with the body. Enable encryption to protect filenames and contents. Up to 20 files / 10 MiB total.");
@@ -241,10 +294,16 @@ public final class MainActivity extends Activity {
                 var attachment=new MailEngine.Attachment(name,bytes);runOnUiThread(()->{attachments.add(attachment);compose();});
             });
         });
-        button("Sign and prepare .eml",()->{from=f.getText().toString().trim();to=t.getText().toString().trim();subject=s.getText().toString();body=b.getText().toString();boolean enc=encrypt.isChecked();if(enc&&recipient==null){error(new Exception("Import recipient encryption certificate first"));return;}
-            work("Signing "+identity.signatureAlgorithm()+ (enc?" and encrypting…":"…"),()->{outgoing=MailEngine.encode(MailEngine.composeAttachments(identity,from,to,subject,body,enc?recipient:null,selected.serial()==0?null:backend(),List.copyOf(attachments)));runOnUiThread(()->export(outgoing,"message.eml","message/rfc822"));});});
+        button("Sign and prepare .eml",()->{from=f.getText().toString().trim();to=t.getText().toString().trim();subject=s.getText().toString();body=b.getText().toString();boolean enc=encrypt.isChecked();if(enc&&!openPgpDraft&&recipient==null){error(new Exception("Import recipient encryption certificate first"));return;}
+            if(openPgpDraft&&(!OpenPgp.supported(identity)||!attachments.isEmpty()||(enc&&pgpRecipient==null))){error(new Exception("OpenPGP requires a Level 3 hybrid identity, no attachments, and an OpenPGP recipient key when encrypting."));return;}
+            work("Signing "+identity.signatureAlgorithm()+ (enc?" and encrypting…":"…"),()->{outgoing=openPgpDraft?OpenPgp.compose(identity,OpenPgp.loadOwn(store.root,identity),enc?pgpRecipient:null,from,to,subject,body,selected.serial()==0?null:backend()):MailEngine.encode(MailEngine.composeAttachments(identity,from,to,subject,body,enc?recipient:null,selected.serial()==0?null:backend(),List.copyOf(attachments)));runOnUiThread(()->export(outgoing,"message.eml","message/rfc822"));});});
     }
     private void openMessage(byte[] bytes)throws Exception {
+        if(OpenPgp.isOpenPgp(bytes)){
+            OpenPgp.PublicIdentity own=null;if(OpenPgp.parts(bytes).encrypted()||pgpSigner==null)own=OpenPgp.loadOwn(store.root,identity);
+            var opened=OpenPgp.open(bytes,pgpSigner==null?own:pgpSigner,own,identity,selected!=null&&selected.serial()!=0?backend():null);
+            runOnUiThread(()->{page("OpenPGP message");text(opened.display());});return;
+        }
         var result=MailEngine.open(MailEngine.parse(bytes),identity,null,selected!=null&&selected.serial()!=0?backend():null);
         runOnUiThread(()->{page("S/MIME message");text((result.signerCertificate()==null?"UNSIGNED — sender not verified":"Signature valid • "+result.signatureAlgorithm())+"\n"+(result.encrypted()?"Decrypted":"Unencrypted")+"\nSender address "+(result.fromMatches()?"matches certificate":"DOES NOT match certificate")+"\n"+(store.trusted(result.fingerprint())?"Trusted fingerprint":"Untrusted fingerprint")+"\n"+result.fingerprint());text(result.text());
             for(var attachment:result.attachments())button("Save attachment: "+attachment,()->export(attachment.data(),attachment.name(),"application/octet-stream"));

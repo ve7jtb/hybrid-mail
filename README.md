@@ -2,7 +2,7 @@
 
 <img src="assets/pq-mail.png" alt="PQ Mail: PQ shield, lime envelope and YubiKey on a dark teal background" width="160" />
 
-PQ Mail is an experimental post-quantum S/MIME mail application for **desktop and Android**, built with **Jakarta Mail, Eclipse Angus Mail, and Bouncy Castle**. Desktop token operations use bundled **PKCS#11** adapters; Android uses **YubiKit 3.3.0** directly. It supports software identities and keys generated and used on a PQC Ready YubiKey. Formerly **Hybrid Mail**, the project now lives at [ve7jtb/pq-mail](https://github.com/ve7jtb/pq-mail).
+PQ Mail is an experimental post-quantum mail application supporting **S/MIME and OpenPGP on macOS, Windows, Android and iOS**. Desktop and Android use **Jakarta Mail, Eclipse Angus Mail, and Bouncy Castle**; the SwiftUI iOS preview uses **OpenSSL**. Desktop token operations use bundled **PKCS#11** adapters; Android uses **YubiKit 3.3.0** directly. It supports software identities and keys generated and used on a PQC Ready YubiKey. Formerly **Hybrid Mail**, the project now lives at [ve7jtb/pq-mail](https://github.com/ve7jtb/pq-mail).
 
 ## Demonstration video
 
@@ -12,19 +12,32 @@ PQ Mail is an experimental post-quantum S/MIME mail application for **desktop an
 
 An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB and NFC**, with the same three software `.p12`, pure PQ, and hybrid profiles. It includes local S/MIME, IMAPS/SMTP, and public-only YubiKey identities. See the Android guide for build instructions, hardware testing, and preview limitations; Google OAuth and token provisioning remain desktop features.
 
+## iOS development preview
+
+The [native SwiftUI iOS preview](ios/README.md) uses **OpenSSL 3.6.5** for Level 2/3/5 pure and hybrid S/MIME, persistent password-protected `.p12` identities, and public YubiKey credential bundles. **OpenPGP is an alternative for Level 3 hybrid identities**, using draft-05 ML-DSA-65 + P-384 / ML-KEM-768 + P-384 profiles, separate OpenPGP public identities and PGP/MIME. Both formats share software primitives and the YubiKit NFC/USB-C raw PIV backend. Tests cover published OpenPGP vectors, simulator round trips, simulated hardware operations, and desktop S/MIME/PKCS#12 interoperability. **Physical iPhone YubiKey testing remains pending.** This local-file preview has no mail accounts/sending or attachments yet; see the iOS README for supported formats and limitations.
+
+## OpenPGP on every platform
+
+Select **OpenPGP (Level 3 hybrid draft)** when composing with a Level 3 hybrid identity. It reuses the software `.p12` keys or existing YubiKey PIV keys for **ML-DSA-65 + ECDSA P-384 signing** and **ML-KEM-768 + ECDH P-384 encryption**. OpenPGP public identities are separate from S/MIME certificates: create/import your own public identity and exchange `.asc` public keys with correspondents. Import the same public identity on another device to preserve its fingerprint.
+
+This implements the experimental draft-05 OpenPGP profiles, not the S/MIME composite encoding. Pure PQ, Level 2 and the existing Level 5 P-384 profiles are not available in OpenPGP. Plain-text signed or signed-and-encrypted PGP/MIME is supported; attachments remain S/MIME-only. See the [OpenPGP guide](docs/OPENPGP.md) for setup, limitations and tests.
+
 ## Platform capabilities
 
-| Capability | Desktop | Android preview |
-|---|---|---|
-| Software `.p12`, Level 2/3/5, pure and hybrid | Yes | Yes |
-| YubiKey signing and decryption | Bundled PKCS#11 | Direct YubiKit; Level 3 NFC verified, physical USB testing pending |
-| Generate four keys on an empty YubiKey | Yes | No; use existing keys |
-| Signed mail with optional encryption; `.eml` files | Yes | Yes |
-| Signed/encrypted attachments; save received files | Yes | Yes; system document picker |
-| Conventional RSA/ECDSA signing and RSA/ECDH encryption | Yes; software private keys | Yes; software private keys |
-| Ten-message IMAPS inbox; SMTP STARTTLS | Yes | Yes |
-| Google OAuth and persistent refresh tokens | Yes | Not yet |
-| Certificate management and trusted fingerprints | Full desktop interface | Certificate import/export; persistent signing/encryption fingerprints and saved trusted encryption certificates |
+| Capability | Desktop (macOS / Windows) | Android preview | iOS preview |
+|---|---|---|---|
+| Software `.p12`, Level 2/3/5 pure/hybrid S/MIME | Yes | Yes | Yes |
+| Level 3 hybrid OpenPGP | Yes | Yes | Yes |
+| YubiKey private-key backend | Bundled PKCS#11 | YubiKit USB/NFC | YubiKit raw PIV NFC/USB-C; physical testing pending |
+| Generate four keys on an empty YubiKey | Yes | Use existing keys | Use existing keys |
+| Local signed/encrypted `.eml` files | Yes | Yes | Yes |
+| S/MIME attachments | Yes | Yes | Not yet |
+| Conventional RSA/ECDSA S/MIME | Yes | Yes | Not yet |
+| IMAPS inbox / SMTP | Yes | Yes | Not yet |
+| Gmail API / Google OAuth | Yes | Not yet | Not yet |
+| Persistent certificate trust | Yes | Yes | Verification only; no automatic trust |
+
+OpenPGP validation covers desktop regression tests, eight Android emulator tests (including the simulated PIV adapter), 19 Swift tests, published draft vectors, and bidirectional Java/OpenSSL message exchange. Physical YubiKey OpenPGP and Windows runtime testing remain pending. Existing S/MIME hardware test results do not constitute OpenPGP hardware validation.
 
 ## Desktop features
 
@@ -40,7 +53,7 @@ An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB a
 
 This is an experimental interoperability application. Generated certificates are local test certificates; composite formats and OIDs follow the pinned Bouncy Castle implementation. It is not a production mail client or a claim of interoperability with every S/MIME implementation.
 
-## Cryptographic profiles
+## S/MIME cryptographic profiles
 
 | Profile | Signing | Encryption / KEM |
 |---|---|---|
@@ -55,7 +68,7 @@ Software creation offers the same Level 2, 3 and 5 choices as YubiKey creation. 
 
 Software and YubiKey creation accept up to four additional comma-separated email addresses. All signing and encryption certificates, pure and hybrid, include the primary address plus these `rfc822Name` Subject Alternative Names. The subject CN remains the primary email. Duplicate or invalid addresses are rejected. Pending YubiKey setup metadata preserves the additional addresses for certificate issuance retries.
 
-Outgoing messages use opaque CMS SignedData, optionally wrapped in AuthEnvelopedData. PQ encryption uses KEMRecipientInfo, HKDF-SHA256, AES-256 key wrap and AES-256-GCM. Encryption is performed on the host with the recipient's public key; the recipient's YubiKey performs private-key decapsulation and ECDH during decryption. The host combines hybrid secrets.
+Outgoing S/MIME messages use opaque CMS SignedData, optionally wrapped in AuthEnvelopedData. PQ encryption uses KEMRecipientInfo, HKDF-SHA256, AES-256 key wrap and AES-256-GCM. Encryption is performed on the host with the recipient's public key; the recipient's YubiKey performs private-key decapsulation and ECDH during decryption. The host combines hybrid secrets.
 
 Bouncy Castle computes ML-DSA external μ, including composite domain separation, and assembles composite signatures. The app's OpenSSL/PKCS#11 adapter uses the provider's external-μ support from [PR #818](https://github.com/openssl-projects/pkcs11-provider/pull/818). Returned signatures are verified before use. A composite operation shares one entered PIN between its two components and clears the cache when the operation finishes; PINs are never persisted.
 
@@ -167,6 +180,22 @@ RSA and ECDSA signatures can be received and explicitly trusted by certificate f
 Import a recipient certificate or use **Trust signer for encryption** on verified mail if the signer certificate also permits encryption. A separate encryption certificate must be imported when the signing certificate is signing-only. Conventional software `.p12` files with one unambiguous signing key and at most one encryption key can be imported, including arbitrary aliases. Classical decryption requires the matching software private key; PQ YubiKey profiles remain unchanged.
 
 The reader accepts signed messages inside AuthEnvelopedData or conventional EnvelopedData (including AES-CBC), and plain-text content in common mixed/alternative/related MIME layouts. HTML is not rendered. Encrypted messages without a signature are shown explicitly as unsigned and cannot be used to establish signer trust. Encryption to a conventional recipient does not provide post-quantum confidentiality, even when the message carries a PQ signature.
+
+
+## Share certificates between instances
+
+Select a saved **YubiKey identity**, then choose **Share certificates…** (Mac: **Keys**; Android: **Identities & certificates**). PQ Mail gathers the saved pure/hybrid profiles for the same device and PQ key pair and shows the email addresses, algorithms, fingerprints, serial and all four PIV slots before sharing. A normal pure/hybrid pair contains four public certificates. If only one profile is saved, only that profile can be shared; no new certificates or keys are generated.
+
+The versioned `.pqcert` bundle contains public signing/encryption certificates and YubiKey serial/slot mappings. It contains **no private keys, PINs, passwords, OAuth credentials or trust decisions**. The Mac opens its native sharing picker, including AirDrop when available, and also offers **Save bundle…**. Android opens its system share sheet, including Quick Share when available. Transport availability depends on the OS/device; this feature does not implement AirDrop itself.
+
+On the receiving Mac, open the `.pqcert` file with PQ Mail or use **Import certificate bundle…**. On Android, share/open it with PQ Mail when offered, or select it with **Import certificate bundle…**. Review all fingerprints and device mappings, then choose:
+
+- **Use with my YubiKey / My YubiKey**: save public-only identities for that device. Select the imported pure or hybrid identity afterward. The existing signing/decryption backend checks serial and public keys when the key is used; imported metadata alone does not prove possession.
+- **Add contact certificates / Contact certificates**: save certificates for another person's mailbox. Mark fingerprints trusted separately after confirming them with the owner.
+
+Existing trust decisions are preserved, but imports never grant new trust. Repeated identity imports are idempotent; conflicting existing bindings are rejected. No YubiKey slots are written or provisioned. ML-DSA signing currently uses slot `9c`; the traditional-signing, ML-KEM and ECDH mappings travel with each profile. Software private identities remain separate `.p12` imports.
+
+Validation covers public-only bundle round trips, malformed/oversized input, conflicting mappings, idempotent imports, trust separation, Android provider access restrictions and simulated token operations. Physical Mac–Android AirDrop/Quick Share delivery still requires testing on the two devices.
 
 ## Validation and limitations
 

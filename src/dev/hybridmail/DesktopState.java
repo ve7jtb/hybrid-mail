@@ -105,6 +105,31 @@ public final class DesktopState {
             set("identity."+id+".variant",profiles.size()==2&&i==0?"pure":"");
         }save();
     }
+    public List<CertificateBundle.Entry> certificateBundle(Identity selected)throws Exception{
+        if(selected==null||selected.signingKey()!=null)throw new IOException("Select a saved YubiKey identity to share its pure/hybrid certificates");
+        String serial=get("identity."+identityId(selected)+".token.serial","");if(serial.isBlank())throw new IOException("Selected identity has no YubiKey serial");
+        List<CertificateBundle.Entry> result=new ArrayList<>();
+        for(var saved:identities())if(!saved.passwordRequired()&&serial.equals(get("identity."+saved.id()+".token.serial",""))){
+            Identity id=loadIdentity(saved.id(),new char[0]);if(!CertificateBundle.sameKeys(selected,id))continue;
+            String prefix="identity."+saved.id()+".token.";
+            result.add(new CertificateBundle.Entry(id,Integer.parseInt(serial),"9c",get(prefix+"rsaSlot","9a"),get(prefix+"kemSlot","9d"),get(prefix+"ecdhSlot","82")));
+        }
+        return CertificateBundle.decode(CertificateBundle.encode(result));
+    }
+    public void importCertificateBundle(List<CertificateBundle.Entry> entries,boolean own)throws Exception{
+        entries=CertificateBundle.decode(CertificateBundle.encode(entries));
+        for(var e:entries)if(own){String id=identityId(e.identity());
+            if(identities().stream().anyMatch(old->old.id().equals(id))){
+                String prefix="identity."+id+".token.";
+                if(get("identity."+id+".type","").equals("pkcs12")||!get(prefix+"serial","").equals(Integer.toString(e.serial()))||!get(prefix+"rsaSlot","9a").equals(e.traditionalSlot())||!get(prefix+"kemSlot","9d").equals(e.kemSlot())||!get(prefix+"ecdhSlot","82").equals(e.ecdhSlot()))throw new IOException("Bundle conflicts with an existing identity; no bindings changed");
+            }
+        }
+        String previous=get("selected.identity",null);
+        for(var e:entries){if(own){String id=identityId(e.identity());if(identities().stream().noneMatch(old->old.id().equals(id))){remember(e.identity(),CertificateBundle.emails(e.identity().signingCert())+" · "+e.identity().signatureAlgorithm(),null);bindToken(id,Integer.toString(e.serial()),e.traditionalSlot(),e.kemSlot(),e.ecdhSlot());}}
+            else for(String role:List.of("signing","encryption")){X509Certificate cert=role.equals("signing")?e.identity().signingCert():e.identity().encryptionCert();for(String email:CertificateBundle.emails(cert))rememberContact(cert,email,role);}
+        }
+        set("selected.identity",previous);save();
+    }
     public void saveCertificate(String role,X509Certificate certificate)throws Exception{
         if(!Set.of("recipient","pinned").contains(role))throw new IllegalArgumentException("Invalid certificate role");
         write(directory.resolve(role+".cer"),certificate.getEncoded());

@@ -27,6 +27,10 @@ public final class MailApp extends JFrame {
     private final JButton saveAttachment=new JButton("Save attachment…");
     private record ReadResult(String plain,MailEngine.Opened verified,String subject){}
     private Identity identity;
+    private final JComboBox<String> mailFormat=new JComboBox<>(new String[]{"S/MIME","OpenPGP (Level 3 hybrid draft)"});
+    private OpenPgp.PublicIdentity pgpRecipient,pgpSigner;
+    private final JTextArea pgpStatus=new JTextArea("Select a Level 3 hybrid identity. OpenPGP uses separate public identities and fingerprints; private keys stay in the existing software bundle or YubiKey.");
+    private boolean usePgp(){return mailFormat.getSelectedIndex()==1;}
     private MailInbox inbox;
     private final JCheckBox smimeInboxOnly=new JCheckBox("S/MIME only");
     private final JButton newerMail=new JButton("Newer"),olderMail=new JButton("Older");
@@ -49,12 +53,12 @@ public final class MailApp extends JFrame {
     private final JLabel status = new JLabel("Create or load an identity to begin. No network connection is made on startup.");
     private final JTabbedPane tabs = new JTabbedPane();
     public MailApp() {
-        super("PQ Mail · S/MIME lab");
+        super("PQ Mail · S/MIME & OpenPGP lab");
         setDefaultCloseOperation(EXIT_ON_CLOSE); setSize(1060, 800); setMinimumSize(new Dimension(850,650)); setLocationRelativeTo(null);
         JPanel root = new JPanel(new BorderLayout(0,18)); root.setBorder(new EmptyBorder(22,28,18,28)); setContentPane(root);
         JPanel heading = new JPanel(new BorderLayout()); JLabel title = new JLabel("PQ Mail"); title.setFont(title.getFont().deriveFont(Font.BOLD, 30f));
-        heading.add(title, BorderLayout.NORTH); heading.add(new JLabel("ML-DSA & composite S/MIME  /  local development build"), BorderLayout.SOUTH); root.add(heading,BorderLayout.NORTH);
-        tabs.addTab("Compose", composePanel()); tabs.addTab("Read & verify", readPanel()); tabs.addTab("Keys", keysPanel()); tabs.addTab("Inbox",inboxPanel()); tabs.addTab("Certificates",certificatesPanel()); root.add(tabs);
+        heading.add(title, BorderLayout.NORTH); heading.add(new JLabel("S/MIME & Level 3 hybrid OpenPGP  /  local development build"), BorderLayout.SOUTH); root.add(heading,BorderLayout.NORTH);
+        tabs.addTab("Compose", composePanel()); tabs.addTab("Read & verify", readPanel()); tabs.addTab("Keys", keysPanel()); tabs.addTab("Inbox",inboxPanel()); tabs.addTab("Certificates",certificatesPanel()); tabs.addTab("OpenPGP",openPgpPanel()); root.add(tabs);
         status.setBorder(new EmptyBorder(10,0,0,0)); root.add(status, BorderLayout.SOUTH);
         body.setLineWrap(true); body.setWrapStyleWord(true); body.setFont(new Font(Font.SANS_SERIF,Font.PLAIN,16)); body.setMargin(new Insets(16,16,16,16));
         reader.setEditable(false); reader.setLineWrap(true); reader.setWrapStyleWord(true); reader.setFont(new Font(Font.MONOSPACED,Font.PLAIN,13)); reader.setMargin(new Insets(16,16,16,16));
@@ -62,10 +66,10 @@ public final class MailApp extends JFrame {
     private JPanel composePanel() {
         JPanel p = panel(); JPanel fields = new JPanel(new GridLayout(0,1,0,8));
         fields.add(row("From",from)); fields.add(row("To",to)); fields.add(row("Subject",subject));
-        fields.add(row("Sign with",outgoingIdentity));fields.add(encrypt);fields.add(row("Encrypt to",outgoingEncryption));
+        fields.add(row("Message format",mailFormat));fields.add(row("Sign with",outgoingIdentity));fields.add(encrypt);fields.add(row("Encrypt to",outgoingEncryption));
         outgoingIdentity.addActionListener(e->{if(!syncingOutgoing){var chosen=(DesktopState.SavedIdentity)outgoingIdentity.getSelectedItem();if(chosen!=null)openSaved(chosen);}});
         outgoingEncryption.setEnabled(encrypt.isSelected());encrypt.addActionListener(e->outgoingEncryption.setEnabled(encrypt.isSelected()));
-        outgoingEncryption.addActionListener(e->{if(!syncingOutgoing){var chosen=(EncryptionChoice)outgoingEncryption.getSelectedItem();if(chosen!=null){recipient=chosen.certificate();to.setText(chosen.email());recipientLabel.setText(chosen.email()+" · "+recipient.getPublicKey().getAlgorithm());try{state().saveCertificate("recipient",recipient);}catch(Exception error){error(error);}}}}); fields.add(new JLabel("All outgoing messages are signed. Enable encryption only when you have the recipient’s encryption certificate.")); p.add(fields,BorderLayout.NORTH);
+        outgoingEncryption.addActionListener(e->{if(!syncingOutgoing){var chosen=(EncryptionChoice)outgoingEncryption.getSelectedItem();if(chosen!=null){recipient=chosen.certificate();to.setText(chosen.email());recipientLabel.setText(chosen.email()+" · "+recipient.getPublicKey().getAlgorithm());try{state().saveCertificate("recipient",recipient);}catch(Exception error){error(error);}}}}); fields.add(new JLabel("All outgoing messages are signed. OpenPGP uses its own recipient public key from the OpenPGP tab; attachments currently require S/MIME.")); p.add(fields,BorderLayout.NORTH);
         JPanel content=new JPanel(new BorderLayout(0,6));content.add(new JScrollPane(body));
         JPanel attachments=new JPanel(new BorderLayout());attachmentList.setVisibleRowCount(2);
         attachments.add(new JScrollPane(attachmentList));JPanel fileActions=new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -88,6 +92,34 @@ public final class MailApp extends JFrame {
         trustIncoming.setEnabled(false);trustIncoming.addActionListener(e->trustIncomingSigner());actions.add(trustIncoming);actions.add(button("Trust signer for encryption…",this::trustIncomingEncryption));
         saveAttachment.setEnabled(false);saveAttachment.addActionListener(e->saveReadAttachment());actions.add(saveAttachment);
         p.add(actions,BorderLayout.NORTH); return p;
+    }
+    private JPanel openPgpPanel(){
+        JPanel p=panel();pgpStatus.setEditable(false);pgpStatus.setLineWrap(true);pgpStatus.setWrapStyleWord(true);p.add(new JScrollPane(pgpStatus));
+        JPanel actions=new JPanel(new GridLayout(0,2,8,8));
+        actions.add(button("Create OpenPGP public identity",()->{
+            Identity id=identity;String path=adapter;
+            job("Creating OpenPGP bindings (one PIN operation; three hybrid signatures)…",()->OpenPgp.createOwn(state().directory(),id,path==null?null:ExternalMu.executable(path)).description(),pgpStatus::setText);
+        }));
+        actions.add(button("Import my OpenPGP public identity…",()->{
+            Path file=choose(false,"Import my OpenPGP public identity");if(file==null)return;Identity id=identity;
+            job("Checking public key bindings…",()->OpenPgp.saveOwn(state().directory(),id,readPgp(file)).description(),pgpStatus::setText);
+        }));
+        actions.add(button("Export my OpenPGP public key…",()->{
+            Path file=chooseSave("Export public OpenPGP key","PQ-Mail-public.asc","asc");if(file==null)return;Identity id=identity;
+            job("Exporting public key…",()->{Files.write(file,OpenPgp.loadOwn(state().directory(),id).export(),StandardOpenOption.CREATE_NEW);return "Public key exported; no private keys or PINs included.";},pgpStatus::setText);
+        }));
+        actions.add(button("Use my OpenPGP key as recipient",()->{try{pgpRecipient=OpenPgp.loadOwn(state().directory(),identity);pgpStatus.setText(pgpRecipient.description());to.setText(pgpRecipient.email);}catch(Exception e){error(e);}}));
+        actions.add(button("Import recipient OpenPGP public key…",()->importPgpContact(true)));
+        actions.add(button("Import sender OpenPGP public key…",()->importPgpContact(false)));
+        actions.add(button("Verify with my OpenPGP key",()->{pgpSigner=null;pgpStatus.setText("Incoming OpenPGP verification uses the selected identity's public key.");}));
+        p.add(actions,BorderLayout.NORTH);p.add(new JLabel("<html>Draft-05 Level 3 only: ML-DSA-65 + P-384 / ML-KEM-768 + P-384.<br>Existing keys are reused; no YubiKey slots are changed. Import the same public identity on other devices to preserve fingerprints.<br>Self-signature verification does not establish trust. This preview supports plain-text PGP/MIME; use S/MIME for attachments.</html>"),BorderLayout.SOUTH);return p;
+    }
+    private byte[] readPgp(Path file)throws IOException{if(Files.size(file)>128*1024)throw new IOException("OpenPGP public key exceeds 128 KiB");return Files.readAllBytes(file);}
+    private void importPgpContact(boolean recipientRole){
+        Path file=choose(false,"Import "+(recipientRole?"recipient":"sender")+" OpenPGP public key");if(file==null)return;
+        job("Verifying OpenPGP key bindings…",()->new OpenPgp.PublicIdentity(readPgp(file)),key->{
+            try{if(JOptionPane.showConfirmDialog(this,key.description(),"Use this OpenPGP public key?",JOptionPane.OK_CANCEL_OPTION)==JOptionPane.OK_OPTION){if(recipientRole){pgpRecipient=key;to.setText(key.email);}else pgpSigner=key;pgpStatus.setText(key.description());}}catch(Exception e){error(e);}
+        });
     }
     private void googleAdvancedSettings(){
         JDialog dialog=new JDialog(this,"Advanced settings — Google OAuth",true);
@@ -290,6 +322,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         pendingHelp.getAccessibleContext().setAccessibleName("Help about finishing pending certificates");
         p.add(left(button("Create identity on empty YubiKey…",this::provisionYubiKey),button("Finish pending certificates…",this::finishTokenCertificates),pendingHelp));
         p.add(left(button("Export selected signing certificate…",()->export(true)),button("Export selected encryption certificate…",()->export(false))));
+        p.add(left(button("Share certificates…",this::shareCertificates),button("Import certificate bundle…",()->{Path file=choose(false,"Import PQ Mail certificate bundle (.pqcert)");if(file!=null)importCertificateBundle(file);})));
         JPanel settings=new JPanel(new FlowLayout(FlowLayout.LEFT));
         settings.add(button("YubiKey configuration…",this::configureYubiKey));
         settings.add(button("Update YubiKey certificate email…",this::reissueTokenCertificates));
@@ -488,6 +521,25 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         try{if(desktopState!=null)desktopState.activateIdentity(id);}catch(Exception e){error(e);return;}identity=id;
         if(desktopState!=null){adapter=id.signingKey()==null?tokenAdapter(false):null;kemAdapter=id.encryptionKey()==null&&id.encryptionCert()!=null?tokenAdapter(true):null;}
         identityLabel.setText(id.signatureAlgorithm()+" · "+id.signingCert().getSubjectX500Principal());status.setText("Identity ready. Import a recipient certificate to encrypt.");}
+    private void shareCertificates(){
+        try{var entries=state().certificateBundle(identity);JTextArea review=new JTextArea(CertificateBundle.review(entries),18,76);review.setEditable(false);review.setLineWrap(true);review.setWrapStyleWord(true);
+            Object[] options=System.getProperty("os.name").startsWith("Mac")?new Object[]{"Share…","Save bundle…","Cancel"}:new Object[]{"Save bundle…","Cancel"};
+            int choice=JOptionPane.showOptionDialog(this,new JScrollPane(review),"Share public certificate profiles",JOptionPane.DEFAULT_OPTION,JOptionPane.PLAIN_MESSAGE,null,options,options[0]);if(choice<0||choice==options.length-1)return;
+            byte[] bytes=CertificateBundle.encode(entries);
+            if(options[choice].equals("Save bundle…")){Path file=chooseSave("Save public certificate bundle","PQ-Mail-certificates.pqcert","pqcert");if(file!=null)Files.write(file,bytes,StandardOpenOption.CREATE_NEW);return;}
+            Path helper=DesktopState.resources().resolve("native/PQMailShare.app");if(!Files.isDirectory(helper))throw new IOException("Native sharing helper is missing; use Save bundle and Finder Share");
+            Path folder=Files.createTempDirectory("pq-mail-certificates-");Path file=folder.resolve("PQ-Mail-certificates.pqcert");Files.write(file,bytes);file.toFile().deleteOnExit();folder.toFile().deleteOnExit();
+            new ProcessBuilder("/usr/bin/open","-n","-a",helper.toString(),"--args",file.toString()).start();status.setText("Choose AirDrop or another destination in the sharing window.");
+        }catch(Exception e){error(e);}
+    }
+    private void importCertificateBundle(Path file){
+        job("Reading public certificate bundle…",()->{if(Files.size(file)>CertificateBundle.MAX_BYTES)throw new IOException("Bundle too large");return CertificateBundle.decode(Files.readAllBytes(file));},entries->{
+            try{JTextArea review=new JTextArea(CertificateBundle.review(entries),18,76);review.setEditable(false);review.setLineWrap(true);review.setWrapStyleWord(true);
+                Object[] options={"Use with my YubiKey","Add contact certificates","Cancel"};int choice=JOptionPane.showOptionDialog(this,new JScrollPane(review),"Review certificate bundle — no automatic trust",JOptionPane.DEFAULT_OPTION,JOptionPane.PLAIN_MESSAGE,null,options,options[2]);if(choice<0||choice==2)return;
+                state().importCertificateBundle(entries,choice==0);refreshSaved();refreshContacts();status.setText("Public certificates imported. Trust unchanged; select an identity before use.");
+            }catch(Exception e){error(e);}
+        });
+    }
     private void export(boolean signing) {
         if(identity==null){error(new IOException("Load an identity first"));return;}
         X509Certificate c=signing?identity.signingCert():identity.encryptionCert();if(c==null){error(new IOException("No certificate available"));return;}
@@ -510,21 +562,24 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     }
     private void compose(boolean send) {
         if(identity==null){error(new IOException("Create or load an identity first"));tabs.setSelectedIndex(2);return;}
-        if(encrypt.isSelected()&&recipient==null){error(new IOException("Import recipient encryption certificate first"));tabs.setSelectedIndex(2);return;}
+        if(!usePgp()&&encrypt.isSelected()&&recipient==null){error(new IOException("Import recipient encryption certificate first"));tabs.setSelectedIndex(2);return;}
         try{
             if(!Identity.matchesEmail(identity.signingCert(),from.getText().trim()))throw new IOException("From address does not match your signing certificate");
-            if(encrypt.isSelected()&&!Identity.matchesEmail(recipient,to.getText().trim())){tabs.setSelectedIndex(4);throw new IOException("Choose an encryption certificate matching the To address, or turn off optional encryption to send signed-only mail");}
+            if(!usePgp()&&encrypt.isSelected()&&!Identity.matchesEmail(recipient,to.getText().trim())){tabs.setSelectedIndex(4);throw new IOException("Choose an encryption certificate matching the To address, or turn off optional encryption to send signed-only mail");}
         }catch(Exception e){error(e);return;}
-        Path file=send?null:chooseSave("Save signed S/MIME message", "message.eml", "eml");if(!send&&file==null)return;
+        if(usePgp()&&(!OpenPgp.supported(identity)||!attachmentModel.isEmpty())){error(new IOException("OpenPGP requires a Level 3 hybrid identity and plain text. Use S/MIME for attachments."));return;}
+        if(usePgp()&&encrypt.isSelected()&&pgpRecipient==null){error(new IOException("Import the recipient OpenPGP public key in the OpenPGP tab, or select Use my OpenPGP key."));tabs.setSelectedIndex(5);return;}
+        final boolean pgp=usePgp(),pgpEncrypt=encrypt.isSelected();final OpenPgp.PublicIdentity pgpTo=pgpRecipient;
+        Path file=send?null:chooseSave("Save signed message", "message.eml", "eml");if(!send&&file==null)return;
         Account a=send?account(true):null;if(send&&a==null)return;
         Identity id=identity; X509Certificate r=encrypt.isSelected()?recipient:null; ExternalMu.Backend backend=adapter==null?null:ExternalMu.executable(adapter);
         var files=java.util.Collections.list(attachmentModel.elements());
         String f=from.getText().trim(),t=to.getText().trim(),s=subject.getText(),b=body.getText();
         try{state().set("mail.from",f);state().set("mail.to",t);state().save();}catch(Exception e){error(e);return;}
-        if(send&&JOptionPane.showConfirmDialog(this,"Send this "+(r!=null?"signed and encrypted":"signed, unencrypted")+" message with "+files.size()+" attachment(s) to "+t+"?","Send message",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){Arrays.fill(a.password,'\0');return;}
+        if(send&&JOptionPane.showConfirmDialog(this,"Send this "+((pgp?pgpEncrypt:r!=null)?"signed and encrypted":"signed, unencrypted")+" message with "+files.size()+" attachment(s) to "+t+"?","Send message",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){Arrays.fill(a.password,'\0');return;}
         job(send?"Signing and sending…":"Signing and saving…",()->{
             try {
-                MimeMessage m=MailEngine.compose(id,f,t,s,b,r,backend,files);
+                MimeMessage m=pgp?MailEngine.parse(OpenPgp.compose(id,OpenPgp.loadOwn(state().directory(),id),pgpEncrypt?pgpTo:null,f,t,s,b,backend)):MailEngine.compose(id,f,t,s,b,r,backend,files);
                 if(send){if(a.oauth){try(var api=new GmailApi(this::googleCredential)){api.verifyAccount(a.user);api.send(m);}}else MailEngine.send(m,a.host,a.port,a.user,new String(a.password),false);}
                 else Files.write(file,MailEngine.encode(m),StandardOpenOption.CREATE_NEW);
                 return send?"Message sent":"Saved "+file.getFileName();
@@ -532,6 +587,13 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         },status::setText);
     }
     private ReadResult display(MimeMessage message,Identity id,X509Certificate pin)throws Exception {
+        byte[] encoded=MailEngine.encode(message);
+        if(OpenPgp.isOpenPgp(encoded)){
+            OpenPgp.PublicIdentity own=null;
+            if(OpenPgp.parts(encoded).encrypted()||pgpSigner==null)own=OpenPgp.loadOwn(state().directory(),id);
+            var opened=OpenPgp.open(encoded,pgpSigner==null?own:pgpSigner,own,id,kemAdapter==null?null:ExternalKem.executable(kemAdapter));
+            return new ReadResult(opened.display(),null,message.getSubject());
+        }
         if(MailPreview.isOrdinary(message))return new ReadResult(MailPreview.display(message),null,message.getSubject());
         var opened=MailEngine.open(message,id,pin,kemAdapter==null?null:ExternalKem.executable(kemAdapter));
         return new ReadResult(null,opened,message.getSubject());
@@ -658,5 +720,5 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             }catch(Exception e){throw new RuntimeException(e);}
         });
     }
-    public static void main(String[]args){MailEngine.init();SwingUtilities.invokeLater(()->{try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}MailApp app=new MailApp();app.setVisible(true);app.restoreDesktop();});}
+    public static void main(String[]args){MailEngine.init();SwingUtilities.invokeLater(()->{try{UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());}catch(Exception ignored){}MailApp app=new MailApp();app.setVisible(true);app.restoreDesktop();if(Desktop.isDesktopSupported()&&Desktop.getDesktop().isSupported(Desktop.Action.APP_OPEN_FILE))Desktop.getDesktop().setOpenFileHandler(event->SwingUtilities.invokeLater(()->{if(!event.getFiles().isEmpty())app.importCertificateBundle(event.getFiles().get(0).toPath());}));if(args.length>0)app.importCertificateBundle(Path.of(args[0]));});}
 }

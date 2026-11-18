@@ -22,4 +22,10 @@ public class FreshDeviceGateTest {
         assertSame(usb,gate.request().get());assertSame(usb,gate.request().get());
         gate.discovered(device(Transport.NFC));assertFalse(gate.request().isDone());gate.cancel();
     }
+    @Test public void waitingStateEndsOnDeliveryAndCancellation(){
+        var gate=new FreshDeviceGate();assertFalse(gate.isWaiting());
+        gate.request();assertTrue(gate.isWaiting());gate.discovered(device(Transport.NFC));assertFalse(gate.isWaiting());
+        gate.request();assertTrue(gate.isWaiting());gate.cancel();assertFalse(gate.isWaiting());
+    }
+
 }

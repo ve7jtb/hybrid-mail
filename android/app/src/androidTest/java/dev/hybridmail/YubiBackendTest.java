@@ -54,6 +54,11 @@ public class YubiBackendTest {
   }
  }
  static class PinFailure extends Exception{}
+ @Test public void readOnlyConnectionTestNeverVerifiesPinOrUsesPrivateKeys()throws Exception{
+  Card card=new Card(TokenProfile.LEVEL3);
+  assertTrue(PivReadTest.run(card,12345,card.publicKeys()).startsWith("PASS read-only"));
+  assertEquals(0,card.verifies);assertEquals(0,card.privateOps);assertEquals(1,card.closes);
+ }
  @Test public void actualYubiKitProtocolAllProfiles()throws Exception{
   for(var p:TokenProfile.values()){
    Card card=new Card(p);List<char[]> pins=new ArrayList<>();YubiBackend backend=new YubiBackend(()->card,label->{char[] pin="123456".toCharArray();pins.add(pin);return pin;},12345,card.publicKeys());
@@ -110,6 +115,71 @@ public class YubiBackendTest {
   var opened=OpenPgp.open(message,own,own,identity,backend);
   assertEquals("YubiKit OpenPGP test",opened.text());assertTrue(opened.encrypted());
   assertEquals(3,prompts[0]);assertEquals(10,card.privateOps-start);
+ }
+
+ @Test public void nfcSetupRecoveryRechecksCardAndReusesOnePin()throws Exception{
+  Card card=new Card(TokenProfile.LEVEL3){int calls;
+   public Transport getTransport(){return Transport.NFC;}
+   public byte[] sendAndReceive(byte[] apdu)throws IOException{if(calls++==0)throw new IOException("Synthetic tag loss");return super.sendAndReceive(apdu);}
+  };
+  int[] prompts={0},retries={0};char[] pin="123456".toCharArray();
+  var source=new YubiBackend.DeviceSource(){public YubiKeyDevice get(){return card;}public boolean retryBeforePin(String d){retries[0]++;assertEquals(0,card.verifies);return true;}};
+  var backend=new YubiBackend(source,label->{prompts[0]++;return pin;},12345,card.publicKeys());
+  assertTrue(backend.sign(card.keys.get(Slot.SIGNATURE).getPublic(),new byte[64]).length>0);backend.clearSecrets();
+  assertEquals(1,prompts[0]);assertEquals(1,retries[0]);assertEquals(1,card.verifies);assertEquals(1,card.privateOps);assertEquals(2,card.closes);assertArrayEquals(new char[6],pin);
+ }
+ @Test public void persistentNfcFailureStopsAfterTwoFreshTapsAndClearsPin()throws Exception{
+  Card card=new Card(TokenProfile.LEVEL3){public Transport getTransport(){return Transport.NFC;}public byte[] sendAndReceive(byte[] a)throws IOException{throw new IOException("Synthetic tag loss");}};
+  int[] retries={0};char[] pin="123456".toCharArray();
+  var source=new YubiBackend.DeviceSource(){public YubiKeyDevice get(){return card;}public boolean retryBeforePin(String d){retries[0]++;return true;}};
+  var backend=new YubiBackend(source,l->pin,12345,card.publicKeys());
+  try{backend.sign(card.keys.get(Slot.SIGNATURE).getPublic(),new byte[64]);fail();}catch(PivDiagnostic expected){}
+  assertEquals(2,retries[0]);assertEquals(3,card.closes);assertEquals(0,card.verifies);assertArrayEquals(new char[6],pin);
+ }
+ @Test public void nfcNeverRetriesVerifyOrPrivateCommandTransportFailure()throws Exception{
+  for(int instruction:new int[]{0x20,0x87}){
+   Card card=new Card(TokenProfile.LEVEL3){public Transport getTransport(){return Transport.NFC;}public byte[] sendAndReceive(byte[] a)throws IOException{if((a[1]&255)==instruction)throw new IOException("Synthetic private-stage loss");return super.sendAndReceive(a);}};
+   char[] pin="123456".toCharArray();
+   var source=new YubiBackend.DeviceSource(){public YubiKeyDevice get(){return card;}public boolean retryBeforePin(String d){fail("Must never retry a PIN or private command");return true;}};
+   var backend=new YubiBackend(source,l->pin,12345,card.publicKeys());
+   try{backend.sign(card.keys.get(Slot.SIGNATURE).getPublic(),new byte[64]);fail();}catch(IOException expected){}
+   assertEquals(1,card.closes);assertArrayEquals(new char[6],pin);
+  }
+ }
+
+ @Test public void readDiagnosticKeepsOnePivSessionButReadsEveryKeyEachCycle()throws Exception {
+  int[] selects={0},reads={0};
+  Card card=new Card(TokenProfile.LEVEL3){
+   byte[] handle(byte[] a)throws Exception {
+    if((a[1]&255)==0xa4)selects[0]++;
+    if((a[1]&255)==0xf7 && (a[3]&255)!=0x9b)reads[0]++;
+    return super.handle(a);
+   }
+  };
+  assertTrue(PivReadTest.run(card,12345,card.publicKeys()).startsWith("PASS"));
+  assertEquals(1,selects[0]);assertEquals(40,reads[0]);assertEquals(0,card.verifies);
+ }
+ @Test public void metadataIsCheckedOncePerConnectionAndNeverAfterPin()throws Exception {
+  int[] reads={0};boolean[] verified={false};
+  Card card=new Card(TokenProfile.LEVEL3){
+   byte[] handle(byte[] a)throws Exception {
+    int ins=a[1]&255;
+    if(ins==0xa4)verified[0]=false;
+    if(ins==0x20)verified[0]=true;
+    if(ins==0xf7 && (a[3]&255)!=0x9b){assertFalse("No redundant large metadata read after VERIFY",verified[0]);reads[0]++;}
+    return super.handle(a);
+   }
+  };
+  var backend=new YubiBackend(()->card,l->"123456".toCharArray(),12345,card.publicKeys());
+  var key=card.keys.get(Slot.SIGNATURE).getPublic();
+  backend.sign(key,new byte[64]);backend.signEcdsa(card.keys.get(Slot.AUTHENTICATION).getPublic(),new byte[48]);
+  assertEquals(4,reads[0]);backend.clearSecrets();
+  backend.sign(key,new byte[64]);assertEquals(8,reads[0]);backend.clearSecrets();
+  // A replaced key must still be detected on the next connection, before VERIFY.
+  card.keys.put(Slot.SIGNATURE,KeyPairGenerator.getInstance("ML-DSA-65","BC").generateKeyPair());
+  int before=card.verifies;
+  try{backend.sign(key,new byte[64]);fail("Must reject changed key");}catch(PivDiagnostic expected){}
+  assertEquals(before,card.verifies);
  }
 
 }

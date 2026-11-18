@@ -10,7 +10,10 @@ import java.util.*;
 
 /** One connection and PIN per logical signature/decryption. No PKCS#11 or shell. */
 final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
-    interface DeviceSource { YubiKeyDevice get() throws Exception; }
+    interface DeviceSource {
+        YubiKeyDevice get() throws Exception;
+        default boolean retryBeforePin(String detail)throws Exception{return false;}
+    }
     interface PinSource { char[] get(String algorithm) throws Exception; }
     private final DeviceSource devices;
     private final PinSource pins;
@@ -18,13 +21,16 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
     private final Map<Slot,PublicKey> expected;
     private SmartCardConnection connection;
     private PivSession session;
+    private final Map<Slot,KeyType> verifiedTypes=new EnumMap<>(Slot.class);
     private char[] pin;
     YubiBackend(DeviceSource devices, PinSource pins, int serial, Map<Slot,PublicKey> expected) {
         this.devices=devices;this.pins=pins;this.serial=serial;this.expected=Map.copyOf(expected);
     }
     public YubiBackend newOperation(){return new YubiBackend(devices,pins,serial,expected);}
     static PublicKey publicKey(PivSession piv, Slot slot)throws Exception {
-        var metadata=piv.getSlotMetadata(slot);
+        return publicKey(piv.getSlotMetadata(slot),slot);
+    }
+    private static PublicKey publicKey(SlotMetadata metadata,Slot slot)throws Exception {
         String algorithm=switch(metadata.getKeyType()) {
             case MLDSA44 -> "ML-DSA-44";case MLDSA65 -> "ML-DSA-65";case MLDSA87 -> "ML-DSA-87";
             case MLKEM768 -> "ML-KEM-768";case MLKEM1024 -> "ML-KEM-1024";
@@ -56,9 +62,21 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
             stage="Reading PIV serial number";
             if(session.getSerialNumber()!=serial)throw new GeneralSecurityException("Wrong YubiKey. Insert serial "+serial);
             // Check ALL bound public keys before submitting a PIN.
-            for(var e:expected.entrySet()){stage="Reading public-key metadata for slot "+e.getKey();if(!MessageDigest.isEqual(e.getValue().getEncoded(),publicKey(session,e.getKey()).getEncoded()))
-                throw new GeneralSecurityException("YubiKey slot "+e.getKey()+" does not match this identity");}
-        }catch(Exception e){String detail=connection instanceof PivDiagnostic.Connection c?c.detail():"connection unavailable";clearSecrets();throw new PivDiagnostic(stage+" failed before PIN submission.\n"+detail+"\n"+e.getMessage(),e);}
+            for(var e:expected.entrySet()){
+                stage="Reading public-key metadata for slot "+e.getKey();
+                var metadata=session.getSlotMetadata(e.getKey());
+                if(!MessageDigest.isEqual(e.getValue().getEncoded(),publicKey(metadata,e.getKey()).getEncoded()))
+                    throw new GeneralSecurityException("YubiKey slot "+e.getKey()+" does not match this identity");
+                verifiedTypes.put(e.getKey(),metadata.getKeyType());
+            }
+        }catch(Exception e){
+            String detail=connection instanceof PivDiagnostic.Connection c?c.detail():"connection unavailable";
+            boolean retryable=connection instanceof PivDiagnostic.Connection c&&c.getTransport()==com.yubico.yubikit.core.Transport.NFC&&c.transportFailed();
+            // Preserve the operation PIN only while offering a bounded fresh-tap recovery.
+            // No VERIFY has happened in connect(). All terminal exits clear it in the caller.
+            char[] enteredPin=pin;pin=null;clearSecrets();pin=enteredPin;
+            throw new PivDiagnostic(stage+" failed before PIN submission.\n"+detail+"\n"+e.getMessage(),e,retryable);
+        }
     }
     private Slot slotFor(PublicKey key)throws GeneralSecurityException{
         for(var entry:expected.entrySet())if(MessageDigest.isEqual(entry.getValue().getEncoded(),key.getEncoded()))return entry.getKey();
@@ -68,10 +86,17 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
         PublicKey bound=expected.get(slot);
         if(bound==null||!MessageDigest.isEqual(bound.getEncoded(),key.getEncoded()))throw new GeneralSecurityException("Unbound token key");
         if(pin==null)pin=pins.get(label);
-        connect(); // No NFC session is left idle while the user enters the PIN.
+        for(int attempt=0;;attempt++){
+            try{connect();break;}
+            catch(PivDiagnostic e){
+                if(!e.retryableBeforePin||attempt>=2||!devices.retryBeforePin(e.getMessage()))throw e;
+            }
+        } // Recovery is limited to read-only setup, before VERIFY or private-key commands.
         // PIN_ALWAYS requires VERIFY for each component. Never retry a rejected PIN.
+        KeyType type=verifiedTypes.get(slot);
+        if(type==null)throw new GeneralSecurityException("Slot metadata was not verified on this connection");
         session.verifyPin(pin);
-        return session.getSlotMetadata(slot).getKeyType();
+        return type;
     }
     public byte[] sign(PublicKey key,byte[] mu)throws Exception {
         try {if(mu.length!=64)throw new GeneralSecurityException("Expected 64-byte external mu");
@@ -100,7 +125,7 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
     }
     public void clearSecrets() {
         if(pin!=null){Arrays.fill(pin,'\0');pin=null;}
-        session=null;
+        session=null;verifiedTypes.clear();
         if(connection!=null){try{connection.close();}catch(Exception ignored){}connection=null;}
     }
 }

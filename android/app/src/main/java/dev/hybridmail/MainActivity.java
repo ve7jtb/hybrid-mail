@@ -56,10 +56,30 @@ public final class MainActivity extends Activity {
             home();if(saved==null)receiveBundle(getIntent());
         }catch(Exception e){error(e);}
     }
-    @Override protected void onResume(){super.onResume();if(manager!=null)try{manager.startNfcDiscovery(new NfcConfiguration().skipNdefCheck(true).timeout(15000),this,this::discovered);}catch(Exception ignored){}}
-    @Override protected void onPause(){if(manager!=null)manager.stopNfcDiscovery(this);deviceGate.cancel();if(pendingPin!=null)pendingPin.cancel(false);if(pendingStage!=null)pendingStage.cancel(false);super.onPause();}
-    @Override protected void onDestroy(){if(manager!=null){manager.stopUsbDiscovery();manager.stopNfcDiscovery(this);}if(pendingPin!=null)pendingPin.cancel(true);worker.shutdownNow();identity=null;super.onDestroy();}
-    private void discovered(YubiKeyDevice key){deviceGate.discovered(key);runOnUiThread(()->notice("YubiKey detected over "+key.getTransport()+". Keep it connected during the operation."));}
+    private volatile CompletableFuture<Void> nfcRemoval=CompletableFuture.completedFuture(null);
+    private com.yubico.yubikit.android.transport.nfc.NfcYubiKeyDevice activeNfc;
+    private boolean nfcStarted;
+    // Match Authenticator 7.5.0: foreground reader mode, normal NDEF check, 5s timeout.
+    @Override protected void onResume(){super.onResume();if(manager!=null&&!nfcStarted)try{
+        manager.startNfcDiscovery(new NfcConfiguration().timeout(5000),this,this::discovered);nfcStarted=true;
+    }catch(Exception e){notice("NFC unavailable: "+e.getMessage()+". USB remains available.");}}
+    private void stopNfc(){if(manager!=null&&nfcStarted){manager.stopNfcDiscovery(this);nfcStarted=false;}}
+    private synchronized void releaseNfc(){
+        var key=activeNfc;if(key==null)return;activeNfc=null;
+        var removed=new CompletableFuture<Void>();nfcRemoval=removed;
+        try{key.remove(()->removed.complete(null));}catch(RuntimeException e){removed.completeExceptionally(e);}
+    }
+    private synchronized void abandonNfc(){activeNfc=null;var previous=nfcRemoval;nfcRemoval=CompletableFuture.completedFuture(null);previous.completeExceptionally(new CancellationException("Activity paused"));}
+    @Override protected void onPause(){stopNfc();abandonNfc();deviceGate.cancel();if(pendingPin!=null)pendingPin.cancel(false);if(pendingStage!=null)pendingStage.cancel(false);super.onPause();}
+    @Override protected void onDestroy(){if(manager!=null){manager.stopUsbDiscovery();stopNfc();}if(pendingPin!=null)pendingPin.cancel(true);worker.shutdownNow();identity=null;super.onDestroy();}
+    private synchronized void discovered(YubiKeyDevice key){
+        if(key instanceof com.yubico.yubikit.android.transport.nfc.NfcYubiKeyDevice nfc){
+            if(activeNfc!=null||!nfcRemoval.isDone())return;
+            activeNfc=nfc;
+            if(!deviceGate.isWaiting()){releaseNfc();return;}
+        }
+        deviceGate.discovered(key);runOnUiThread(()->notice("YubiKey detected over "+key.getTransport()+". Keep it connected during the operation."));
+    }
     private void page(String title){
         var scroll=new ScrollView(this);page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setPadding(32,24,32,32);scroll.addView(page);setContentView(scroll);
         if(android.os.Build.VERSION.SDK_INT>=30)scroll.setOnApplyWindowInsetsListener((v,insets)->{var bars=insets.getInsets(WindowInsets.Type.systemBars());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);return insets;});
@@ -73,7 +93,7 @@ public final class MainActivity extends Activity {
     private void button(String label,Runnable action){Button b=new Button(this);b.setText(label);b.setAllCaps(false);b.setOnClickListener(v->{if(busy){notice("An operation is still running");return;}action.run();});page.addView(b);}
     private void notice(String s){if(status!=null)status.setText(s);}
     private void error(Throwable e){Throwable last=e;while(last.getCause()!=null && !(last instanceof PivDiagnostic))last=last.getCause();String message=last.getMessage();new AlertDialog.Builder(this).setTitle("PQ Mail").setMessage(message==null?last.getClass().getSimpleName():message).setPositiveButton("OK",null).show();}
-    private void work(String message,Work action){if(busy)return;busy=true;notice(message);worker.execute(()->{try{action.run();}catch(Exception e){runOnUiThread(()->error(e));}finally{busy=false;runOnUiThread(()->{dismissHolding();notice("Ready — you can remove the YubiKey.");});}});}
+    private void work(String message,Work action){if(busy)return;busy=true;notice(message);worker.execute(()->{try{action.run();}catch(Exception e){runOnUiThread(()->error(e));}finally{runOnUiThread(()->{releaseNfc();busy=false;dismissHolding();notice("Ready — you can remove the YubiKey.");});}});}
     private void home(){page("PQ Mail");text("Android preview • S/MIME with software keys or YubiKey USB/NFC\n"+(identity==null?"Select an identity to begin.":identity.signatureAlgorithm()+"\n"+(selected.serial()==0?"Software identity unlocked":"YubiKey "+selected.serial())));
         button("OpenPGP public identities",this::openPgpKeys);button("Identities & certificates",this::identities);button("Compose signed mail",this::compose);button("Open and verify / decrypt .eml",()->pick(uri->openMessage(read(uri))));button("IMAP inbox & SMTP",this::account);
         button("Lock software identity",()->{identity=null;selected=null;outgoing=null;home();});
@@ -92,7 +112,10 @@ public final class MainActivity extends Activity {
         try{for(var entry:store.entries())button(entry.toString(),()->select(entry));}catch(Exception e){error(e);}
         if(identity!=null){button("Export signing certificate",()->exportCert(identity.signingCert(),"signing.cer"));button("Export encryption certificate",()->exportCert(identity.encryptionCert(),"encryption.cer"));
             if(selected.serial()==0)button("Export encrypted software .p12",()->export(readPath(store.root.resolve(selected.bundle())),"identity.p12","application/x-pkcs12"));
-            else button("Test selected YubiKey identity — no email",()->work("Signing and decrypting test message. Keep YubiKey connected…",this::hardwareTest));
+            else {
+                button("Test selected YubiKey identity — no email",()->work("Signing and decrypting test message. Keep YubiKey connected…",this::hardwareTest));
+                button("Check YubiKey connection — no PIN",()->work("Read-only connection check; tap and hold when prompted…",this::readOnlyTokenTest));
+            }
         }
     }
     private void importTokenCertificates(){
@@ -110,6 +133,19 @@ public final class MainActivity extends Activity {
                 store.addToken(sc.getSubjectX500Principal()+" • "+id.signatureAlgorithm(),serial,id);runOnUiThread(this::identities);
             })).setNegativeButton("Cancel",null).show());
         })).show();
+    }
+    private void readOnlyTokenTest()throws Exception{
+        String report;
+        try{report=PivReadTest.run(requireDevice(),selected.serial(),YubiBackend.keys(identity,store.slots(selected)));}
+        catch(Exception e){report=e.getMessage();saveReadTest(report);throw e;}
+        saveReadTest(report);String result=report;
+        runOnUiThread(()->new AlertDialog.Builder(this).setTitle("Read test complete — remove your key").setMessage(result).setPositiveButton("OK",null).show());
+    }
+    private void saveReadTest(String report)throws Exception{
+        var prefs=getSharedPreferences("nfc-diagnostics",0);var previous=new org.json.JSONArray(prefs.getString("history","[]"));var next=new org.json.JSONArray();
+        for(int i=Math.max(0,previous.length()-19);i<previous.length();i++)next.put(previous.optString(i));
+        next.put(java.time.Instant.now()+"\n"+report);
+        if(!prefs.edit().putString("history",next.toString()).commit())throw new IOException("Cannot save connection diagnostics");
     }
     private void hardwareTest()throws Exception{
         String email=null;for(var san:identity.signingCert().getSubjectAlternativeNames())if(Integer.valueOf(1).equals(san.get(0))&&Identity.matchesEmail(identity.encryptionCert(),(String)san.get(1))){email=(String)san.get(1);break;}
@@ -130,7 +166,7 @@ public final class MainActivity extends Activity {
     private void signingComplete()throws Exception{
         var result=new CompletableFuture<Void>();pendingStage=result;
         runOnUiThread(()->{
-            dismissHolding();
+            releaseNfc();dismissHolding();
             var dialog=new AlertDialog.Builder(this).setTitle("Signing complete — remove your key")
                 .setMessage("The signature is verified. You can remove the NFC key now.\n\nNext is decryption: enter your PIN again, then re-tap only when prompted. This is a separate operation. If using USB, you can leave the key connected.")
                 .setPositiveButton("Continue to decryption",(d,w)->result.complete(null))
@@ -142,7 +178,13 @@ public final class MainActivity extends Activity {
     }
     private void saveHardwareResult(String report)throws IOException{
         String stamped=java.time.Instant.now()+"\n"+report;
-        if(!getSharedPreferences("hardware-tests",0).edit().putString("last",stamped).putString("profile."+identity.signatureAlgorithm(),stamped).commit())throw new IOException("Cannot save hardware-test result");
+        var prefs=getSharedPreferences("hardware-tests",0);
+        org.json.JSONArray history;
+        try{history=new org.json.JSONArray(prefs.getString("history","[]"));}catch(org.json.JSONException e){history=new org.json.JSONArray();}
+        var recent=new org.json.JSONArray();
+        for(int i=Math.max(0,history.length()-19);i<history.length();i++)recent.put(history.optString(i));
+        recent.put(stamped);
+        if(!prefs.edit().putString("last",stamped).putString("profile."+identity.signatureAlgorithm(),stamped).putString("history",recent.toString()).commit())throw new IOException("Cannot save hardware-test result");
     }
     private void identityForm(boolean token){page(token?"Existing YubiKey identity":"Create software identity");
         EditText email=field("Primary email address",from);EditText extras=field("Up to four additional emails, comma separated","");
@@ -171,7 +213,22 @@ public final class MainActivity extends Activity {
         store.addToken(email+" • "+profile.code+" pure",serial,pure);store.addToken(email+" • "+profile.code+" hybrid",serial,hybrid);
         runOnUiThread(this::identities);
     }
+    private void awaitNfcRemoval()throws Exception{
+        var removal=nfcRemoval;if(removal.isDone()){removal.get();return;}
+        CompletableFuture<Void> cancelled=new CompletableFuture<>();pendingStage=cancelled;
+        runOnUiThread(()->{
+            if(removal.isDone())return;
+            var dialog=new AlertDialog.Builder(this).setTitle("Move the YubiKey away")
+                .setMessage("Waiting for NFC removal before the next tap. Keep the key away until the connection prompt appears.")
+                .setNegativeButton("Cancel",(d,w)->cancelled.cancel(false)).create();
+            dialog.setOnCancelListener(d->cancelled.cancel(false));dialog.show();
+            CompletableFuture.anyOf(removal,cancelled).whenComplete((v,e)->runOnUiThread(dialog::dismiss));
+        });
+        try{CompletableFuture.anyOf(removal,cancelled).get(120,TimeUnit.SECONDS);}
+        finally{pendingStage=null;cancelled.cancel(false);}
+    }
     private YubiKeyDevice requireDevice()throws Exception{
+        awaitNfcRemoval();
         var result=deviceGate.request();
         if(!result.isDone())runOnUiThread(()->{
             if(result.isDone())return;
@@ -186,11 +243,27 @@ public final class MainActivity extends Activity {
             return key;}
         finally{deviceGate.cancel();}
     }
-    private YubiBackend backend(){return new YubiBackend(this::requireDevice,label->requestPin((label.contains("decryption")?identity.encryptionCert().getPublicKey().getAlgorithm():identity.signatureAlgorithm())+" / "+label),selected.serial(),YubiBackend.keys(identity,store.slots(selected)));}
+    private YubiBackend.DeviceSource recoverableDeviceSource(){return new YubiBackend.DeviceSource(){
+        public YubiKeyDevice get()throws Exception{return requireDevice();}
+        public boolean retryBeforePin(String detail)throws Exception{
+            var result=new CompletableFuture<Void>();pendingStage=result;
+            runOnUiThread(()->{
+                releaseNfc();dismissHolding();
+                var dialog=new AlertDialog.Builder(MainActivity.this).setTitle("NFC connection lost — remove your key")
+                    .setMessage("The connection failed before your PIN was sent. Move the key fully away from the phone, then choose Retry and tap only when prompted. Your entered PIN is kept only for this operation; the key's serial and public keys will be checked again.\n\n"+detail)
+                    .setPositiveButton("Retry with a fresh tap",(d,w)->result.complete(null))
+                    .setNegativeButton("Cancel",(d,w)->result.cancel(false)).create();
+                dialog.setOnCancelListener(d->result.cancel(false));dialog.show();
+                result.whenComplete((v,e)->runOnUiThread(dialog::dismiss));
+            });
+            try{result.get(120,TimeUnit.SECONDS);return true;}finally{pendingStage=null;if(!result.isDone())result.cancel(false);}
+        }
+    };}
+    private YubiBackend backend(){return new YubiBackend(recoverableDeviceSource(),label->requestPin((label.contains("decryption")?identity.encryptionCert().getPublicKey().getAlgorithm():identity.signatureAlgorithm())+" / "+label),selected.serial(),YubiBackend.keys(identity,store.slots(selected)));}
     private char[] requestPin(String algorithm)throws Exception {
         CompletableFuture<char[]> result=new CompletableFuture<>();pendingPin=result;
         runOnUiThread(()->{
-            dismissHolding();
+            releaseNfc();dismissHolding();
             EditText input=new EditText(this);input.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
             input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
             AlertDialog dialog=new AlertDialog.Builder(this).setTitle("YubiKey PIN • "+algorithm).setMessage("You can remove the NFC key now. Enter the PIN with the key away from the phone, then wait for the tap prompt. The app checks the key’s serial and public keys before sending the PIN. It reuses the PIN for this operation’s components, then clears it.").setView(input).setNegativeButton("Cancel",(d,w)->result.cancel(false)).setPositiveButton("Continue",null).create();

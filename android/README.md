@@ -79,9 +79,15 @@ Tests generate temporary software keys only. They cover all profiles, `.p12` rel
 
 ## Current physical-device status
 
-Level 3 pure and hybrid signing/decryption have passed on a physical Beta0 YubiKey over NFC using Pixel 10 / Android 17. Saved results confirm both signing and decryption used NFC, the signatures verified, and the messages decrypted. Desktop PKCS#11 round trips also passed. Physical Android USB testing remains pending.
+On November 17, 2026, Pixel 10 / Android 17 and a PQC Ready YubiKey Beta0 passed:
 
-The NFC flow resolves Beta firmware qualifiers through the device's Management session, collects the PIN before opening a fresh NFC connection, verifies the serial/public keys before submitting the PIN, and clears the PIN after each operation. Earlier disabled-PIV and stale-tag errors were resolved during testing.
+- Three consecutive Level 5 NFC public-key checks: ten cycles per run, 200 APDU exchanges each, serial and bound public keys matched.
+- Level 5 pure S/MIME over NFC: ML-DSA-87 signing verified and ML-KEM-1024 decryption succeeded.
+- Level 5 hybrid S/MIME over NFC: ML-DSA-87 + ECDSA P-384 signing verified and ML-KEM-1024 + ECDH P-384 decryption succeeded.
+
+No email was sent and no token keys were changed. Earlier Level 3 pure/hybrid NFC round trips passed, with intermittent transport failures in subsequent runs; Level 3 pure/hybrid USB controls each passed twice. The latest three public-read passes and two S/MIME passes are encouraging but do not prove universal NFC reliability.
+
+The app uses unmodified YubiKit 3.3.0 with application-side lifecycle and APDU-wrapper changes. It waits for removal before a fresh tap, honors NFC `61xx` continuation lengths, checks serial/public keys before PIN submission, and retains verified key types only within the current connection. The public-read diagnostic now initializes PIV once and reads serial/public keys ten times. Eighteen focused emulator tests passed. See the [technical integration report](../docs/ANDROID-NFC-YUBIKIT.md) for evidence, changes, limitations and possible upstream follow-up.
 
 During the local round-trip test:
 
@@ -91,7 +97,7 @@ During the local round-trip test:
 4. Enter the decryption PIN, then re-tap when prompted and hold until completion.
 5. **Test complete — remove your key** confirms both operations finished. No email is sent.
 
-The new stage/removal dialogs have passed a UI startup smoke test; the recorded physical NFC passes precede this wording/transition update. Timestamped results remain stored separately for each signing profile, including failures.
+The latest physical passes used the updated hold/remove flow. Timestamped results retain up to 20 history entries, including failures. A PIN-free diagnostic is available under **Identities & certificates → Check YubiKey connection — no PIN** after selecting a YubiKey identity. It performs public reads only.
 
 ## Attachments
 
@@ -128,4 +134,4 @@ Select a Level 3 hybrid identity, then open **OpenPGP public identities** to cre
 
 Software keys stay in the password-protected `.p12`; YubiKey signing/decryption uses the same YubiKit PIV adapter. No OpenPGP applet or new token keys are required. OpenPGP is currently plain-text, one-recipient, Level 3 hybrid only; use S/MIME for attachments and other profiles. A valid signature does not establish correspondent trust. See [the shared OpenPGP guide](../docs/OPENPGP.md).
 
-The OpenPGP build passed eight Android emulator instrumentation tests, including the simulated PIV backend. Physical NFC/USB OpenPGP tests remain pending.
+The OpenPGP build passed eight Android emulator instrumentation tests, including the simulated PIV backend. The tester reported a successful Level 3 hybrid OpenPGP USB signature/decryption round trip; the manual flow did not save a hardware report. Physical OpenPGP NFC testing remains pending.

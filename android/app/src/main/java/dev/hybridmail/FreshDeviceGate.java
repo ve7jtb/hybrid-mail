@@ -5,6 +5,7 @@ import java.util.concurrent.CompletableFuture;
 final class FreshDeviceGate {
     private YubiKeyDevice usb;
     private CompletableFuture<YubiKeyDevice> waiting;
+    synchronized boolean isWaiting(){return waiting!=null&&!waiting.isDone();}
     synchronized void discovered(YubiKeyDevice device){
         usb=device.getTransport()==Transport.USB?device:null;
         if(waiting!=null){waiting.complete(device);waiting=null;}

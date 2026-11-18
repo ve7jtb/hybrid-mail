@@ -1,0 +1,56 @@
+name: Linux installation tests
+on:
+  workflow_run:
+    workflows: ['Linux packages']
+    types: [completed]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  install:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.event == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: PQ-Mail-Linux-${{ matrix.arch }}
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Verify artifacts and install Debian package
+        run: |
+          sha256sum --check SHA256SUMS
+          sudo apt-get update
+          sudo apt-get install -y xvfb x11-utils ./PQ-Mail-1.2.1-Linux-${{ matrix.arch }}.deb
+          dpkg-query -W pq-mail
+      - name: Launch installed desktop app with disposable settings
+        run: |
+          xvfb-run -a python3 - <<'PY'
+          import os, pathlib, subprocess, tempfile, time
+          files=subprocess.check_output(['dpkg','-L','pq-mail'],text=True).splitlines()
+          launcher=next(p for p in files if p.endswith('/bin/PQ Mail'))
+          with tempfile.TemporaryDirectory() as settings, open('desktop-startup.log','w+') as log:
+              env=dict(os.environ, JAVA_TOOL_OPTIONS='-Dhybridmail.dataDir='+settings)
+              proc=subprocess.Popen([launcher],env=env,stdout=log,stderr=log)
+              try:
+                  for attempt in range(60):
+                      if proc.poll() is not None: raise RuntimeError('Desktop app exited during startup')
+                      tree=subprocess.check_output(['xwininfo','-root','-tree'],text=True)
+                      if '"PQ Mail' in tree:
+                          print('PASS installed PQ Mail desktop window opened; no accounts, email or hardware')
+                          break
+                      time.sleep(.5)
+                  else: raise RuntimeError('PQ Mail window did not appear')
+              finally:
+                  proc.terminate()
+                  try: proc.wait(timeout=10)
+                  except subprocess.TimeoutExpired: proc.kill();proc.wait()
+                  log.seek(0);print(log.read())
+          PY

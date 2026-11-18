@@ -23,7 +23,20 @@ happens on update. Save the on-key bundle again after migration. Public storage
 contains no PINs, private keys, passwords or Google OAuth refresh tokens.
 
 See [on-key format, workflows and recovery](docs/ON-KEY-CERTIFICATES.md).
-Physical on-key writes/migration are pending Beta0 hardware validation.
+**Hardware validation (November 18, 2026):** A YubiKey 6.0.0 Beta0 passed the following tests:
+
+- **On-key bundle:** macOS saved a 24,434-byte signed bundle containing the existing Level 3 pure/hybrid signing and encryption certificates and serial/slot mappings. Read-back through a new PC/SC connection, clean-profile import, restart and duplicate import passed. No private keys were imported and no certificate trust was granted automatically.
+- **Slot migration:** the existing P-384 signing key moved from **9a to empty 83**, retaining its public key and PIN Always / Touch Never policies. Slot 9a became empty. Before/after snapshots confirmed all PIV certificates and other keys' public metadata were unchanged. Desktop mappings were updated, and hybrid signing verified the refreshed bundle using slot 83.
+- **Android NFC import:** Pixel 10 read the refreshed bundle directly from the key and updated both existing Level 3 identities to **9c / 83 / 9d / 82** (ML-DSA signing / ECDSA signing / ML-KEM decryption / ECDH decryption).
+- **NFC S/MIME round trips:** Pixel 10 passed pure **ML-DSA-65 / ML-KEM-768** and hybrid **MLDSA65-ECDSA-P384-SHA512 / MLKEM768-ECDH-P384-SHA3-256** signing and decryption with the imported certificates. Hybrid signing used the saved slot 83 mapping and its composite signature verified. No email was sent.
+
+One pre-PIN NFC retry occurred during hybrid decryption: the public-metadata read
+`F7 P2=9C` failed with an IOException after 305 ms; a fresh tap recovered and the
+round trip passed. The same trace successfully read slot 83 (`SW=9000`, 28 ms).
+These successful tests do not establish that the Pixel 10's intermittent NFC
+transport issue is resolved. No saved OpenPGP identity was present in this bundle,
+so this hardware run did not validate OpenPGP bundle transfer. Physical iOS bundle
+testing remains pending.
 
 ## Android preview
 

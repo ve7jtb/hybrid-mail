@@ -458,7 +458,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         JPasswordField pin=new JPasswordField(),management=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default management key",true);
         JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("YubiKey "+serial+" passed the empty-slot check."));
         form.add(new JLabel("Generate "+profile.ml+" in 9c; "+profile.kem+" in 9d."));form.add(new JLabel("Also generate ECDSA and ECDH "+(profile.category==2?"P-256":"P-384")+" in 83 and 82."));
-        form.add(new JLabel("All keys: PIN Always, Touch Never. Private keys never leave the device."));
+        form.add(new JLabel("All keys: PIN Always. Touch required: 9c / 9d; no touch: 82 / 83."));
         form.add(new JLabel("YubiKey PIN"));form.add(pin);form.add(factory);form.add(new JLabel("Management key (hex, only if not factory default)"));form.add(management);
         form.add(new JLabel("Creating keys is not atomic: a failure can leave some slots provisioned. No automatic retry."));
         if(JOptionPane.showConfirmDialog(this,form,"Generate keys on empty YubiKey",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){pin.setText("");management.setText("");return;}

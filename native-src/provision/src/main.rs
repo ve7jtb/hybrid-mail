@@ -6,6 +6,9 @@ type Result<T> = std::result::Result<T,String>;
 fn absent<T>(result:std::result::Result<T,PivError>,sw:u16)->Result<bool>{
  match result {Ok(_)=>Ok(false),Err(PivError::Connection(e)) if e.sw()==Some(sw)=>Ok(true),Err(_)=>Err("Cannot establish empty slot state; refusing provisioning".into())}
 }
+fn touch_policy(slot:Slot)->TouchPolicy {
+ match slot {Slot::Signature|Slot::KeyManagement=>TouchPolicy::Always,_=>TouchPolicy::Never}
+}
 trait Card {
  fn empty(&mut self,slot:Slot)->Result<bool>;
  fn generate(&mut self,slot:Slot,alg:KeyType)->Result<Vec<u8>>;
@@ -17,9 +20,9 @@ impl Card for PivSession<PcscSmartCardConnection>{
   Ok(key&&cert)
  }
  fn generate(&mut self,slot:Slot,alg:KeyType)->Result<Vec<u8>>{
-  let key=self.generate_key(slot,alg,PinPolicy::Always,TouchPolicy::Never).map_err(|_|"On-device key generation failed; no retry. Some slots may now be provisioned")?;
+  let key=self.generate_key(slot,alg,PinPolicy::Always,touch_policy(slot)).map_err(|_|"On-device key generation failed; no retry. Some slots may now be provisioned")?;
   let metadata=self.get_slot_metadata(slot).map_err(|_|"Cannot verify generated key")?;
-  if metadata.key_type!=alg||!metadata.generated||metadata.pin_policy!=PinPolicy::Always||metadata.touch_policy!=TouchPolicy::Never{return Err("Generated key metadata does not match".into());}
+  if metadata.key_type!=alg||!metadata.generated||metadata.pin_policy!=PinPolicy::Always||metadata.touch_policy!=touch_policy(slot){return Err("Generated key metadata does not match".into());}
   let der=key.to_spki().map_err(|_|"Cannot encode public key")?;
   if der!=metadata.public_key.to_spki().map_err(|_|"Cannot encode key metadata")?{return Err("Generated public key mismatch".into());}
   Ok(der)
@@ -158,6 +161,7 @@ fn main(){if let Err(error)=main_inner(){eprintln!("{error}");std::process::exit
  use super::*;use std::collections::HashSet;
  struct Fake{occupied:HashSet<u8>,generated:Vec<u8>,fail:bool,algorithms:Vec<KeyType>}
  impl Card for Fake{fn empty(&mut self,s:Slot)->Result<bool>{if self.fail{Err("unknown".into())}else{Ok(!self.occupied.contains(&(s as u8)))}}fn generate(&mut self,s:Slot,alg:KeyType)->Result<Vec<u8>>{self.generated.push(s as u8); self.algorithms.push(alg);self.occupied.insert(s as u8);Ok(vec![1])}}
+ #[test]fn presence_policy(){assert_eq!(touch_policy(Slot::Signature),TouchPolicy::Always);assert_eq!(touch_policy(Slot::KeyManagement),TouchPolicy::Always);assert_eq!(touch_policy(Slot::Retired1),TouchPolicy::Never);assert_eq!(touch_policy(Slot::Retired2),TouchPolicy::Never);}
  #[test]fn refuses_every_occupied_slot(){for s in Slot::key_slots(){let mut f=Fake{occupied:HashSet::from([s as u8]),generated:vec![],algorithms:vec![],fail:false};assert!(generate(&mut f,"level5",|_,_|Ok(())).is_err());assert!(f.generated.is_empty());}}
  #[test]fn unknown_is_not_empty(){let mut f=Fake{occupied:HashSet::new(),generated:vec![],algorithms:vec![],fail:true};assert!(generate(&mut f,"level5",|_,_|Ok(())).is_err());assert!(f.generated.is_empty());}
  #[test]fn profiles_and_no_rerun(){for profile in ["pure","hybrid","level2","level3","level5"]{let mut f=Fake{occupied:HashSet::new(),generated:vec![],algorithms:vec![],fail:false};generate(&mut f,profile,|_,_|Ok(())).unwrap();assert_eq!(f.generated,vec![0x9c,0x9d,0x83,0x82]);

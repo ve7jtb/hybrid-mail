@@ -102,13 +102,15 @@ public final class MainActivity extends Activity {
         button("Import and trust signing certificate",()->importTrustedCertificate("signing"));
         button("Import and trust encryption certificate",()->importTrustedCertificate("encryption"));
         button("Share certificates…",this::shareCertificates);
+        button("Import certificates from YubiKey — no PIN",()->work("Reading on-key public bundle…",()->{try(var card=new OnKeyAndroid(requireDevice())){var bundle=OnKeyStorage.load(card);String review=bundle.review();runOnUiThread(()->new AlertDialog.Builder(this).setTitle("Review on-key identities — trust unchanged").setMessage(review).setNegativeButton("Cancel",null).setPositiveButton("Import",(d,w)->work("Importing…",()->{store.importOnKey(bundle);runOnUiThread(this::identities);})).show());}}));
+        if(selected!=null&&selected.serial()!=0){button("Save certificates on YubiKey…",()->onKeyAction(false));button("Migrate signing key 9a → 83…",()->onKeyAction(true));}
         button("Import certificate bundle…",()->pick(uri->reviewBundle(readBundle(uri))));
         button("Create software .p12 — four keys",()->identityForm(false));
         button("Import software .p12",()->pick(uri->{byte[] data=read(uri);runOnUiThread(()->password("Unlock imported .p12",p->importBundle(data,p)));}));
         button("Use existing YubiKey keys — issue certificates",()->identityForm(true));
         button("Import existing YubiKey certificate pair",this::importTokenCertificates);
         try{for(var certificate:store.encryptionContacts())button("Use saved encryption certificate: "+certificate.getSubjectX500Principal()+" • "+certificate.getPublicKey().getAlgorithm(),()->{recipient=certificate;notice("Recipient encryption certificate selected");});}catch(Exception e){error(e);}
-        text("YubiKey: existing slots 9c (ML-DSA), 9a (ECDSA), 9d (ML-KEM), 82 (ECDH). This Android preview never generates or replaces token keys. Certificates are saved locally; private keys stay on the YubiKey.");
+        text("YubiKey: existing slots 9c (ML-DSA), 83 (ECDSA; legacy identities retain 9a), 9d (ML-KEM), 82 (ECDH). This Android preview never generates or replaces token keys. Certificates are saved locally; private keys stay on the YubiKey.");
         try{for(var entry:store.entries())button(entry.toString(),()->select(entry));}catch(Exception e){error(e);}
         if(identity!=null){button("Export signing certificate",()->exportCert(identity.signingCert(),"signing.cer"));button("Export encryption certificate",()->exportCert(identity.encryptionCert(),"encryption.cer"));
             if(selected.serial()==0)button("Export encrypted software .p12",()->export(readPath(store.root.resolve(selected.bundle())),"identity.p12","application/x-pkcs12"));
@@ -125,12 +127,12 @@ public final class MainActivity extends Activity {
             runOnUiThread(()->new AlertDialog.Builder(this).setMessage("Now choose the encryption certificate").setPositiveButton("Choose",(a,b)->pick(encUri->{
                 var ec=(X509Certificate)factory.generateCertificate(new ByteArrayInputStream(read(encUri)));ec.checkValidity();Identity.validateEncryptionKey(ec.getPublicKey());
                 if(sc.getKeyUsage()==null||!sc.getKeyUsage()[0]||ec.getKeyUsage()==null||ec.getKeyUsage().length<3||!ec.getKeyUsage()[2])throw new GeneralSecurityException("Certificate key usage is incorrect");
-                var id=new Identity(sc,null,ec,null,null);int serial;
+                var id=new Identity(sc,null,ec,null,null);int serial;String traditional;
                 try(var connection=requireDevice().openConnection(SmartCardConnection.class)){
-                    var piv=PivSessions.open(connection);serial=piv.getSerialNumber();
-                    for(var e:YubiBackend.keys(id).entrySet())if(!MessageDigest.isEqual(e.getValue().getEncoded(),YubiBackend.publicKey(piv,e.getKey()).getEncoded()))throw new GeneralSecurityException("Certificate does not match YubiKey slot "+e.getKey());
+                    var piv=PivSessions.open(connection);serial=piv.getSerialNumber();traditional=existingTraditional(piv);
+                    for(var e:YubiBackend.keys(id,new String[]{"9c",traditional,"9d","82"}).entrySet())if(!MessageDigest.isEqual(e.getValue().getEncoded(),YubiBackend.publicKey(piv,e.getKey()).getEncoded()))throw new GeneralSecurityException("Certificate does not match YubiKey slot "+e.getKey());
                 }
-                store.addToken(sc.getSubjectX500Principal()+" • "+id.signatureAlgorithm(),serial,id);runOnUiThread(this::identities);
+                store.addToken(sc.getSubjectX500Principal()+" • "+id.signatureAlgorithm(),serial,id,traditional);runOnUiThread(this::identities);
             })).setNegativeButton("Cancel",null).show());
         })).show();
     }
@@ -201,16 +203,19 @@ public final class MainActivity extends Activity {
         });
     }
     private byte[] readPath(Path p){try{return Files.readAllBytes(p);}catch(Exception e){throw new IllegalStateException(e);}}
+    private String existingTraditional(com.yubico.yubikit.piv.PivSession piv)throws Exception{
+        try{piv.getSlotMetadata(Slot.RETIRED2);return "83";}catch(com.yubico.yubikit.core.smartcard.ApduException e){if((e.getSw()&0xffff)!=0x6a88)throw e;piv.getSlotMetadata(Slot.AUTHENTICATION);return "9a";}
+    }
     private void createToken(String email,String extra,TokenProfile profile)throws Exception {
-        List<String> sans=Identity.additionalEmails(email,extra);int serial;Map<Slot,PublicKey> keys=new EnumMap<>(Slot.class);
+        List<String> sans=Identity.additionalEmails(email,extra);int serial;String traditional;Map<Slot,PublicKey> keys=new EnumMap<>(Slot.class);
         try(var connection=requireDevice().openConnection(SmartCardConnection.class)){
-            var piv=PivSessions.open(connection);serial=piv.getSerialNumber();
-            for(Slot slot:List.of(Slot.SIGNATURE,Slot.AUTHENTICATION,Slot.KEY_MANAGEMENT,Slot.RETIRED1))keys.put(slot,YubiBackend.publicKey(piv,slot));
+            var piv=PivSessions.open(connection);serial=piv.getSerialNumber();traditional=existingTraditional(piv);
+            for(Slot slot:List.of(Slot.SIGNATURE,Slot.fromValue(Integer.parseInt(traditional,16)),Slot.KEY_MANAGEMENT,Slot.RETIRED1))keys.put(slot,YubiBackend.publicKey(piv,slot));
         }
         var backend=new YubiBackend(this::requireDevice,this::requestPin,serial,keys);
         Identity pure=Identity.forTokenProfile(email,profile,keys.get(Slot.SIGNATURE),null,keys.get(Slot.KEY_MANAGEMENT),null,backend,sans);
-        Identity hybrid=Identity.forTokenProfile(email,profile,keys.get(Slot.SIGNATURE),keys.get(Slot.AUTHENTICATION),keys.get(Slot.KEY_MANAGEMENT),keys.get(Slot.RETIRED1),backend,sans);
-        store.addToken(email+" • "+profile.code+" pure",serial,pure);store.addToken(email+" • "+profile.code+" hybrid",serial,hybrid);
+        Identity hybrid=Identity.forTokenProfile(email,profile,keys.get(Slot.SIGNATURE),keys.get(Slot.fromValue(Integer.parseInt(traditional,16))),keys.get(Slot.KEY_MANAGEMENT),keys.get(Slot.RETIRED1),backend,sans);
+        store.addToken(email+" • "+profile.code+" pure",serial,pure,traditional);store.addToken(email+" • "+profile.code+" hybrid",serial,hybrid,traditional);
         runOnUiThread(this::identities);
     }
     private void awaitNfcRemoval()throws Exception{
@@ -305,6 +310,22 @@ public final class MainActivity extends Activity {
         if(uri==null)return;if(!"content".equals(uri.getScheme())){error(new IOException("Use the document picker to open this certificate bundle"));return;}
         Uri source=uri;work("Reading shared certificate bundle…",()->reviewBundle(readBundle(source)));
     }
+
+    private void onKeyAction(boolean migrate){
+        new AlertDialog.Builder(this).setTitle(migrate?"Move ECDSA key 9a → 83":"Save public bundle on YubiKey")
+            .setMessage(migrate?"Requires empty slot 83. Moves the existing key, preserves certificates and updates local mappings. No key generation. Save the on-key bundle again afterward. If interrupted, inspect before retrying.":"Public certificates, existing OpenPGP identity and slot mappings will be readable by anyone holding the key. No passwords, Google credentials or trust decisions. Enter the management key as hex; this is not the PIN. Keep NFC contact until completion.")
+            .setNegativeButton("Cancel",null).setPositiveButton("Continue",(d,w)->password("YubiKey management key (hex)",admin->{
+                try{var entries=store.certificateBundle(selected,identity);
+                    if(migrate){Files.write(store.root.resolve("migration-"+selected.serial()+"-"+System.currentTimeMillis()+".pqcert"),CertificateBundle.encode(entries));try(var card=new OnKeyAndroid(requireDevice())){OnKeyBundle.migrate(card,entries,admin);}store.migrateBindings(entries);}
+                    else{var profiles=OnKeyBundle.collect(entries,store.root);int signer=0;for(int i=0;i<entries.size();i++)if(entries.get(i).identity().signingCert().getPublicKey() instanceof org.bouncycastle.jcajce.CompositePublicKey)signer=i;
+                        var entry=entries.get(signer);var backend=new YubiBackend(this::requireDevice,this::requestPin,entry.serial(),YubiBackend.keys(entry.identity(),new String[]{entry.signingSlot(),entry.traditionalSlot(),entry.kemSlot(),entry.ecdhSlot()}));
+                        byte[] bytes=OnKeyBundle.sign(profiles,signer,backend);try(var card=new OnKeyAndroid(requireDevice())){OnKeyStorage.save(card,bytes,admin);}
+                    }
+                    runOnUiThread(()->notice(migrate?"Migration complete — remove your key. Slot mappings updated; save the on-key bundle again.":"Bundle verified — remove your key. Public identities are now portable."));
+                }finally{Arrays.fill(admin,'\0');}
+            })).show();
+    }
+
     private void shareCertificates(){work("Preparing public certificate profiles…",()->{
         var entries=store.certificateBundle(selected,identity);byte[] bytes=CertificateBundle.encode(entries);String review=CertificateBundle.review(entries);
         runOnUiThread(()->new AlertDialog.Builder(this).setTitle("Share public certificates?").setMessage(review).setNegativeButton("Cancel",null).setPositiveButton("Share…",(d,w)->{

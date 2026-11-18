@@ -33,7 +33,11 @@ struct LocalMailView: View {
     @State private var status=""
     @State private var busy=false
     @State private var job:Task<Void,Never>?
+    #if USB_ONLY
+    @State private var transport=YubiKeyTransport.usb
+    #else
     @State private var transport=YubiKeyTransport.nfc
+    #endif
     @State private var importing=false
     @State private var importKind="message"
     @State private var exporting=false
@@ -47,18 +51,30 @@ struct LocalMailView: View {
     @State private var pendingID=""
     @State private var pendingData=Data()
     @State private var pendingPGP=false
+    @State private var onKeyReview:OnKeyBundle?
+    @State private var pendingOnKey:OnKeyBundle?
     @State private var review:[YubiKeyCredential]=[]
     @State private var reviewText=""
     @State private var reviewSheet=false
+    private var availableIdentities:[SavedIdentity] {
+        #if SOFTWARE_ONLY
+        return saved.filter { !$0.isYubiKey }
+        #else
+        return saved
+        #endif
+    }
+    private var managementAction:Bool {secretAction=="onkey-write" || secretAction=="onkey-migrate"}
     private var token:Bool {selected?.isYubiKey == true}
-    private var pinAction:Bool {secretAction=="sign" || secretAction=="decrypt" || secretAction=="pgp-create"}
+    private var pinAction:Bool {secretAction=="sign" || secretAction=="decrypt" || secretAction=="pgp-create" || secretAction=="onkey-sign"}
     var body:some View {
         NavigationStack {
             Form {
                 section0
                 section1
                 section2
+                #if !SOFTWARE_ONLY
                 section3
+                #endif
                 pgpSection
                 section4
                 section5
@@ -79,7 +95,7 @@ struct LocalMailView: View {
                     .navigationTitle("Review YubiKey certificates")
                     .toolbar {
                         ToolbarItem(placement:.cancellationAction) {Button("Cancel"){reviewSheet=false;review=[]}}
-                        ToolbarItem(placement:.confirmationAction) {Button("Import"){let items=review;reviewSheet=false;perform {_ = try await service.importTokenCredentials(items);saved=try await service.savedIdentities();status="Public credentials saved. Select a pure or hybrid entry to use it."}}}
+                        ToolbarItem(placement:.confirmationAction) {Button("Import"){let items=review;reviewSheet=false;perform {if let bundle=onKeyReview{try await service.importOnKey(bundle);onKeyReview=nil}else{_ = try await service.importTokenCredentials(items)};saved=try await service.savedIdentities();status="Public credentials saved. Select a pure or hybrid entry to use it."}}}
                     }}
             }
             .fileImporter(isPresented:$importing,allowedContentTypes:[.data]) {result in
@@ -94,7 +110,7 @@ struct LocalMailView: View {
                     case "pgp-recipient":pgpRecipientInfo=try await service.openPGPDescription(data);pgpRecipient=data
                     case "pgp-signer":pgpSignerInfo=try await service.openPGPDescription(data);pgpSigner=data
                     case "p12":pendingData=data;ask("import")
-                    case "bundle":review=try YubiKeyCredential.importBundle(data);reviewText=try review.map{try $0.review}.joined(separator:"\n\n");reviewSheet=true
+                    case "bundle":onKeyReview=nil;review=try YubiKeyCredential.importBundle(data);reviewText=try review.map{try $0.review}.joined(separator:"\n\n");reviewSheet=true
                     default:
                         pendingData=data
                         pendingPGP=await service.messageFormat(data) == .openPGP
@@ -130,12 +146,15 @@ struct LocalMailView: View {
     }
     private var section0:some View {
 Section("Local encrypted mail") {
+                    #if SOFTWARE_ONLY
+                    Text("Software-only preview. YubiKey NFC and USB-C are unavailable in this build.").font(.headline)
+                    #endif
                     Text("Sign, encrypt and open .eml files. No mail account or sending. Software private keys are saved in password-protected .p12 files; YubiKey credentials contain public certificates and slot mappings only.").font(.footnote)
                 }
     }
     private var section1:some View {
 Section("Saved identities") {
-                    ForEach(saved) {entry in
+                    ForEach(availableIdentities) {entry in
                         Button((selected?.id==entry.id ? "✓ " : "")+entry.label) {
                             if entry.isYubiKey {perform {activate(try await service.select(entry.id))}}
                             else {pendingID=entry.id;ask("unlock")}
@@ -163,9 +182,19 @@ Section("Software .p12 identities") {
     }
     private var section3:some View {
 Section("YubiKey credentials") {
+                    Button("Import certificates from YubiKey — no PIN") {perform {let bundle=try await service.readOnKey(transport:transport);onKeyReview=bundle;review=bundle.credentials;reviewText=try bundle.review;reviewSheet=true;status="Read complete — remove your key."}}
+                    if token {
+                        Button("Save certificates on YubiKey…") {ask("onkey-sign")}
+                        Button("Migrate signing key 9a → 83…") {ask("onkey-migrate")}
+                        Text("On-key certificates, OpenPGP public identities and slot mappings are public. Saving requires a signing PIN, then management-key authorization. Migration moves the existing ECDSA key only into empty 83; it does not generate keys. Save the bundle again after migration.").font(.footnote)
+                    }
                     Button("Import device certificate bundle (.pqcert)") {startImport("bundle")}
                     Text("Use Share certificates → move to another device on desktop or Android. Review the public certificates, serial and four slots before import. No token keys are generated or replaced.").font(.footnote)
+                    #if USB_ONLY
+                    Text("Connection: USB-C. NFC is disabled in this build.")
+                    #else
                     Picker("Connection",selection:$transport) {ForEach(YubiKeyTransport.allCases,id:\.self){Text($0.rawValue).tag($0)}}
+                    #endif
                     if let c=selected?.token {Text("Required YubiKey: \(c.serial)").font(.caption)}
                 }
     }
@@ -225,14 +254,14 @@ Section("Open and verify") {
     }
     private var secretView:some View {
         NavigationStack {Form {
-            if pinAction {
+            if managementAction {Text(secretAction=="onkey-migrate" ? "Move the existing ECDSA key from 9a to empty 83 and update local mappings. No key generation. If interrupted, inspect before retrying.":"Write the signed public identity bundle. Anyone holding the YubiKey can read it. The previous bank is retained until commit.");Text("Enter the management key in hex, not your PIN. Keep the key connected until completion.")} else if pinAction {
                 Text("YubiKey \(selected?.token?.serial ?? 0) · \(transport.rawValue)")
                 Text(operationAlgorithms)
                 Text("Enter the PIN before connecting. Keep the key in place until the operation finishes. One PIN entry is reused for the hybrid components during this operation, then cleared.")
             } else {Text("The .p12 password protects software private keys. It is not the YubiKey PIN and is not saved. New and imported identities require at least 12 characters.")}
-            SecureField(pinAction ? "YubiKey PIN" : ".p12 password",text:$secret).textInputAutocapitalization(.never).autocorrectionDisabled()
+            SecureField(managementAction ? "Management key (hex)" : pinAction ? "YubiKey PIN" : ".p12 password",text:$secret).textInputAutocapitalization(.never).autocorrectionDisabled()
             if secretAction=="create" {SecureField("Confirm password",text:$confirmation)}
-        }.navigationTitle(pinAction ? "YubiKey operation" : "Software identity")
+        }.navigationTitle(managementAction ? "Authorize YubiKey change" : pinAction ? "YubiKey operation" : "Software identity")
             .toolbar {
                 ToolbarItem(placement:.cancellationAction) {Button("Cancel"){secretSheet=false;secret="";confirmation="";pendingData=Data()}}
                 ToolbarItem(placement:.confirmationAction) {Button("Continue"){submitSecret()}.disabled(secret.isEmpty || (secretAction=="create" && (secret.count<12 || secret != confirmation)) || (pinAction && (!(6...8).contains(secret.utf8.count) || !secret.utf8.allSatisfy{(32...126).contains($0)})))}
@@ -245,6 +274,9 @@ Section("Open and verify") {
         if action=="sign" {compose(value);return}
         perform {
             switch action {
+            case "onkey-sign":pendingOnKey=try await service.prepareOnKey(pin:value,transport:transport);status="Bundle signed — remove your key, then authorize storage.";ask("onkey-write")
+            case "onkey-write":guard let bundle=pendingOnKey else{throw MailCryptoError.invalid("Sign the bundle first")};try await service.writeOnKey(bundle,management:value,transport:transport);pendingOnKey=nil;status="Bundle saved and verified — remove your key."
+            case "onkey-migrate":try await service.migrateOnKey(management:value,transport:transport);if let id=selected?.id{activate(try await service.select(id))};status="Migration complete — remove your key. Save the on-key bundle again to update its mapping."
             case "create":activate(try await service.create(profile:profile,email:email,password:value))
             case "unlock":activate(try await service.select(pendingID,password:value))
             case "import":activate(try await service.importPKCS12(data,password:value))

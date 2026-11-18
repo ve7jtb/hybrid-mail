@@ -6,6 +6,53 @@ public actor LocalMailService {
     private var selected: SavedIdentity?
     private let store: IdentityStore
     public init(storeURL: URL? = nil) { store=IdentityStore(directory:storeURL) }
+
+    public func readOnKey(transport:YubiKeyTransport)async throws->OnKeyBundle {
+        let card=try await OnKeyPIV.open(transport)
+        do{let bundle=try await OnKeyStorage.load(card);await card.close();return bundle}catch{await card.close();throw error}
+    }
+    public func importOnKey(_ bundle:OnKeyBundle)throws {
+        for c in bundle.credentials where c.traditionalSlot==0x83{for old in try store.list(){if let token=old.token,token.serial==c.serial && token.signingDER==c.signingDER && token.encryptionDER==c.encryptionDER && token.traditionalSlot==0x9a{try store.save(SavedIdentity(id:old.id,label:old.label,profile:old.profile,modes:old.modes,token:c))}}}
+        let entries=try importTokenCredentials(bundle.credentials)
+        for (i,e) in entries.enumerated() where !bundle.pgp[i].isEmpty {
+            let url=store.directory.appendingPathComponent(e.id+".pgp")
+            if FileManager.default.fileExists(atPath:url.path){let old=try PGP.PublicIdentity(Data(contentsOf:url)),new=try PGP.PublicIdentity(bundle.pgp[i]);try require(try old.fingerprint==new.fingerprint && old.encryptionFingerprint==new.encryptionFingerprint,"Conflicting existing OpenPGP identity")}
+            try bundle.pgp[i].write(to:url,options:.atomic)
+        }
+    }
+    private func tokenProfiles()throws->[SavedIdentity] {
+        guard let token=selected?.token else{throw MailCryptoError.invalid("Select a YubiKey identity")}
+        let (sign,enc)=try token.validated()
+        return try store.list().filter {entry in
+            guard let c=entry.token,c.serial==token.serial else{return false};let (s,e)=try c.validated()
+            return try s.keys.pq.export()==sign.keys.pq.export() && e.keys.pq.export()==enc.keys.pq.export()
+        }
+    }
+    public func prepareOnKey(pin:String,transport:YubiKeyTransport)async throws->OnKeyBundle {
+        let entries=try tokenProfiles(),credentials=entries.compactMap(\.token)
+        let pgp=try entries.map {e->Data in let url=store.directory.appendingPathComponent(e.id+".pgp");return FileManager.default.fileExists(atPath:url.path) ? try Data(contentsOf:url):Data()}
+        let signer=credentials.firstIndex{(try? $0.validated().0.algorithm.hybrid)==true} ?? 0
+        return try await hardware(pin,transport){op in try await OnKeyBundle.signed(credentials,pgp,signer:signer){try await op.sign($0,credential:credentials[signer])}}
+    }
+    public func writeOnKey(_ bundle:OnKeyBundle,management:String,transport:YubiKeyTransport)async throws {
+        var key=try Self.managementBytes(management);defer{key.resetBytes(in:0..<key.count)}
+        let card=try await OnKeyPIV.open(transport)
+        do{try await OnKeyStorage.save(bundle,card,key);await card.close()}catch{await card.close();throw error}
+    }
+    private static func managementBytes(_ text:String)throws->Data {
+        let b=Array(text.utf8);try require([32,48,64].contains(b.count),"Management key needs 32, 48 or 64 hex characters")
+        var data=Data();for i in stride(from:0,to:b.count,by:2){guard let value=UInt8(String(decoding:b[i..<i+2],as:UTF8.self),radix:16)else{throw MailCryptoError.invalid("Invalid management key")};data.append(value)};return data
+    }
+    public func migrateOnKey(management:String,transport:YubiKeyTransport)async throws {
+        let entries=try tokenProfiles(),credentials=entries.compactMap(\.token)
+        var key=try Self.managementBytes(management);defer{key.resetBytes(in:0..<key.count)}
+        let backup=try JSONEncoder().encode(entries)
+        try backup.write(to:store.directory.appendingPathComponent("migration-\(UUID().uuidString).backup"),options:.atomic)
+        let card=try await OnKeyPIV.open(transport)
+        do{try await card.migrate(credentials,key);await card.close()}catch{await card.close();throw error}
+        for e in entries{let updated=SavedIdentity(id:e.id,label:e.label,profile:e.profile,modes:e.modes,token:e.token!.migrated());try store.save(updated);if selected?.id==e.id{selected=updated}}
+    }
+
     public func savedIdentities() throws -> [SavedIdentity] {try store.list()}
     public func lock() {identity=nil;selected=nil}
     public func create(profile: Profile,email: String,password: String) throws -> SavedIdentity {

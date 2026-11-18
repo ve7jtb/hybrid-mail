@@ -25,10 +25,12 @@ final class AndroidStore {
         if(!context.getSharedPreferences("identities",0).edit().putString("entries",a.toString()).commit())throw new java.io.IOException("Cannot save identity catalog");
     }
     Identity loadToken(Entry e)throws Exception{return new Identity(Identity.readCertificate(root.resolve(e.sign)),null,Identity.readCertificate(root.resolve(e.encrypt)),null,null);}
-    void addToken(String label,int serial,Identity id)throws Exception {
+    void addToken(String label,int serial,Identity id)throws Exception {addToken(label,serial,id,"9a");}
+    void addToken(String label,int serial,Identity id,String traditional)throws Exception {
         String key=UUID.randomUUID().toString();
         Files.write(root.resolve(key+"-sign.cer"),id.signingCert().getEncoded());
         Files.write(root.resolve(key+"-encrypt.cer"),id.encryptionCert().getEncoded());
+        context.getSharedPreferences("slots",0).edit().putString(key,"9c,"+traditional+",9d,82").commit();
         add(new Entry(key,label,"",serial,key+"-sign.cer",key+"-encrypt.cer"));
     }
     String[] slots(Entry e){return context.getSharedPreferences("slots",0).getString(e.id(),"9c,9a,9d,82").split(",");}
@@ -51,6 +53,15 @@ final class AndroidStore {
                 add(new Entry(key,CertificateBundle.emails(e.identity().signingCert())+" • "+e.identity().signatureAlgorithm(),"",e.serial(),key+"-sign.cer",key+"-encrypt.cer"));
             }else for(String role:List.of("signing","encryption")){var cert=role.equals("signing")?e.identity().signingCert():e.identity().encryptionCert();Files.write(root.resolve("contact-"+role+"-"+Identity.fingerprint(cert).replace(":","")+".cer"),cert.getEncoded());}
         }
+    }
+    void importOnKey(OnKeyBundle.Bundle bundle)throws Exception{
+        if(bundle.entries().stream().allMatch(e->e.traditionalSlot().equals("83")))migrateBindings(bundle.entries());
+        importCertificateBundle(bundle.entries(),true);bundle.savePgp(root);
+    }
+    void migrateBindings(List<CertificateBundle.Entry> entries)throws Exception{
+        var edit=context.getSharedPreferences("slots",0).edit();
+        for(var old:entries())if(old.serial()==entries.get(0).serial())for(var e:entries)if(Arrays.equals(loadToken(old).signingCert().getEncoded(),e.identity().signingCert().getEncoded())){var slots=slots(old);slots[1]="83";edit.putString(old.id(),String.join(",",slots));}
+        if(!edit.commit())throw new java.io.IOException("Key moved; local mapping save failed. Recover using public backup.");
     }
     void trust(X509Certificate cert)throws Exception{trust(cert,"signing");}
     void trust(X509Certificate cert,String role)throws Exception{

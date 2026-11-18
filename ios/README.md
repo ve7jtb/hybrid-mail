@@ -218,3 +218,32 @@ NFC/USB-C testing on physical PQ hardware remains required.
 ## Cross-platform OpenPGP
 
 Desktop and Android implement the same Level 3 hybrid OpenPGP wire format. Export/import the same `.asc` public identity alongside the corresponding software `.p12` or public YubiKey credential bundle to retain fingerprints. Bidirectional Java/OpenSSL signed and encrypted message exchange passes; the Swift suite now has 19 passing tests. See the [shared OpenPGP guide](../docs/OPENPGP.md). Physical iPhone YubiKey testing remains pending.
+
+## USB-only development build
+
+A USB-only variant enables CryptoTokenKit smart-card access without NFC Tag
+Reading. It hides NFC controls and defaults all YubiKey operations to USB-C.
+Use `App/USB.entitlements`, `App/USBInfo.plist` and the `USB_ONLY` compilation
+condition. This is useful when the Apple development team cannot provision NFC.
+Hardware access still needs testing on the connected phone.
+
+```sh
+xcodebuild -project PQMail.xcodeproj -scheme PQMail -configuration Debug \
+  -destination 'generic/platform=iOS' DEVELOPMENT_TEAM=YOUR_TEAM_ID \
+  CODE_SIGN_ENTITLEMENTS=App/USB.entitlements INFOPLIST_FILE=App/USBInfo.plist \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG USB_ONLY' \
+  -allowProvisioningUpdates build
+```
+
+The separate `SOFTWARE_ONLY` condition hides all token controls and uses
+`App/Software.entitlements` with `App/SoftwareInfo.plist`. Neither variant changes
+the full build's NFC and USB capability settings.
+
+## On-key certificate bundles
+
+The identity screen now offers saving/importing signed public bundles directly
+from a YubiKey and explicit ECDSA migration from 9a to empty 83. Existing mappings
+remain intact until migration. Public reads do not require a PIN; writes/migration
+require management-key authentication. See [format and recovery](../docs/ON-KEY-CERTIFICATES.md).
+Hardware access on iOS still requires appropriate entitlements. Physical storage
+and migration tests are pending; installing this build changes no keys.

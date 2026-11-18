@@ -323,6 +323,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         p.add(left(button("Create identity on empty YubiKey…",this::provisionYubiKey),button("Finish pending certificates…",this::finishTokenCertificates),pendingHelp));
         p.add(left(button("Export selected signing certificate…",()->export(true)),button("Export selected encryption certificate…",()->export(false))));
         p.add(left(button("Share certificates…",this::shareCertificates),button("Import certificate bundle…",()->{Path file=choose(false,"Import PQ Mail certificate bundle (.pqcert)");if(file!=null)importCertificateBundle(file);})));
+        p.add(left(button("Save certificates on YubiKey…",()->onKeyAction(false)),button("Import certificates from YubiKey…",this::importOnKey),button("Migrate signing key 9a → 83…",()->onKeyAction(true))));
         JPanel settings=new JPanel(new FlowLayout(FlowLayout.LEFT));
         settings.add(button("YubiKey configuration…",this::configureYubiKey));
         settings.add(button("Update YubiKey certificate email…",this::reissueTokenCertificates));
@@ -456,7 +457,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     private void provisionCredentials(String serial,String email,TokenProfile profile,java.util.List<String> extra){
         JPasswordField pin=new JPasswordField(),management=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default management key",true);
         JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("YubiKey "+serial+" passed the empty-slot check."));
-        form.add(new JLabel("Generate "+profile.ml+" in 9c; "+profile.kem+" in 9d."));form.add(new JLabel("Also generate ECDSA and ECDH "+(profile.category==2?"P-256":"P-384")+" in 9a and 82."));
+        form.add(new JLabel("Generate "+profile.ml+" in 9c; "+profile.kem+" in 9d."));form.add(new JLabel("Also generate ECDSA and ECDH "+(profile.category==2?"P-256":"P-384")+" in 83 and 82."));
         form.add(new JLabel("All keys: PIN Always, Touch Never. Private keys never leave the device."));
         form.add(new JLabel("YubiKey PIN"));form.add(pin);form.add(factory);form.add(new JLabel("Management key (hex, only if not factory default)"));form.add(management);
         form.add(new JLabel("Creating keys is not atomic: a failure can leave some slots provisioned. No automatic retry."));
@@ -474,11 +475,11 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         },created->{setIdentity(created);refreshSaved();from.setText(email);status.setText("YubiKey identities saved. Keys generated on serial "+serial+"; no private keys stored on this Mac.");});
     }
     private Identity issueTokenIdentities(String serial,String email,boolean hybrid,java.util.Map<String,java.security.PublicKey> keys,boolean preferHybrid,TokenProfile profile,java.util.List<String> extra)throws Exception{
-                state().set("token.serial",serial);state().set("token.rsaSlot","9a");state().set("token.kemSlot","9d");state().set("token.ecdhSlot","82");state().activate();
+                String traditional=keys.containsKey("83")?"83":"9a";state().set("token.serial",serial);state().set("token.rsaSlot",traditional);state().set("token.kemSlot","9d");state().set("token.ecdhSlot","82");state().activate();
                 String signer=DesktopState.resources().resolve("adapters/pkcs11-mu.py").toString();Identity selected=null;
                 for(boolean composite:hybrid?new boolean[]{!preferHybrid,preferHybrid}:new boolean[]{false}){
-                    selected=Identity.forTokenProfile(email,profile,keys.get("9c"),composite?keys.get("9a"):null,keys.get("9d"),composite?keys.get("82"):null,ExternalMu.executable(signer),extra);
-                    String id=state().remember(selected,email+" · "+selected.signatureAlgorithm(),null);state().bindToken(id,serial,"9a","9d","82");
+                    selected=Identity.forTokenProfile(email,profile,keys.get("9c"),composite?keys.get(traditional):null,keys.get("9d"),composite?keys.get("82"):null,ExternalMu.executable(signer),extra);
+                    String id=state().remember(selected,email+" · "+selected.signatureAlgorithm(),null);state().bindToken(id,serial,traditional,"9d","82");
                 }return selected;
     }
     private void finishTokenCertificates(){
@@ -521,6 +522,38 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         try{if(desktopState!=null)desktopState.activateIdentity(id);}catch(Exception e){error(e);return;}identity=id;
         if(desktopState!=null){adapter=id.signingKey()==null?tokenAdapter(false):null;kemAdapter=id.encryptionKey()==null&&id.encryptionCert()!=null?tokenAdapter(true):null;}
         identityLabel.setText(id.signatureAlgorithm()+" · "+id.signingCert().getSubjectX500Principal());status.setText("Identity ready. Import a recipient certificate to encrypt.");}
+
+    private char[] managementKey(){
+        JPasswordField field=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default AES-192 management key");
+        JPanel p=new JPanel(new GridLayout(0,1));p.add(new JLabel("Management key authorizes public storage / migration. It is not the PIN."));p.add(field);p.add(factory);
+        int choice=JOptionPane.showConfirmDialog(this,p,"YubiKey management authorization",JOptionPane.OK_CANCEL_OPTION);
+        char[] result=choice==JOptionPane.OK_OPTION?(factory.isSelected()?"010203040506070801020304050607080102030405060708".toCharArray():field.getPassword()):null;field.setText("");return result;
+    }
+    private void onKeyAction(boolean migrate){try{
+        var entries=state().certificateBundle(identity);String review=CertificateBundle.review(entries);
+        String explanation=migrate?"Move the existing ECDSA private key from 9a to empty 83, preserving its public key. Update all matching local mappings. No key generation. If interrupted, inspect/recover before retrying. Save the on-key bundle again afterward.":"Save signed public certificates, existing OpenPGP public identities and slot mappings on this YubiKey. Anyone holding the key can read them. No passwords, OAuth credentials or trust settings are included. A full key can reject this write; the previous bank is retained.";
+        JTextArea text=new JTextArea(explanation+"\n\n"+review,18,76);text.setEditable(false);text.setLineWrap(true);text.setWrapStyleWord(true);
+        if(JOptionPane.showConfirmDialog(this,new JScrollPane(text),migrate?"Migrate 9a → 83":"Save public on-key bundle",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+        char[] admin=managementKey();if(admin==null)return;
+        job(migrate?"Migrating existing key; do not disconnect…":"Signing and writing public bundle…",()->{
+            try{
+                if(migrate){
+                    Path backup=state().directory().resolve("migration-"+entries.get(0).serial()+"-"+System.currentTimeMillis()+".pqcert");Files.write(backup,CertificateBundle.encode(entries),StandardOpenOption.CREATE_NEW);
+                    try(var card=new OnKeyDesktop(entries.get(0).serial())){OnKeyBundle.migrate(card,entries,admin);}
+                    state().migrateTokenBindings(entries);return "Key moved to 83 and local mappings updated. Save certificates on YubiKey to refresh its bundle. Public backup: "+backup;
+                }
+                var profiles=OnKeyBundle.collect(entries,state().directory());int signer=0;for(int i=0;i<entries.size();i++)if(entries.get(i).identity().signingCert().getPublicKey() instanceof org.bouncycastle.jcajce.CompositePublicKey)signer=i;
+                state().activateIdentity(entries.get(signer).identity());byte[] encoded=OnKeyBundle.sign(profiles,signer,ExternalMu.executable(tokenAdapter(false)));
+                try(var card=new OnKeyDesktop(entries.get(0).serial())){OnKeyStorage.save(card,encoded,admin);}return "Public certificates and configuration saved and read-back verified on YubiKey.";
+            }finally{Arrays.fill(admin,'\0');if(identity!=null)state().activateIdentity(identity);}
+        },result->{refreshSaved();status.setText(result);});
+    }catch(Exception e){error(e);}}
+    private void importOnKey(){job("Reading YubiKey public bundle (no PIN)…",()->{try(var card=new OnKeyDesktop(0)){return OnKeyStorage.load(card);}},bundle->{try{
+        JTextArea text=new JTextArea(bundle.review(),18,76);text.setEditable(false);text.setLineWrap(true);text.setWrapStyleWord(true);
+        if(JOptionPane.showConfirmDialog(this,new JScrollPane(text),"Import verified YubiKey identities — trust unchanged",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+        state().importOnKey(bundle);refreshSaved();status.setText("On-key identities imported. Select pure or hybrid to use them.");
+    }catch(Exception e){error(e);}});}
+
     private void shareCertificates(){
         try{var entries=state().certificateBundle(identity);JTextArea review=new JTextArea(CertificateBundle.review(entries),18,76);review.setEditable(false);review.setLineWrap(true);review.setWrapStyleWord(true);
             Object[] options=System.getProperty("os.name").startsWith("Mac")?new Object[]{"Share…","Save bundle…","Cancel"}:new Object[]{"Save bundle…","Cancel"};

@@ -8,6 +8,23 @@ PQ Mail is an experimental post-quantum mail application supporting **S/MIME and
 
 [Watch the Google OAuth and post-quantum S/MIME demonstration](https://youtu.be/RGiaAeGTCmc) (3:20). The desktop demo shows Gmail read/send consent, a YubiKey-signed message, and a signed-and-encrypted message decrypted locally with the YubiKey. It uses ML-DSA-87 + ECDSA P-384 signatures and ML-KEM-1024 + ECDH P-384 encryption. PIN prompts are included with their fields masked; unrelated inbox content and pauses are removed. Recorded November 17, 2026 using synthetic messages sent to the same account. The video is unlisted on YouTube and accessible through this link.
 
+## On-key certificates and migration
+
+Use **Keys → Save certificates on YubiKey…** to carry the pure/hybrid S/MIME
+certificates, existing OpenPGP public identity and serial/slot mappings with the
+key. **Import certificates from YubiKey…** verifies the bundle and actual public
+keys, then asks for review; it does not grant trust. Android and iOS expose the
+same save/import/migration actions in their identity screens.
+
+New provisioning uses ECDSA slot **83**, leaving 9a available for authentication.
+Existing 9a credentials keep working. The explicit **Migrate signing key 9a → 83…**
+action requires an empty destination and management authorization; no migration
+happens on update. Save the on-key bundle again after migration. Public storage
+contains no PINs, private keys, passwords or Google OAuth refresh tokens.
+
+See [on-key format, workflows and recovery](docs/ON-KEY-CERTIFICATES.md).
+Physical on-key writes/migration are pending Beta0 hardware validation.
+
 ## Android preview
 
 An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB and NFC**, with the same three software `.p12`, pure PQ, and hybrid profiles. It includes local S/MIME, IMAPS/SMTP, and public-only YubiKey identities. See the Android guide for build instructions, hardware testing, and preview limitations; Google OAuth and token provisioning remain desktop features.
@@ -101,7 +118,7 @@ To test a saved YubiKey identity:
 | Slot | Level 2 | Level 3 | Level 5 |
 |---|---|---|---|
 | `9c` signing | ML-DSA-44 | ML-DSA-65 | ML-DSA-87 |
-| `9a` signing | ECDSA P-256 / SHA-256 | ECDSA P-384 / SHA-384 | ECDSA P-384 / SHA-384 |
+| `83` signing (new identities) | ECDSA P-256 / SHA-256 | ECDSA P-384 / SHA-384 | ECDSA P-384 / SHA-384 |
 | `9d` decryption | ML-KEM-768 | ML-KEM-768 | ML-KEM-1024 |
 | `82` decryption | ECDH P-256 | ECDH P-384 | ECDH P-384 |
 

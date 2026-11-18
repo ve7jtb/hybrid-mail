@@ -131,6 +131,14 @@ public final class DesktopState {
         }
         set("selected.identity",previous);save();
     }
+    public void importOnKey(OnKeyBundle.Bundle bundle)throws Exception{
+        for(var e:bundle.entries()){String id=identityId(e.identity()),prefix="identity."+id+".token.";
+            if(e.traditionalSlot().equals("83")&&get(prefix+"serial","").equals(Integer.toString(e.serial()))&&get(prefix+"rsaSlot","9a").equals("9a"))bindToken(id,Integer.toString(e.serial()),"83",e.kemSlot(),e.ecdhSlot());
+        }importCertificateBundle(bundle.entries(),true);bundle.savePgp(directory);
+    }
+    public void migrateTokenBindings(List<CertificateBundle.Entry> entries)throws Exception{
+        for(var e:entries){String id=identityId(e.identity());bindToken(id,Integer.toString(e.serial()),"83",e.kemSlot(),e.ecdhSlot());}save();
+    }
     public void saveCertificate(String role,X509Certificate certificate)throws Exception{
         if(!Set.of("recipient","pinned").contains(role))throw new IllegalArgumentException("Invalid certificate role");
         write(directory.resolve(role+".cer"),certificate.getEncoded());

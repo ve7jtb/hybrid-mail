@@ -141,3 +141,12 @@ Select a Level 3 hybrid identity, then open **OpenPGP public identities** to cre
 Software keys stay in the password-protected `.p12`; YubiKey signing/decryption uses the same YubiKit PIV adapter. No OpenPGP applet or new token keys are required. OpenPGP is currently plain-text, one-recipient, Level 3 hybrid only; use S/MIME for attachments and other profiles. A valid signature does not establish correspondent trust. See [the shared OpenPGP guide](../docs/OPENPGP.md).
 
 The OpenPGP build passed eight Android emulator instrumentation tests, including the simulated PIV backend. The tester reported a successful Level 3 hybrid OpenPGP USB signature/decryption round trip; the manual flow did not save a hardware report. Physical OpenPGP NFC testing remains pending.
+
+## On-key certificate bundles
+
+The identity screen now offers saving/importing signed public bundles directly
+from a YubiKey and explicit ECDSA migration from 9a to empty 83. Existing mappings
+remain intact until migration. Public reads do not require a PIN; writes/migration
+require management-key authentication. See [format and recovery](../docs/ON-KEY-CERTIFICATES.md).
+Hardware access on iOS still requires appropriate entitlements. Physical storage
+and migration tests are pending; installing this build changes no keys.

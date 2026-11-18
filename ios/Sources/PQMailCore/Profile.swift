@@ -17,7 +17,7 @@ public enum Profile: Int, CaseIterable, Identifiable, Sendable {
 
 public struct SlotMap: Equatable, Sendable {
     public let mlDSA: UInt8, ecdsa: UInt8, mlKEM: UInt8, ecdh: UInt8
-    public init(mlDSA: UInt8 = 0x9c, ecdsa: UInt8 = 0x9a, mlKEM: UInt8 = 0x9d, ecdh: UInt8 = 0x82) throws {
+    public init(mlDSA: UInt8 = 0x9c, ecdsa: UInt8 = 0x83, mlKEM: UInt8 = 0x9d, ecdh: UInt8 = 0x82) throws {
         let slots = [mlDSA, ecdsa, mlKEM, ecdh]
         guard Set(slots).count == 4, slots.allSatisfy({ (0x82...0x95).contains($0) || [0x9a,0x9c,0x9d,0x9e].contains($0) }) else { throw ProbeError.invalidSlots }
         self.mlDSA=mlDSA; self.ecdsa=ecdsa; self.mlKEM=mlKEM; self.ecdh=ecdh

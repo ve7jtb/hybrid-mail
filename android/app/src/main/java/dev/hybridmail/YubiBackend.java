@@ -41,7 +41,7 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
         return KeyFactory.getInstance(algorithm,"BC").generatePublic(new X509EncodedKeySpec(metadata.getPublicKeyValues().getEncoded()));
     }
     static Map<Slot,PublicKey> keys(Identity identity) {
-        return keys(identity,new String[]{"9c","9a","9d","82"});
+        return keys(identity,new String[]{"9c","83","9d","82"});
     }
     static Map<Slot,PublicKey> keys(Identity identity,String[] slots){
         Map<Slot,PublicKey> keys=new EnumMap<>(Slot.class);

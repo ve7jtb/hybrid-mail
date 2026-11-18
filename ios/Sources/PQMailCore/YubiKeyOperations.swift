@@ -46,6 +46,7 @@ actor PIVOperation {
     init(connection: any PIVConnection,pin: [UInt8]) throws {
         try Self.validatePIN(pin);self.connection=connection;self.pin=pin
     }
+    init(readOnly connection:any PIVConnection){self.connection=connection;self.pin=[]}
     static func validatePIN(_ pin:[UInt8]) throws {try require((6...8).contains(pin.count) && pin.allSatisfy{(32...126).contains($0)},"Use a 6–8 character ASCII YubiKey PIN")}
     func finish() async {_ = pin.withUnsafeMutableBytes{$0.initializeMemory(as:UInt8.self,repeating:0)};pin.removeAll();await connection.close()}
     func command(_ ins:UInt8,_ p1:UInt8,_ p2:UInt8,_ data:Data=Data()) async throws -> Data {

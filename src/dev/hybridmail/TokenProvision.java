@@ -36,7 +36,7 @@ final class TokenProvision {
     static Map<String,PublicKey> read(String serial,boolean hybrid,Path folder)throws Exception{return decode(run(serial,"read",hybrid?"hybrid":"pure",folder,null,null),hybrid);}
     static Map<String,PublicKey> read(String serial,TokenProfile profile,Path folder)throws Exception{return decode(run(serial,"read",profile.code,folder,null,null),true);}
     private static Map<String,PublicKey> decode(String output,boolean hybrid)throws Exception{var json=JsonParser.parseString(output).getAsJsonObject();Map<String,PublicKey> keys=new HashMap<>();
-        for(String slot:hybrid?List.of("9c","9d","9a","82"):List.of("9c","9d")){
+        for(String slot:hybrid?List.of("9c","9d",json.has("83")?"83":"9a","82"):List.of("9c","9d")){
             String alg=slot.equals("9c")?"ML-DSA":slot.equals("9d")?"ML-KEM":"EC";
             keys.put(slot,KeyFactory.getInstance(alg,"BC").generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(json.get(slot).getAsString()))));
         }return keys;

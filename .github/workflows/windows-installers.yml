@@ -14,7 +14,8 @@ jobs:
       - uses: actions/setup-java@v6.3.0
         with:
           distribution: zulu
-          java-version: '25.0.5.1'
+          # setup-java encodes Zulu JDK 25.0.5.1+2 as 25.0.5+1.2.
+          java-version: '25.0.5+1.2'
       - run: bash scripts/build-dependencies.sh
       - run: bash build.sh test
         env:
@@ -52,7 +53,8 @@ jobs:
       - uses: actions/setup-java@v6.3.0
         with:
           distribution: zulu
-          java-version: '25.0.5.1'
+          # setup-java encodes Zulu JDK 25.0.5.1+2 as 25.0.5+1.2.
+          java-version: '25.0.5+1.2'
           architecture: ${{ matrix.java }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: ilammy/msvc-dev-cmd@v1

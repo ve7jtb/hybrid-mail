@@ -4,6 +4,11 @@ import java.util.*;
 public final class DesktopStateTest {
     static void check(boolean value,String label){if(!value)throw new AssertionError(label);System.out.println("PASS "+label);}
     public static void main(String[] args)throws Exception{
+        if(DesktopState.linux()) {
+            DesktopState defaults=DesktopState.open();
+            check(defaults.directory().getFileName().toString().equals("pq-mail"),"Linux data directory");
+            check(defaults.configuration().get("PKCS11_PROVIDER").endsWith(".so")&&defaults.configuration().get("PKCS11_MODULE").endsWith(".so"),"Linux PKCS11 shared library paths");
+        }
         MailEngine.init();Path dir=Files.createTempDirectory("hybrid-desktop-test-");
         char[] password="test-only-local-password".toCharArray();
         try{

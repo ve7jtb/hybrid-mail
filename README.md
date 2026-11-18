@@ -225,3 +225,13 @@ Gmail **S/MIME only** filters each page using its top-level Content-Type (opaque
 Desktop builds require Java 25.0.5.1 or newer in the Java 25 GA line. Set `JAVA_HOME` to that JDK; compilation, dependency builds and packaging reject older runtimes and early-access builds. Windows CI pins Azul Zulu 25.0.5.1 (November 2026 security update). Mac and Windows packaging also check the actual bundled runtime and produce a `java-runtime*.txt` report alongside the package. Updating system Java does not update an already installed PQ Mail app; replace the app with the rebuilt package.
 
 This baseline includes the November Base64 intrinsic fix (CVE-2026-114938); see [Azul’s November release notes](https://docs.azul.com/core/release-notes). Android uses ART and iOS uses OpenSSL, so this desktop JDK change does not replace their runtimes.
+
+### Linux amd64 and ARM64
+
+Linux builds provide a `.deb` installer and a portable `.tar.gz` app image for each architecture. They target Ubuntu 24.04 or newer (glibc 2.39+), bundle patched Java 25.0.5.1, OpenSSL 3.5.9 LTS, the PKCS#11 provider/module and YubiKey provisioning helper. No system JDK or ykman is required. Install the Debian package with `sudo apt install ./PQ-Mail-1.2.1-Linux-amd64.deb` (use `arm64` for ARM). The desktop menu entry launches PQ Mail.
+
+The portable archive requires Python 3, PC/SC (`pcscd`, `libccid`, `libpcsclite1`), GTK/X11/font libraries and `libsecret-1-0`. Run `PQ Mail/bin/PQ Mail` after extraction. A graphical desktop session is required; Wayland desktops need XWayland for Java Swing. Enable the distribution’s PC/SC service/socket if it is not active. Do not run PQ Mail as root.
+
+Settings and identities use `$XDG_DATA_HOME/pq-mail`, normally `~/.local/share/pq-mail`. Google OAuth refresh tokens and custom client credentials use the desktop Secret Service (for example GNOME Keyring or a compatible KWallet service); there is no plaintext fallback. The keyring must be available and unlocked. Software `.p12` passwords and YubiKey PINs are not saved. Certificate sharing uses file export/import on Linux.
+
+The Linux workflow builds natively on amd64 and ARM64, tests software S/MIME/OpenPGP and simulated token operations, tests a disposable Secret Service store/read/delete cycle, and runs the software profiles in the packaged JVM. Physical YubiKey operation on Linux still requires hardware testing. Build with `scripts/build-dependencies.sh`, `build.sh test`, `scripts/build-linux-native.sh`, and `scripts/package-linux.sh`; see `.github/workflows/linux-packages.yml` for the build prerequisites.

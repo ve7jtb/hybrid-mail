@@ -217,7 +217,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         try{GoogleSession.saveClient(new GoogleOAuth.Client(clientId.getText().trim(),new String(value).trim()),state());Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in "+credentialStore()+". Choose Sign in with Google.");}
         catch(Exception e){error(e);}finally{Arrays.fill(value,'\0');}
     }
-    private static String credentialStore(){return DesktopState.windows()?"Windows Credential Manager":"Mac Keychain";}
+    private static String credentialStore(){return DesktopState.windows()?"Windows Credential Manager":DesktopState.linux()?"Linux Secret Service":"Mac Keychain";}
     private void signInGoogle(){
         try{
             GoogleOAuth.Client client=GoogleSession.client(state());

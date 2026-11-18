@@ -19,10 +19,11 @@ public final class DesktopState {
         if(Files.exists(file))try(InputStream in=Files.newInputStream(file)){values.load(in);}
     }
     public static boolean windows(){return System.getProperty("os.name").startsWith("Windows");}
+    public static boolean linux(){return System.getProperty("os.name").equals("Linux");}
     public static String defaultPython(){return windows()?resources().resolve("native/python/python.exe").toString():"/usr/bin/python3";}
     public static DesktopState open()throws IOException{
         String override=System.getProperty("hybridmail.dataDir");
-        return new DesktopState(override==null?(windows()?Path.of(System.getenv().getOrDefault("LOCALAPPDATA",System.getProperty("user.home")),"Hybrid Mail"):Path.of(System.getProperty("user.home"),"Library","Application Support","Hybrid Mail")):Path.of(override));
+        return new DesktopState(override==null?(linux()?Path.of(System.getenv().getOrDefault("XDG_DATA_HOME",Path.of(System.getProperty("user.home"),".local","share").toString()),"pq-mail"):windows()?Path.of(System.getenv().getOrDefault("LOCALAPPDATA",System.getProperty("user.home")),"Hybrid Mail"):Path.of(System.getProperty("user.home"),"Library","Application Support","Hybrid Mail")):Path.of(override));
     }
     public Path directory(){return directory;}
     public String get(String name,String fallback){return values.getProperty(name,fallback);}
@@ -217,9 +218,9 @@ public final class DesktopState {
     }
     public Map<String,String> configuration(){
         Map<String,String> result=new HashMap<>();
-        result.put("OPENSSL_BIN",nativePath("openssl.path",windows()?"native/bin/openssl.exe":"native/bin/openssl","/opt/homebrew/bin/openssl"));
-        result.put("PKCS11_PROVIDER",nativePath("provider.path",windows()?"native/lib/pkcs11.dll":"native/lib/pkcs11.dylib",resources().resolve("native/pkcs11.dylib").toString()));
-        result.put("PKCS11_MODULE",nativePath("module.path",windows()?"native/lib/ykcs11.dll":"native/lib/libykcs11.dylib",resources().resolve("native/libykcs11.dylib").toString()));
+        result.put("OPENSSL_BIN",nativePath("openssl.path",windows()?"native/bin/openssl.exe":"native/bin/openssl",linux()?"/usr/bin/openssl":"/opt/homebrew/bin/openssl"));
+        result.put("PKCS11_PROVIDER",nativePath("provider.path",windows()?"native/lib/pkcs11.dll":linux()?"native/lib/pkcs11.so":"native/lib/pkcs11.dylib",resources().resolve(linux()?"native/pkcs11.so":"native/pkcs11.dylib").toString()));
+        result.put("PKCS11_MODULE",nativePath("module.path",windows()?"native/lib/ykcs11.dll":linux()?"native/lib/libykcs11.so":"native/lib/libykcs11.dylib",resources().resolve(linux()?"native/libykcs11.so":"native/libykcs11.dylib").toString()));
         result.put("PYTHON_BIN",get("python.path",defaultPython()));
         result.put("PKCS11_SERIAL",get("token.serial",""));result.put("PKCS11_TRADITIONAL_SLOT",get("token.rsaSlot","9a"));
         result.put("PKCS11_KEM_SLOT",get("token.kemSlot","9d"));result.put("PKCS11_ECDH_SLOT",get("token.ecdhSlot","82"));

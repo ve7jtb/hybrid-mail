@@ -23,7 +23,7 @@ final class GoogleSession {
     static GoogleOAuth.Token restore(GoogleOAuth.Client client,String email)throws Exception{
         boolean authenticate=System.getProperty("os.name").startsWith("Mac") && (MacKeychain.protectedSession()||Boolean.parseBoolean(DesktopState.open().get("google.authenticateRestore","false")));
         if(authenticate&&!MacKeychain.protectedSession())MacKeychain.protectSession(true);
-        String saved=MacKeychain.get("google-session",authenticate);if(saved==null)throw new IOException("Sign in with Google once to save your session in Mac Keychain");
+        String saved=MacKeychain.get("google-session",authenticate);if(saved==null)throw new IOException("Sign in with Google once to save your session in the system credential store");
         JsonObject j;try{j=JsonParser.parseString(saved).getAsJsonObject();if(!j.has("scope")||!GoogleOAuth.SCOPE.equals(j.get("scope").getAsString()))throw new IOException("Sign in again to authorize Gmail read-only and send access. Previous IMAP/SMTP sessions are not reused.");if(!client.id().equals(j.get("client").getAsString())||!email.equalsIgnoreCase(j.get("email").getAsString()))throw new IOException("Saved Google session belongs to another client or account. Sign in again.");}catch(RuntimeException e){throw new IOException("Saved Google session is invalid. Sign in again.");}
         GoogleOAuth.Token token=GoogleOAuth.refresh(client,j.get("refresh").getAsString());
         // Google normally retains the same refresh token. Rewriting the protected

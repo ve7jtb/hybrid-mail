@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEPS="${HYBRID_DEPS_DIR:-$ROOT/.deps}"
 mkdir -p "$DEPS"
 DEPS="$(cd "$DEPS" && pwd)"
-if [[ -n "${JAVA_HOME:-}" ]]; then export PATH="$JAVA_HOME/bin:$PATH"; fi
+source "$ROOT/scripts/check-java.sh"
 for tool in git java javac mvn; do command -v "$tool" >/dev/null || { echo "Missing prerequisite: $tool" >&2; exit 1; }; done
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$DEPS/cache/gradle}"
 M2="$DEPS/cache/m2"

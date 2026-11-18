@@ -2,6 +2,9 @@ param([ValidateSet('x64','arm64')][string]$Architecture='x64')
 $ErrorActionPreference='Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 function Checked { if ($LASTEXITCODE -ne 0) { throw "Native command failed ($LASTEXITCODE)" } }
+if (!$env:JAVA_HOME) { throw 'Set JAVA_HOME to a patched JDK 25 (25.0.5.1 or newer).' }
+& "$env:JAVA_HOME/bin/java.exe" scripts/CheckJava.java; Checked
+& "$env:JAVA_HOME/bin/java.exe" scripts/CheckJava.java --test; Checked
 $stage=Join-Path $PWD 'build/windows-stage'
 New-Item -ItemType Directory -Force "$stage/native/bin","$stage/native/lib","$stage/native/python","$stage/adapters","$stage/notices","dist/windows" | Out-Null
 Copy-Item build/hybrid-mail.jar,lib/*.jar $stage
@@ -33,7 +36,8 @@ $helper="$stage/native/bin/hybrid-mail-credentials.exe"
 $read=& $helper get self-test; Checked
 if($read.Trim() -ne 'installer-disposable-test'){throw 'Credential store roundtrip failed'}
 & $helper delete self-test; Checked
-& "$env:JAVA_HOME/bin/jpackage.exe" --type app-image --name 'PQ Mail' --icon assets/pq-mail.ico --input $stage --main-jar hybrid-mail.jar --main-class dev.hybridmail.MailApp --dest build/windows-image --app-version 1.2.0 --add-modules java.desktop,java.naming,java.security.jgss,java.security.sasl,java.net.http,jdk.httpserver,jdk.crypto.ec,jdk.unsupported; Checked
+& "$env:JAVA_HOME/bin/jpackage.exe" --type app-image --name 'PQ Mail' --icon assets/pq-mail.ico --input $stage --main-jar hybrid-mail.jar --main-class dev.hybridmail.MailApp --dest build/windows-image --app-version 1.2.1 --add-modules java.desktop,java.naming,java.security.jgss,java.security.sasl,java.net.http,jdk.httpserver,jdk.crypto.ec,jdk.unsupported; Checked
+& "$env:JAVA_HOME/bin/java.exe" scripts/CheckJava.java "build/windows-image/PQ Mail/runtime" "dist/windows/java-runtime-$Architecture.txt"; Checked
 $iscc=Get-ChildItem 'C:/Program Files (x86)/Inno Setup*/ISCC.exe','C:/Program Files/Inno Setup*/ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
 if(!$iscc){
  Invoke-WebRequest https://files.jrsoftware.org/is/6/innosetup-6.4.3.exe -OutFile build/inno-setup.exe

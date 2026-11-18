@@ -117,7 +117,7 @@ The packaged provisioning helper uses Yubico's Rust yubikit directly. **ykman is
 
 ## Build from source
 
-Use **JDK 25**, **Maven 3.9.9**, Python 3, Git and Bash on macOS/Linux. Initial dependency builds require network access and several GB of disk space. macOS native helpers also require Xcode Command Line Tools and a current Rust toolchain.
+Use **JDK 25.0.5.1 or newer within the Java 25 GA release line**, **Maven 3.9.9**, Python 3, Git and Bash on macOS/Linux. Initial dependency builds require network access and several GB of disk space. macOS native helpers also require Xcode Command Line Tools and a current Rust toolchain.
 
 ```sh
 git clone https://github.com/ve7jtb/pq-mail.git
@@ -219,3 +219,9 @@ Desktop Java code is under `src/dev/hybridmail/`: `MailApp` is the Swing UI; `Ma
 Third-party components retain their own licenses; see [notices](docs/THIRD-PARTY.txt). No project license has been selected yet.
 
 Gmail **S/MIME only** filters each page using its top-level Content-Type (opaque S/MIME and multipart/signed with a PKCS#7 signature protocol). It does not fetch message bodies or establish signature validity. Pages cover 50 inbox entries before filtering, so a page may show fewer or no matches while **Older** remains available. S/MIME nested inside forwarded messages or ordinary attachments is not included.
+
+### Bundled Java security baseline
+
+Desktop builds require Java 25.0.5.1 or newer in the Java 25 GA line. Set `JAVA_HOME` to that JDK; compilation, dependency builds and packaging reject older runtimes and early-access builds. Windows CI pins Azul Zulu 25.0.5.1 (November 2026 security update). Mac and Windows packaging also check the actual bundled runtime and produce a `java-runtime*.txt` report alongside the package. Updating system Java does not update an already installed PQ Mail app; replace the app with the rebuilt package.
+
+This baseline includes the November Base64 intrinsic fix (CVE-2026-114938); see [Azul’s November release notes](https://docs.azul.com/core/release-notes). Android uses ART and iOS uses OpenSSL, so this desktop JDK change does not replace their runtimes.

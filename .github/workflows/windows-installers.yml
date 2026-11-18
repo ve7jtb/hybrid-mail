@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-java@v6.3.0
         with:
           distribution: zulu
-          java-version: '25'
+          java-version: '25.0.5.1'
       - run: bash scripts/build-dependencies.sh
       - run: bash build.sh test
         env:
@@ -52,7 +52,7 @@ jobs:
       - uses: actions/setup-java@v6.3.0
         with:
           distribution: zulu
-          java-version: '25'
+          java-version: '25.0.5.1'
           architecture: ${{ matrix.java }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: ilammy/msvc-dev-cmd@v1
@@ -107,5 +107,7 @@ jobs:
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: PQ-Mail-Windows-${{ matrix.arch }}
-          path: dist/windows/*.exe
+          path: |
+            dist/windows/*.exe
+            dist/windows/java-runtime-*.txt
           if-no-files-found: error

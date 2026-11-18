@@ -2,7 +2,7 @@
 # macOS desktop image with Java, OpenSSL and the locally built PKCS#11 modules.
 set -euo pipefail
 cd "$(dirname "$0")"
-if [[ -n "${JAVA_HOME:-}" ]]; then export PATH="$JAVA_HOME/bin:$PATH"; fi
+source scripts/check-java.sh
 [[ "$(uname -s)" == Darwin ]] || { echo 'This bundled package script targets macOS.' >&2; exit 1; }
 [[ -f build/hybrid-mail.jar ]] || { echo 'Run ./build.sh first.' >&2; exit 1; }
 OPENSSL_ROOT="${HYBRID_OPENSSL_ROOT:-/opt/homebrew/opt/openssl@3}"
@@ -42,7 +42,7 @@ for binary in "$stage/native/bin/openssl" "$stage/native/lib/"*.dylib; do
 done
 jpackage --type app-image --name 'PQ Mail' --icon assets/pq-mail.icns --input "$stage" \
   --main-jar hybrid-mail.jar --main-class dev.hybridmail.MailApp \
-  --dest "$DEST" --app-version 1.2.0 --mac-package-identifier dev.hybridmail.desktop \
+  --dest "$DEST" --app-version 1.2.1 --mac-package-identifier dev.hybridmail.desktop \
   --add-modules java.desktop,java.naming,java.security.jgss,java.security.sasl,java.net.http,jdk.httpserver,jdk.crypto.ec,jdk.unsupported
 python3 scripts/register-certificate-bundle.py "$DEST/PQ Mail.app"
 if [[ -n "${PQ_MAIL_APPLE_TEAM:-}" ]]; then
@@ -61,3 +61,5 @@ else
 fi
 codesign --verify --deep --strict "$DEST/PQ Mail.app"
 echo "Ready: $DEST/PQ Mail.app"
+
+java scripts/CheckJava.java "$DEST/PQ Mail.app/Contents/runtime/Contents/Home" "$DEST/java-runtime.txt"

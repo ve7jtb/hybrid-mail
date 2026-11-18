@@ -4,7 +4,7 @@
 [Setup]
 AppId=HybridMail-{#TargetArch}
 AppName=PQ Mail
-AppVersion=1.2.0
+AppVersion=1.2.1
 AppPublisher=PQ Mail
 DefaultDirName={localappdata}\Programs\PQ Mail
 DefaultGroupName=PQ Mail
@@ -17,7 +17,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 #endif
 OutputDir=..\dist\windows
-OutputBaseFilename=PQ-Mail-1.2.0-Windows-{#TargetArch}-Setup
+OutputBaseFilename=PQ-Mail-1.2.1-Windows-{#TargetArch}-Setup
 Compression=lzma2
 SolidCompression=yes
 UninstallDisplayIcon={app}\PQ Mail.exe

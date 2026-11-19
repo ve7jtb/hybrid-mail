@@ -196,3 +196,5 @@ to publish a verified address. Unsupported key profiles (including v4 keys),
 missing UIDs, revoked/unsupported packet layouts, mismatched fingerprints,
 oversized replies, and invalid self-signatures are rejected. This lookup does
 not expand PQ Mail's existing OpenPGP interoperability profile.
+
+Compose defaults to OpenPGP for identities that support outgoing OpenPGP. It selects S/MIME when the recipient has a matching S/MIME certificate and no known OpenPGP certificate. A manual format choice persists until the recipient changes. The Pixel 10 UI test covers unknown, S/MIME-only and dual-format recipients, manual choice and recipient changes; no email or YubiKey operation is needed.

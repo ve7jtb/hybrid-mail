@@ -125,7 +125,7 @@ Select a saved **YubiKey identity**, then choose **Share certificates…** (Mac:
 
 The versioned `.pqcert` bundle contains public signing/encryption certificates and YubiKey serial/slot mappings. It contains **no private keys, PINs, passwords, OAuth credentials or trust decisions**. The Mac opens its native sharing picker, including AirDrop when available, and also offers **Save bundle…**. Android opens its system share sheet, including Quick Share when available. Transport availability depends on the OS/device; this feature does not implement AirDrop itself.
 
-On the receiving Mac, open the `.pqcert` file with PQ Mail or use **Import certificate bundle…**. On Android, share/open it with PQ Mail when offered, or select it with **Import certificate bundle…**. Review all fingerprints and device mappings, then choose:
+On the receiving Mac, open the `.pqcert` file with PQ Mail or use **Import certificate bundle from file…**. On Android, share/open it with PQ Mail when offered, or select it with **Import certificate bundle from file…**. Review all fingerprints and device mappings, then choose:
 
 - **Use with my YubiKey / My YubiKey**: save public-only identities for that device. Select the imported pure or hybrid identity afterward. The existing signing/decryption backend checks serial and public keys when the key is used; imported metadata alone does not prove possession.
 - **Add contact certificates / Contact certificates**: save certificates for another person's mailbox. Mark fingerprints trusted separately after confirming them with the owner.
@@ -138,7 +138,7 @@ Validation covers public-only bundle round trips, malformed/oversized input, con
 
 Select a Level 3 hybrid identity, then open **OpenPGP public identities** to create or import its public identity. Export its `.asc` file for another installation or correspondent; import recipient/signer public identities and review their fingerprints. In Compose, enable **OpenPGP** and optionally encryption. The existing SMTP send and local file workflows use the selected format. Incoming OpenPGP messages use the imported signer public identity for verification.
 
-Software keys stay in the password-protected `.p12`; YubiKey signing/decryption uses the same YubiKit PIV adapter. No OpenPGP applet or new token keys are required. OpenPGP is currently plain-text, one-recipient, Level 3 hybrid only; use S/MIME for attachments and other profiles. A valid signature does not establish correspondent trust. See [the shared OpenPGP guide](../docs/OPENPGP.md).
+Software keys stay in the password-protected `.p12`; YubiKey signing/decryption uses the same YubiKit PIV adapter. No OpenPGP applet or new token keys are required. OpenPGP is plain-text and one-recipient: Level 3 hybrid PQ or Level 5 classical P-384 (not PQ). Use S/MIME for attachments, pure-only and Level 2 identities. A valid signature does not establish correspondent trust. See [the shared OpenPGP guide](../docs/OPENPGP.md).
 
 The OpenPGP build passed eight Android emulator instrumentation tests, including the simulated PIV backend. The tester reported a successful Level 3 hybrid OpenPGP USB signature/decryption round trip; the manual flow did not save a hardware report. Physical OpenPGP NFC testing remains pending.
 
@@ -150,3 +150,49 @@ remain intact until migration. Public reads do not require a PIN; writes/migrati
 require management-key authentication. See [format and recovery](../docs/ON-KEY-CERTIFICATES.md).
 Hardware access on iOS still requires appropriate entitlements. Physical storage
 and migration tests are pending; installing this build changes no keys.
+
+### Forget a local YubiKey identity
+
+Under **Identities & certificates → Forget YubiKey identity…**, choose the profile by name and serial, then confirm **Forget**. This removes only that local profile, its certificates, slot mappings and saved OpenPGP identity. Other profiles, software `.p12` files and contact trust remain. No YubiKey connection or PIN is required; device keys and on-key bundles are unchanged. After reprovisioning a key, forget its stale pure/hybrid profiles before importing the new bundle.
+
+Level 5 hybrid identities now offer **classical P-384 OpenPGP (not post-quantum)** using the saved ECDSA/ECDH mappings (83/82 for new keys). Certificate issuance enables OpenPGP creation by default, with an opt-out. Use **Back up certificate bundle to YubiKey…** to include the saved public OpenPGP identity, and **Restore certificate bundle from YubiKey — no PIN** on another installation.
+
+## Back up and restore updated certificates
+
+Use **Back up certificate bundle to YubiKey…** to regenerate the selected email/SAN profile set and include its saved OpenPGP identity. Follow the review, PIN and management-key prompts. **Restore certificate bundle from YubiKey — no PIN** reads and reviews that bundle; **Import certificate bundle from file…** instead opens a `.pqcert` file. These actions do not grant correspondent trust. Certificate issuance offers backup with an opt-out. The 9a-to-83 migration button has been removed.
+
+Physical validation on November 18 restored the Level 3 bundle over NFC on Pixel 10, updated pure/hybrid mappings to 9c/83/9d/82, and passed both NFC S/MIME round trips. Hybrid decryption recovered after one pre-PIN F7/9c metadata-read transport error (305 ms). Classical P-384 OpenPGP hardware validation remains pending.
+
+## RFC 9980 YubiKey bundle restore and OpenPGP
+
+**Identities & certificates → Restore certificate bundle from YubiKey — no PIN**
+reads and verifies the signed bundle over NFC or USB, including Ed25519 in slot
+84 and X25519 in 85 for RFC 9980 Level 3 certificates. Review and import it, then
+select the Level 3 hybrid identity. The OpenPGP screen shows its profile and
+fingerprint. Existing experimental NIST/Brainpool P-384 certificates are preserved
+in local backup files when replaced; S/MIME remains on its existing four slots.
+
+Use **Test selected OpenPGP identity — no email** to test signing with 9c/84 and
+decryption with 9d/85. Enter the PIN with the key away, tap when prompted, and
+keep contact until “Signing complete — remove your key”. Remove/re-tap for
+decryption. A single PIN entry is reused within each composite operation and
+cleared when it ends. Each component still performs PIN verification as required
+by the slot policy. The test saves transport, fingerprint, slot and retry results.
+NFC setup retries remain limited to failures before PIN submission.
+
+The updated backend passed emulator tests using the real YubiKit PIV protocol
+against simulated NFC hardware, including RFC 9980 message round trips, wrong
+Ed25519 key rejection before PIN submission, bundle persistence, and missing
+X25519 rejection. Physical Android RFC 9980 NFC validation remains pending.
+
+## Public-key lookup
+
+In **OpenPGP public identities**, choose **Find OpenPGP key on keys.openpgp.org…**.
+Search by exact email or full fingerprint; review the returned profile and
+fingerprint, then choose encryption or signature verification. Queries are sent
+only after pressing Search, over HTTPS to the fixed keyserver. No keys are
+uploaded and no trust is added automatically. Email lookup requires the owner
+to publish a verified address. Unsupported key profiles (including v4 keys),
+missing UIDs, revoked/unsupported packet layouts, mismatched fingerprints,
+oversized replies, and invalid self-signatures are rejected. This lookup does
+not expand PQ Mail's existing OpenPGP interoperability profile.

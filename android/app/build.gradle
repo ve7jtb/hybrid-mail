@@ -15,6 +15,7 @@ android {
         targetCompatibility JavaVersion.VERSION_17
         coreLibraryDesugaringEnabled true
     }
+    sourceSets.androidTest.java.srcDir "$buildDir/generated/shared-tests"
     sourceSets.main.java.srcDir "$buildDir/generated/shared"
     packaging.resources {
         excludes += ['META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'META-INF/LICENSE*', 'META-INF/NOTICE*', 'META-INF/versions/**', 'META-INF/INDEX.LIST', 'META-INF/DEPENDENCIES', 'module-info.class']
@@ -28,6 +29,7 @@ tasks.register('prepareShared', Exec) {
     inputs.dir rootProject.file('../src/dev/hybridmail')
     inputs.dir rootProject.file('../lib')
     inputs.file rootProject.file('prepare.py')
+    outputs.dir "$buildDir/generated/shared-tests"
     outputs.dir "$buildDir/generated/shared"
     outputs.dir "$buildDir/android-libs"
 }

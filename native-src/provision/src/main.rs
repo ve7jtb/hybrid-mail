@@ -147,7 +147,7 @@ fn objects(card:&mut PivSession<PcscSmartCardConnection>)->Result<()> {
     return Ok(serde_json::Value::Null);
    }
    let tag=v["tag"].as_u64().ok_or("Missing object tag")? as u32;
-   if !(0x5f5000..=0x5f5020).contains(&tag)&&!(0x5f5100..=0x5f5120).contains(&tag){return Err("Object outside PQ Mail namespace".into());}
+   if !object_allowed(&op,tag){return Err("Object outside PQ Mail namespace".into());}
    if op=="get"{return match card.get_object_raw(tag){Ok(b)=>Ok(serde_json::json!(STANDARD.encode(b))),Err(PivError::Connection(e)) if e.sw()==Some(0x6a82)=>Ok(serde_json::Value::Null),Err(_)=>Err("PIV object read failed".into())};}
    if op=="put"{let data=STANDARD.decode(v["data"].as_str().ok_or("Missing object data")?).map_err(|_|"Invalid object bytes")?;if data.len()>2068{return Err("Object too large".into());}card.put_object_raw(tag,Some(&data)).map_err(|_|"PIV object write failed (possibly insufficient storage). Previous bank retained; do not retry blindly")?;return Ok(serde_json::Value::Null);}
    Err("Invalid card operation".into())
@@ -167,4 +167,15 @@ fn main(){if let Err(error)=main_inner(){eprintln!("{error}");std::process::exit
  #[test]fn profiles_and_no_rerun(){for profile in ["pure","hybrid","level2","level3","level5"]{let mut f=Fake{occupied:HashSet::new(),generated:vec![],algorithms:vec![],fail:false};generate(&mut f,profile,|_,_|Ok(())).unwrap();assert_eq!(f.generated,vec![0x9c,0x9d,0x83,0x82]);
  let expected=match profile{"level2"=>vec![KeyType::MlDsa44,KeyType::MlKem768,KeyType::EccP256,KeyType::EccP256],"level3"=>vec![KeyType::MlDsa65,KeyType::MlKem768,KeyType::EccP384,KeyType::EccP384],_=>vec![KeyType::MlDsa87,KeyType::MlKem1024,KeyType::EccP384,KeyType::EccP384]};assert_eq!(f.algorithms,expected);assert!(generate(&mut f,profile,|_,_|Ok(())).is_err());}}
  #[test]fn partial_failure_never_retries(){let mut f=Fake{occupied:HashSet::new(),generated:vec![],algorithms:vec![],fail:false};assert!(generate(&mut f,"level5",|_,_|Err("disk failure".into())).is_err());assert_eq!(f.generated.len(),1);assert!(generate(&mut f,"level5",|_,_|Ok(())).is_err());assert_eq!(f.generated.len(),1);}
+}
+
+// Public certificate snapshots are read-only; PUT remains restricted to bundle banks.
+fn object_allowed(op:&str,tag:u32)->bool {
+ (0x5f5000..=0x5f5020).contains(&tag)||(0x5f5100..=0x5f5120).contains(&tag)||
+ (op=="get"&&([0x5fc105,0x5fc10a,0x5fc10b,0x5fc101].contains(&tag)||(0x5fc10d..=0x5fc120).contains(&tag)))
+}
+#[test]
+fn certificate_snapshots_are_read_only(){
+ for tag in [0x5fc105,0x5fc10a,0x5fc10b,0x5fc101,0x5fc10d,0x5fc110,0x5fc120]{assert!(object_allowed("get",tag));assert!(!object_allowed("put",tag));}
+ assert!(!object_allowed("get",0x5fc109));assert!(object_allowed("put",0x5f5000));
 }

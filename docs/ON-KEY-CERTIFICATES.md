@@ -14,20 +14,24 @@ Android/iOS do not gain key generation from this feature. They import/use existi
 keys. Android certificate issuance detects `83`, falling back to an existing
 `9a` only when `83` has no key. Slot `81` is the PUK reference, not a key slot.
 
-## Save and import
+## Back up, restore, or import from file
 
-Desktop: **Keys → Save certificates on YubiKey… / Import certificates from
-YubiKey… / Migrate signing key 9a → 83…**.
-Android: the same actions are under **Identities & certificates**.
-iOS: **YubiKey credentials**. Hardware actions require a build with the relevant
-NFC or smart-card entitlements; the software-only iOS preview cannot use them.
+Desktop **Keys** and Android **Identities & certificates** offer:
+
+- **Back up certificate bundle to YubiKey…**: rebuild and sign the current public bundle, write it to custom PIV data objects, and verify read-back.
+- **Restore certificate bundle from YubiKey…** (Android adds **— no PIN**): read, validate, review and restore local identities and slot mappings.
+- **Import certificate bundle from file…**: choose an existing `.pqcert` file; this is separate from reading a key.
+- **Forget YubiKey identity…**: remove one local identity, its certificate files, slot mappings and saved OpenPGP identity. No token connection is made. Other profiles, software `.p12` files and contact trust remain; on-key data is not erased.
+
+iOS has backup/restore controls under **YubiKey credentials**, requiring the appropriate NFC or smart-card entitlements. The migration action has been removed from all interfaces. Saved mappings and recovery checks remain supported.
+
+After desktop credential creation or email/SAN updates, a **Back up now / Not now** prompt lets the user back up the new certificates or defer. Android certificate issuance offers the same backup choice. The review identifies the certificates, serial, slot mappings and saved OpenPGP content. Backup is a separate authenticated operation; choosing Not now leaves the previous on-key bundle unchanged.
 
 Select a saved YubiKey identity before saving. The bundle includes both pure and
 hybrid signing/encryption X.509 certificates, serial and role-to-slot mappings,
 and any existing supported OpenPGP public identity. OpenPGP packets are preserved,
 including timestamps, self-signatures and subkey bindings; fingerprints do not
-change. Create/import the OpenPGP identity first if it should be portable. Current
-OpenPGP support is the Level 3 hybrid draft profile. SAN email addresses remain in
+change. Create/import the OpenPGP identity first if it should be portable. Desktop/Android support the Level 3 hybrid draft and Level 5 classical P-384 OpenPGP profiles. iOS supports Level 3 only and rejects Level 5 bundles containing classical OpenPGP. SAN email addresses remain in
 the certificates. Current demo certificates are self-signed; arbitrary CA chains
 and mail-server preferences are not included.
 
@@ -45,21 +49,12 @@ incoming senders. No PIN, PUK, management key, private key, password, OAuth refr
 token, executable adapter path or imported trust decision is in the bundle.
 Anyone with access to the key can read the public certificates and email addresses.
 
-## Migration and recovery
+## Completed migration and legacy recovery
 
-Migration moves the existing ECDSA key internally from `9a` to **empty `83`**;
-both a key and a certificate in the destination cause refusal. It requires
-management-key authentication, verifies the destination public key and PIN/touch
-policies, copies any standard slot certificate and removes its old copy only
-after verification. It does not generate, export or replace a private key.
-A public local backup is saved before attempting the move. PQ Mail updates its
-local mappings; **save the on-key bundle again afterward** to persist the new map.
-No hardware migration is performed merely by installing the update.
+The test keys have completed the 9a-to-83 migration, so there is no longer a migration button. The earlier guarded migration moved the existing ECDSA key internally, preserving its public key and PIN/touch policies; it required an empty destination and management authentication. No migration happens when installing an update or restoring a normal bundle.
 
 A transport failure after MOVE has an uncertain outcome. Do not provision or
-replace keys to recover. The migration action can recover local mappings if `9a`
-is absent and all expected public keys match the map using `83`, without sending
-another MOVE. Likewise, on-key import can review/recover an old signed `9a` map
+replace keys to recover. The retained recovery code recognizes matching public keys in `83` when `9a` is absent. On-key restore can review/recover an old signed `9a` map
 when that exact key is now in `83`; the review explicitly identifies this change.
 If certificate copying failed after the move, a standard slot certificate may
 still need administrator repair. Existing S/MIME certificates and OpenPGP public
@@ -103,5 +98,6 @@ objects on the key. Actual certificate sizes and free capacity vary.
 Tests cover all three profiles, Java/Swift signed-bundle interoperability,
 OpenPGP preservation, tampering, namespace collisions, wrong keys/serials,
 interruption at every chunk/commit write, and occupied-destination refusal.
-Physical Beta0 writes/migration and NFC capacity/latency still require a user-run
-hardware test. Do not describe software/emulator results as hardware validation.
+On November 18, 2026, a physical Beta0 key passed macOS backup/read-back of a 24,434-byte Level 3 bundle, clean-state import/restart/duplicate import, and a guarded 9a-to-83 move. Public-key metadata and certificates were compared before/after: only the requested key location changed. Pixel 10 restored the refreshed bundle over NFC, updating both saved profiles to 9c/83/9d/82, then passed pure and hybrid NFC S/MIME signing/decryption. One pre-PIN metadata-read retry during hybrid decryption recovered. This does not establish that Pixel 10 NFC reliability issues are resolved.
+
+That physical bundle had no saved OpenPGP identity. Classical P-384 OpenPGP bundle preservation is software/emulator-tested; physical transfer and iOS storage testing remain pending. Java/Swift interoperability results cover the earlier shared formats, not the new Level 5 classical OpenPGP payload.

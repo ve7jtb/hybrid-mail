@@ -23,7 +23,7 @@ public final class OnKeyStorage {
     private static Saved latest(OnKeyBundle.Card card)throws Exception{Saved a=recoverableRead(card,0),b=recoverableRead(card,1);return a==null?b:b==null?a:a.generation>=b.generation?a:b;}
     public static OnKeyBundle.Bundle load(OnKeyBundle.Card card)throws Exception{var found=latest(card);OnKeyBundle.require(found!=null,"No complete PQ Mail bundle found on this YubiKey");var bundle=OnKeyBundle.decode(found.bytes);return OnKeyBundle.checkOrRecover(card,bundle);}
     public static void save(OnKeyBundle.Card card,byte[] bytes,char[] management)throws Exception{
-        var bundle=OnKeyBundle.decode(bytes);OnKeyBundle.check(card,bundle.entries());Saved previous=latest(card);int bank=previous==null?0:1-previous.bank;long generation=previous==null?1:Math.addExact(previous.generation,1);
+        var bundle=OnKeyBundle.decode(bytes);OnKeyBundle.check(card,bundle.entries());OnKeyBundle.checkPgp(card,bundle.profiles());Saved previous=latest(card);int bank=previous==null?0:1-previous.bank;long generation=previous==null?1:Math.addExact(previous.generation,1);
         // Refuse namespace collisions, including unused tail objects. Never delete another app's data.
         for(int i=0;i<=COUNT;i++){byte[] existing=card.get(BANK[bank]+i);if(existing!=null){var in=new DataInputStream(new ByteArrayInputStream(existing));OnKeyBundle.magic(in,i==0?"PQMIDX01":"PQMCHK01");}}
         card.authenticate(management);

@@ -22,6 +22,16 @@ public final class CertificateBundleAndroidTest {
    try(var in=base.getContentResolver().openInputStream(uri)){assertArrayEquals(bytes,in.readAllBytes());}
    try(var out=base.getContentResolver().openOutputStream(uri)){fail("Write access granted");}catch(java.io.FileNotFoundException expected){}
    try(var in=base.getContentResolver().openInputStream(Uri.parse("content://"+base.getPackageName()+".certificates/settings.properties"))){fail("Other files exposed");}catch(java.io.FileNotFoundException expected){}
+   var forgotten=store.entries().get(1);var kept=store.entries().get(0);
+   OpenPgp.saveOwn(root,profiles.get(1),OpenPgp.create(profiles.get(1),null).encoded);
+   Path pgp=OpenPgp.ownPath(root,profiles.get(1));assertTrue(Files.exists(pgp));
+   store.forgetYubiKeyIdentity(forgotten.id());
+   var restored=new AndroidStore(context);assertEquals(1,restored.entries().size());assertEquals(kept.id(),restored.entries().get(0).id());
+   assertFalse(Files.exists(root.resolve(forgotten.sign())));assertFalse(Files.exists(root.resolve(forgotten.encrypt())));assertFalse(Files.exists(pgp));
+   assertFalse(context.getSharedPreferences("slots",0).contains(forgotten.id()));assertTrue(Files.exists(root.resolve(kept.sign())));assertEquals(2,restored.encryptionContacts().size());
+   Files.write(root.resolve("protected.p12"),new byte[]{1,2,3});store.add(new AndroidStore.Entry("software","software","protected.p12",0,"",""));
+   try{store.forgetYubiKeyIdentity("software");fail("software forgotten");}catch(java.io.IOException expected){}
+   assertTrue(Files.exists(root.resolve("protected.p12")));
   }finally{try(var paths=Files.walk(root)){for(var path:paths.sorted(Comparator.reverseOrder()).toList())Files.delete(path);}}
  }
 }

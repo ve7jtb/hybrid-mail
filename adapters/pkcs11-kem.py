@@ -24,7 +24,7 @@ def object_id(slot):
 def read_request(stream):
     lines=[stream.readline(8193) for _ in range(3)]
     if any(len(line)>8192 or not line.endswith(b'\n') for line in lines):raise AdapterError('Malformed KEM request')
-    if lines[0] not in (b'ML-KEM-768\n',b'ML-KEM-1024\n',b'ECDH-P256\n',b'ECDH-P384\n'):raise AdapterError('Unsupported private operation')
+    if lines[0] not in (b'ML-KEM-768\n',b'ML-KEM-1024\n',b'ECDH-P256\n',b'ECDH-P384\n',b'X25519\n'):raise AdapterError('Unsupported private operation')
     try:public,data=[base64.b64decode(line.strip(),validate=True) for line in lines[1:]]
     except ValueError as error:raise AdapterError('Invalid request encoding') from error
     algorithm=lines[0].decode().strip()
@@ -32,6 +32,8 @@ def read_request(stream):
         if not 1190<=len(public)<=1250 or len(data)!=1088:raise AdapterError('Expected ML-KEM-768 key and 1088-byte ciphertext')
     elif algorithm=='ML-KEM-1024':
         if not 1570<=len(public)<=1620 or len(data)!=1568:raise AdapterError('Expected ML-KEM-1024 and 1568-byte ciphertext')
+    elif algorithm=='X25519':
+        if len(public)!=44 or len(data)!=44:raise AdapterError('Expected X25519 SPKIs')
     elif not 80<=len(public)<=150 or not 80<=len(data)<=150:raise AdapterError('Expected P-256 recipient and peer SPKIs')
     return algorithm,public,data
 
@@ -46,7 +48,7 @@ def export_public(executable,provider,module,serial,slot,algorithm,run=subproces
                    stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,env=_common.child_environment(config),timeout=30)
         if result.returncode or not public.exists():raise AdapterError('Cannot export encryption slot public key'+_common.safe_openssl_error(result))
         size=public.stat().st_size
-        if not (1190<=size<=1250 if algorithm=='ML-KEM-768' else 1570<=size<=1620 if algorithm=='ML-KEM-1024' else 80<=size<=150):raise AdapterError('Unexpected encryption public key type')
+        if not (1190<=size<=1250 if algorithm=='ML-KEM-768' else 1570<=size<=1620 if algorithm=='ML-KEM-1024' else size==44 if algorithm=='X25519' else 80<=size<=150):raise AdapterError('Unexpected encryption public key type')
         return public.read_bytes()
 
 
@@ -56,7 +58,7 @@ def check_config(executable,serial):
 
 def recover(algorithm,public,data,executable,provider,module,serial,slot,pin,run=subprocess.run):
     check_config(executable,serial)
-    if algorithm not in ('ML-KEM-768','ML-KEM-1024','ECDH-P256','ECDH-P384'):raise AdapterError('Unsupported private operation')
+    if algorithm not in ('ML-KEM-768','ML-KEM-1024','ECDH-P256','ECDH-P384','X25519'):raise AdapterError('Unsupported private operation')
     if not 6<=len(pin)<=8 or any(c<32 or c>126 for c in pin):raise AdapterError('Invalid PIN input format')
     try:
         actual=export_public(executable,provider,module,serial,slot,algorithm,run)
@@ -100,6 +102,7 @@ def main():
         if not pin.endswith(b'\n'):raise AdapterError('Missing app PIN input')
         del pin[-1:]
         slot=os.environ.get('PKCS11_KEM_SLOT' if algorithm.startswith('ML-KEM-') else 'PKCS11_ECDH_SLOT','')
+        if algorithm=='X25519':slot='85'
         secret=recover(algorithm,public,data,*values,slot,pin)
         sys.stdout.buffer.write(secret);sys.stdout.buffer.flush();return 0
     except (AdapterError,OSError,subprocess.SubprocessError) as error:

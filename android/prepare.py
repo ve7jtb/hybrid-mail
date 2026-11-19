@@ -8,7 +8,7 @@ root = Path(__file__).resolve().parent
 src = root.parent / 'src/dev/hybridmail'
 out = root / 'app/build/generated/shared/dev/hybridmail'
 out.mkdir(parents=True, exist_ok=True)
-for name in ['OnKeyBundle','OnKeyStorage','CertificateBundle','Identity','TokenProfile','MailEngine','ImapInbox','MailInbox','ExternalMu','ExternalKem','OpenPgp']:
+for name in ['OnKeyBundle','OnKeyStorage','CertificateBundle','Identity','TokenProfile','MailEngine','ImapInbox','MailInbox','ExternalMu','ExternalKem','OpenPgp','VerifiedMime','LegacyOpenPgp','OpenPgpRecipients','CryptoWarnings']:
     s=(src/(name+'.java')).read_text()
     if name=='ExternalMu':
         marker='    /** Executable protocol:'
@@ -34,3 +34,9 @@ for p in jars:
             n=item.filename
             if n.startswith('META-INF/versions/') or n.endswith('module-info.class') or n.upper().endswith(('.SF','.RSA','.DSA')):continue
             dest.writestr(item,source.read(n))
+
+# Run the canonical legacy certificate policy tests on Android too.
+test_out=root/'app/build/generated/shared-tests/dev/hybridmail'
+test_out.mkdir(parents=True,exist_ok=True)
+for name in ['LegacyOpenPgpTest','LegacyOpenPgpPolicyTest']:
+    (test_out/(name+'.java')).write_text((src/(name+'.java')).read_text())

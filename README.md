@@ -10,16 +10,16 @@ PQ Mail is an experimental post-quantum mail application supporting **S/MIME and
 
 ## On-key certificates and migration
 
-Use **Keys → Save certificates on YubiKey…** to carry the pure/hybrid S/MIME
+Use **Keys → Back up certificate bundle to YubiKey…** to carry the pure/hybrid S/MIME
 certificates, existing OpenPGP public identity and serial/slot mappings with the
-key. **Import certificates from YubiKey…** verifies the bundle and actual public
+key. **Restore certificate bundle from YubiKey…** verifies the bundle and actual public
 keys, then asks for review; it does not grant trust. Android and iOS expose the
-same save/import/migration actions in their identity screens.
+same backup/restore actions in their identity screens.
 
 New provisioning uses ECDSA slot **83**, leaving 9a available for authentication.
-Existing 9a credentials keep working. The explicit **Migrate signing key 9a → 83…**
-action requires an empty destination and management authorization; no migration
-happens on update. Save the on-key bundle again after migration. Public storage
+The migration action has been removed from the interfaces now that the test keys
+have been migrated. Saved slot mappings and bundle recovery remain supported.
+Public storage
 contains no PINs, private keys, passwords or Google OAuth refresh tokens.
 
 See [on-key format, workflows and recovery](docs/ON-KEY-CERTIFICATES.md).
@@ -38,6 +38,8 @@ transport issue is resolved. No saved OpenPGP identity was present in this bundl
 so this hardware run did not validate OpenPGP bundle transfer. Physical iOS bundle
 testing remains pending.
 
+Use **Keys → Forget YubiKey identity…** to remove one local YubiKey profile, its certificates, slot mappings and saved OpenPGP identity. Other profiles and contact trust remain unchanged. This does not connect to or erase the YubiKey; on-key bundles remain available for reimport.
+
 ## Android preview
 
 An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB and NFC**, with the same three software `.p12`, pure PQ, and hybrid profiles. It includes local S/MIME, IMAPS/SMTP, and public-only YubiKey identities. See the Android guide for build instructions, hardware testing, and preview limitations; Google OAuth and token provisioning remain desktop features.
@@ -46,11 +48,51 @@ An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB a
 
 The [native SwiftUI iOS preview](ios/README.md) uses **OpenSSL 3.6.5** for Level 2/3/5 pure and hybrid S/MIME, persistent password-protected `.p12` identities, and public YubiKey credential bundles. **OpenPGP is an alternative for Level 3 hybrid identities**, using draft-05 ML-DSA-65 + P-384 / ML-KEM-768 + P-384 profiles, separate OpenPGP public identities and PGP/MIME. Both formats share software primitives and the YubiKit NFC/USB-C raw PIV backend. Tests cover published OpenPGP vectors, simulator round trips, simulated hardware operations, and desktop S/MIME/PKCS#12 interoperability. **Physical iPhone YubiKey testing remains pending.** This local-file preview has no mail accounts/sending or attachments yet; see the iOS README for supported formats and limitations.
 
-## OpenPGP on every platform
+## OpenPGP profiles
 
-Select **OpenPGP (Level 3 hybrid draft)** when composing with a Level 3 hybrid identity. It reuses the software `.p12` keys or existing YubiKey PIV keys for **ML-DSA-65 + ECDSA P-384 signing** and **ML-KEM-768 + ECDH P-384 encryption**. OpenPGP public identities are separate from S/MIME certificates: create/import your own public identity and exchange `.asc` public keys with correspondents. Import the same public identity on another device to preserve its fingerprint.
+Select **OpenPGP** in Compose with a supported hybrid identity:
 
-This implements the experimental draft-05 OpenPGP profiles, not the S/MIME composite encoding. Pure PQ, Level 2 and the existing Level 5 P-384 profiles are not available in OpenPGP. Plain-text signed or signed-and-encrypted PGP/MIME is supported; attachments remain S/MIME-only. See the [OpenPGP guide](docs/OPENPGP.md) for setup, limitations and tests.
+| Selected identity | OpenPGP signing / encryption | Platforms |
+|---|---|---|
+| Level 3 hybrid | ML-DSA-65 + P-384 / ML-KEM-768 + P-384 (experimental draft-05) | Desktop, Android, iOS |
+| Level 3 + extra YubiKey keys | ML-DSA-65 + Ed25519 / ML-KEM-768 + X25519 (RFC 9980) | Desktop and Android |
+| Existing Level 5 classical OpenPGP | Receive/verify/decrypt only; outgoing signing disabled | Desktop and Android |
+| Imported v4 classical certificate | Verify incoming signatures; encrypt to a valid recipient subkey | Desktop and Android |
+
+Existing Level 5 OpenPGP reuses the classical keys in slots **83/82** for new YubiKey identities; its pure/hybrid S/MIME profiles remain unchanged. Pure-only and Level 2 identities do not support OpenPGP. Public OpenPGP identities have separate fingerprints from X.509 certificates. Create/import the same `.asc` identity on other installations, or restore it through a supported on-key bundle, to preserve those fingerprints.
+
+Outgoing OpenPGP signing is restricted to the supported hybrid PQ profiles. In desktop **Compose**, selecting OpenPGP looks up the complete **To** email address on **keys.openpgp.org** after a short typing delay. Android Compose provides the same lookup and recipient-key selection. Imported keys remain usable without a keyserver lookup. Encryption is enabled only for a matching, usable recipient certificate; its encryption choices come from that certificate, not the sender’s S/MIME profile. Changing To clears the selected recipient and turns encryption off. Lookup results never confer trust; review the fingerprint.
+
+V4 compatibility verifies RSA (2048+), ECDSA and legacy Ed25519 signatures with SHA-2, validates self-certifications and signing-subkey cross-certifications, and rejects revoked/expired keys and unsupported critical metadata. Encryption uses a current bound RSA/ECDH subkey, AES and integrity-protected v1 SEIPD with v3 PKESK. The outgoing signature inside remains hybrid PQ; the recipient needs hybrid-signature support to verify it. V4 encryption itself is **not post-quantum**. SHA-1 is used only for the mandated v4 fingerprint/MDC formats, not accepted for document or certification signatures.
+
+Signed and optionally encrypted PGP/MIME is supported. The desktop reader handles authenticated HTML and multipart bodies as text. Outgoing OpenPGP remains plain-text; file attachment sending and saving remain S/MIME-only. New supported YubiKey credentials default to creating an OpenPGP identity, with an opt-out. See the [OpenPGP guide](docs/OPENPGP.md) for setup, profile distinctions and validation limits.
+
+
+### Proton Mail PGP/MIME interoperability — November 18, 2026
+
+The desktop reader successfully displayed and verified a real message sent from
+Proton Mail using a **classical OpenPGP v4 signature**. Multipart/HTML content is
+shown as text, without fetching remote images or executing HTML. The message was
+**not encrypted**; the classical, non-post-quantum warning remained visible.
+
+A second test used the installed desktop reader with **empty temporary contacts,
+no selected signer and no local identity**. It discovered Proton's attached public
+certificate, verified the signature and displayed the message as **NOT TRUSTED**.
+Both the in-memory and reloaded contact stores remained empty, and no trust was
+granted. Existing user contacts were unchanged; message MIME stayed in memory.
+
+Attached certificates are verification candidates, not proof of sender identity.
+**Save sender OpenPGP certificate…** explicitly saves a contact without granting
+trust. **Trust signer fingerprint…** is a separate review that scopes trust to
+selected certified email addresses and the full primary-key fingerprint. Invalid
+certificate bindings and altered signatures are rejected. Certificates contained
+inside encrypted payloads still require an available sender key before opening.
+
+**Hybrid interoperability did not pass:** Proton Mail web version **5.0.142.3**
+rejected our RFC 9980 v6 contact certificate with “Version 6 keys are currently not
+supported.” Consequently, Proton verification of our hybrid signatures and Proton
+encryption to our hybrid KEM remain untested. The successful inbound v4 test does
+not establish v6 or post-quantum interoperability.
 
 ## Platform capabilities
 
@@ -58,6 +100,8 @@ This implements the experimental draft-05 OpenPGP profiles, not the S/MIME compo
 |---|---|---|---|
 | Software `.p12`, Level 2/3/5 pure/hybrid S/MIME | Yes | Yes | Yes |
 | Level 3 hybrid OpenPGP | Yes | Yes | Yes |
+| Level 5 classical P-384 OpenPGP | Yes | Yes | Not yet |
+| Forget a local YubiKey identity | Yes | Yes | Not yet |
 | YubiKey private-key backend | Bundled PKCS#11 | YubiKit USB/NFC | YubiKit raw PIV NFC/USB-C; physical testing pending |
 | Generate four keys on an empty YubiKey | Yes | Use existing keys | Use existing keys |
 | Local signed/encrypted `.eml` files | Yes | Yes | Yes |
@@ -67,7 +111,7 @@ This implements the experimental draft-05 OpenPGP profiles, not the S/MIME compo
 | Gmail API / Google OAuth | Yes | Not yet | Not yet |
 | Persistent certificate trust | Yes | Yes | Verification only; no automatic trust |
 
-OpenPGP validation covers desktop regression tests, eight Android emulator tests (including the simulated PIV adapter), 19 Swift tests, published draft vectors, and bidirectional Java/OpenSSL message exchange. A Level 3 hybrid OpenPGP USB round trip was reported successful by the tester; unlike the saved S/MIME tests, that manual flow did not persist a hardware report. Physical OpenPGP NFC and Windows runtime testing remain pending. Existing S/MIME hardware test results do not constitute OpenPGP hardware validation.
+Level 3 OpenPGP validation includes published draft vectors, desktop/Android adapter tests, Swift tests and bidirectional Java/OpenSSL message exchange. Level 5 classical validation includes software/simulated-token round trips, Android instrumentation, and independent Bouncy Castle signature verification and bidirectional ECDH/v2-SEIPD exchange. A Level 3 hybrid OpenPGP USB round trip was reported successful by the tester; unlike the saved S/MIME tests, that manual flow did not persist a hardware report. Physical OpenPGP NFC and Windows runtime testing remain pending. Existing S/MIME hardware test results do not constitute OpenPGP hardware validation.
 
 ## Desktop features
 
@@ -218,7 +262,7 @@ Select a saved **YubiKey identity**, then choose **Share certificates…** (Mac:
 
 The versioned `.pqcert` bundle contains public signing/encryption certificates and YubiKey serial/slot mappings. It contains **no private keys, PINs, passwords, OAuth credentials or trust decisions**. The Mac opens its native sharing picker, including AirDrop when available, and also offers **Save bundle…**. Android opens its system share sheet, including Quick Share when available. Transport availability depends on the OS/device; this feature does not implement AirDrop itself.
 
-On the receiving Mac, open the `.pqcert` file with PQ Mail or use **Import certificate bundle…**. On Android, share/open it with PQ Mail when offered, or select it with **Import certificate bundle…**. Review all fingerprints and device mappings, then choose:
+On the receiving Mac, open the `.pqcert` file with PQ Mail or use **Import certificate bundle from file…**. On Android, share/open it with PQ Mail when offered, or select it with **Import certificate bundle from file…**. Review all fingerprints and device mappings, then choose:
 
 - **Use with my YubiKey / My YubiKey**: save public-only identities for that device. Select the imported pure or hybrid identity afterward. The existing signing/decryption backend checks serial and public keys when the key is used; imported metadata alone does not prove possession.
 - **Add contact certificates / Contact certificates**: save certificates for another person's mailbox. Mark fingerprints trusted separately after confirming them with the owner.
@@ -269,3 +313,46 @@ The Linux workflow builds natively on amd64 and ARM64, tests software S/MIME/Ope
 Linux 1.2.1 validation (November 18, 2026): native Ubuntu 24.04 amd64 and ARM64 [build/profile/Secret Service tests](https://github.com/ve7jtb/pq-mail/actions/runs/44366025968) passed. Both `.deb` packages passed checksum verification, installation and desktop-window startup in [clean-runner installation tests](https://github.com/ve7jtb/pq-mail/actions/runs/44368695400). Download the `.deb` and portable archive from the build run’s `PQ-Mail-Linux-amd64` or `PQ-Mail-Linux-arm64` artifacts. These checks use synthetic software identities and simulated token operations; they do not establish physical Linux YubiKey compatibility.
 
 The ARM64 Debian package was also installed in the local **Codex Linux** UTM VM (Ubuntu 26.04.1 ARM64). Level 2/3/5 pure/hybrid software identity round trips passed in the installed bundled JVM, and the installed desktop window opened under Xvfb as the normal non-root user. No accounts, email or physical YubiKey were used.
+
+New Level 3 YubiKey provisioning offers **Also create OpenPGP public identity**, selected by default; uncheck it to opt out. The choice is saved for pending-certificate recovery. The public identity uses the existing Level 3 hybrid keys and is included when saving an on-key bundle. Level 5 offers classical P-384 OpenPGP, selected by default with an opt-out; Level 2 is unsupported. Existing credentials can use the OpenPGP creation action without generating new keys.
+
+### Existing Level 5 classical OpenPGP and certificate backups
+
+**Current outgoing policy:** these classical certificates remain readable and can be restored for incoming verification/decryption, but Compose requires a hybrid post-quantum signer. The earlier classical round-trip results below describe compatibility testing, not an enabled outgoing signing option.
+
+Desktop and Android can use a Level 5 **hybrid identity's P-384 components** for RFC 9580 v6 OpenPGP: ECDSA in slot **83**, ECDH in **82** (explicit legacy mappings remain supported). This OpenPGP profile is **classical, not post-quantum**; Level 5 pure/hybrid S/MIME remains unchanged. Both P-384 slots use their existing PIN/touch policies. Level 5 pure-only certificates do not contain the classical public keys; select the hybrid identity for OpenPGP.
+
+New desktop YubiKey provisioning offers OpenPGP creation by default for Level 3 (hybrid PQ) and Level 5 (classical P-384), with an opt-out. Android offers the same choice when issuing certificates for existing keys. Creation and desktop email/SAN updates prompt **Back up now / Not now**. **Back up certificate bundle to YubiKey…** regenerates a signed bundle from the selected email/SAN profile set, including both S/MIME profiles, any saved OpenPGP public identity, serial and slot mappings. **Restore certificate bundle from YubiKey…** reviews and restores it without granting trust. This backs up public certificates, not private keys, PINs or account credentials. Adding SANs preserves a saved OpenPGP identity when its primary email remains unchanged; changing that email creates new OpenPGP certifications if enabled.
+
+Software and simulated-token P-384 round trips, independent Bouncy Castle OpenPGP signature checks and bidirectional ECDH/v2-SEIPD exchange are tested. Physical P-384 OpenPGP token testing remains pending. iOS currently supports the earlier Level 3 hybrid OpenPGP profile only and cannot restore a Level 5 bundle containing this new classical OpenPGP identity yet.
+
+### RFC 9980 OpenPGP with additional YubiKey keys
+
+Desktop Level 3 YubiKey identities can create an RFC 9980 OpenPGP certificate
+using ML-DSA-65 + Ed25519 and ML-KEM-768 + X25519, with additional keys in slots
+84/85. Creation offers **Back up certificate bundle to YubiKey**, preserving the
+S/MIME certificates and their existing slots. The alternative P-384 composite
+OpenPGP profile is **experimental NIST/Brainpool draft** support.
+See [OpenPGP setup, backup and platform limitations](docs/OPENPGP.md#rfc-9980-certificates-with-extra-yubikey-keys).
+
+### OpenPGP v4 interoperability validation
+
+The v4 adapter uses `bcpg` built from the same pinned Bouncy Castle revision as the other jars. Tests cover Ed25519, RSA and ECDSA signatures, key/subkey revocation and expiration, unsupported critical metadata, tampering and wrong keys. `scripts/test-v4-openpgp.sh` generates disposable GnuPG keys, verifies detached and compressed v4 signatures in PQ Mail, then independently decrypts PQ Mail’s v4 envelope in GnuPG and compares the hybrid-signed contents. No email or hardware keys are used. The published `dkg@fifthhorseman.net` certificate was also checked locally; its current encryption subkey was selected instead of its expired predecessor.
+
+The new v4 adapter and Compose lookup are shared by the Java desktop/Android implementation; they have not been ported to the separate Swift/OpenSSL iOS implementation.
+
+Classical-only encryption requires an **Encrypt anyway** confirmation, and valid classical-only signatures carry a **not post-quantum resistant** warning. These warnings also apply to conventional S/MIME. A hybrid signature containing ML-DSA or a hybrid KEM containing ML-KEM does **not** get the corresponding warning. Signing and encryption are assessed independently; a hybrid signature does not upgrade classical ciphertext protection. Trust and post-quantum algorithm status are separate.
+
+### Saved OpenPGP contacts and trust (desktop)
+
+Imported sender/recipient keys and successful Compose keyserver lookups are saved as **untrusted OpenPGP contacts** in Certificates. They survive app restarts and can be used offline. Choose **Details**, **Use selected certificate**, **Export**, or **Remove** just as for S/MIME contacts. Earlier session-only imports must be imported or looked up once again. Your own identity certificates remain in their existing identity storage.
+
+**Mark trusted** requires explicit confirmation of the contact email and **entire primary-key fingerprint**, checked independently with its owner. Trust is scoped to that email/fingerprint pair, including valid bound subkeys; it does not transfer to another email or replacement primary key. A refreshed valid certificate with the same primary fingerprint retains that pair’s trust. **Remove trust** persists across restarts. Removing the contact also removes its trust and retains its public certificate in `removed-contacts`. Trust does not bypass certificate validation or suppress classical-only algorithm warnings.
+
+Read & verify reports the saved trust decision for the actual From mailbox only after signature validation and a matching certified email. Saved contacts can supply incoming verification keys after restart; if an encrypted message has multiple matching signer certificates, select one explicitly before decrypting to avoid repeated token operations.
+
+**Choosing trusted OpenPGP email addresses:** In Certificates, select an OpenPGP contact and choose **Mark trusted…**. The dialog lists every currently validated, self-certified email address, shows the full primary-key fingerprint, and provides **Select all email addresses**. Existing trust choices and the selected contact are checked initially. **Save trust choices** trusts checked addresses and removes trust from unchecked addresses for this primary key; selected aliases are added to Certificates. **Cancel** saves nothing. This covers valid signing and encryption subkeys bound to that primary key, while retaining expiry, revocation, usage checks and classical-algorithm warnings.
+
+### Manual mail servers and sent confirmation
+
+Use **Mail servers…** in Compose or Inbox to save IMAP/SMTP hostnames, ports and usernames without starting a connection or sending mail. IMAP uses TLS (normally 993); SMTP requires STARTTLS (normally 587). Passwords/app passwords are requested in **Inbox → Connect IMAP…** and **Send… → Other host (SMTP)** and are not saved. Gmail API remains separate and uses Google sign-in. After Gmail or the SMTP server accepts a message, PQ Mail displays a **Message sent** confirmation with recipient, subject and sending service. This confirms submission, not delivery or reading; failed sends do not display it.

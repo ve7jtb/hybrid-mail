@@ -17,6 +17,7 @@ public final class ExternalMu {
         byte[] sign(PublicKey publicKey, byte[] mu) throws Exception;
         default Backend newOperation() { return this; }
         default void clearSecrets() {}
+        default byte[] signEd25519(PublicKey key,byte[] digest)throws Exception{throw new GeneralSecurityException("This backend does not support Ed25519");}
         default byte[] signRsa(PublicKey publicKey, byte[] digest) throws Exception {
             throw new GeneralSecurityException("This adapter does not support token RSA-PSS");
         }
@@ -176,6 +177,7 @@ public final class ExternalMu {
         }
         public byte[] sign(PublicKey pub,byte[] mu)throws Exception{return call(pub.getAlgorithm(),pub,mu);}
         public byte[] signEcdsa(PublicKey pub,byte[] digest)throws Exception{return call(((java.security.interfaces.ECPublicKey)pub).getParams().getCurve().getField().getFieldSize()==384?"ECDSA-P384-SHA384":"ECDSA-P256-SHA256",pub,digest);}
+        public byte[] signEd25519(PublicKey pub,byte[] digest)throws Exception{return call("Ed25519",pub,digest);}
         public byte[] signRsa(PublicKey pub,byte[] digest)throws Exception{return call("RSA3072-PSS-SHA256",pub,digest);}
     }
     private static byte[] invoke(String executable,String algorithm,PublicKey publicKey,byte[] mu,char[] pin)throws Exception{

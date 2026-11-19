@@ -104,7 +104,41 @@ public class YubiBackendTest {
   try{new YubiBackend(()->card,pins,12345,bound).sign(bound.get(Slot.SIGNATURE),new byte[64]);fail();}catch(GeneralSecurityException expected){}assertEquals(2,prompts[0]);
   card.rejectPin=true;try{new YubiBackend(()->card,pins,12345,card.publicKeys()).sign(key,new byte[64]);fail();}catch(com.yubico.yubikit.core.application.InvalidPinException expected){}
   assertEquals(3,prompts[0]);assertEquals(1,card.verifies);assertEquals(0,card.privateOps);
- } @Test public void openPgpUsesRealPivAdapter()throws Exception {
+ } @Test public void rfc9980ExtraSlotsThroughYubiKitAndBundle()throws Exception {
+  Card card=new Card(TokenProfile.LEVEL3){
+   public Transport getTransport(){return Transport.NFC;}
+   byte[] handle(byte[] a)throws Exception{
+    Slot slot=(a[1]&255)==0x87?Slot.fromValue(a[3]&255):null;
+    if(slot!=Slot.RETIRED3&&slot!=Slot.RETIRED4)return super.handle(a);
+    privateOps++;int start=a[4]==0?7:5,length=a[4]==0?((a[5]&255)<<8)|(a[6]&255):a[4]&255;
+    var operands=Tlvs.decodeMap(Tlvs.unpackValue(0x7c,Arrays.copyOfRange(a,start,start+length)));byte[] answer;
+    if(slot==Slot.RETIRED3){var sign=Signature.getInstance("Ed25519","BC");sign.initSign(keys.get(slot).getPrivate());sign.update(operands.get(0x81));answer=sign.sign();}
+    else{var peer=OpenPgp.curve25519(operands.get(0x85),false);answer=OpenPgp.derive(keys.get(slot).getPrivate(),peer);}
+    return tlv(0x7c,tlv(0x82,answer));
+   }
+  };
+  card.keys.put(Slot.RETIRED3,KeyPairGenerator.getInstance("Ed25519","BC").generateKeyPair());card.types.put(Slot.RETIRED3,KeyType.ED25519);
+  card.keys.put(Slot.RETIRED4,KeyPairGenerator.getInstance("X25519","BC").generateKeyPair());card.types.put(Slot.RETIRED4,KeyType.X25519);
+  int[] prompts={0};List<char[]> pins=new ArrayList<>();YubiBackend.PinSource source=label->{prompts[0]++;char[] pin="123456".toCharArray();pins.add(pin);return pin;};
+  var backend=new YubiBackend(()->card,source,12345,card.publicKeys());var keys=card.publicKeys();
+  var id=Identity.forTokenProfile("rfc@example.com",TokenProfile.LEVEL3,keys.get(Slot.SIGNATURE),keys.get(Slot.AUTHENTICATION),keys.get(Slot.KEY_MANAGEMENT),keys.get(Slot.RETIRED1),backend,List.of());
+  var pure=Identity.forTokenProfile("rfc@example.com",TokenProfile.LEVEL3,keys.get(Slot.SIGNATURE),null,keys.get(Slot.KEY_MANAGEMENT),null,backend,List.of());
+  var own=OpenPgp.createRfc9980(id,backend,keys.get(Slot.RETIRED3),keys.get(Slot.RETIRED4));
+  var expected=YubiBackend.pgpKeys(id,new String[]{"9c","9a","9d","82"},own);assertEquals(Set.of(Slot.SIGNATURE,Slot.KEY_MANAGEMENT,Slot.RETIRED3,Slot.RETIRED4),expected.keySet());
+  var pgpBackend=new YubiBackend(()->card,source,12345,expected);prompts[0]=0;int ops=card.privateOps;
+  byte[] message=OpenPgp.compose(id,own,own,"rfc@example.com","rfc@example.com","Test","RFC NFC",pgpBackend);
+  assertEquals("RFC NFC",OpenPgp.open(message,own,own,id,pgpBackend).text());assertEquals(2,prompts[0]);assertEquals(4,card.privateOps-ops);
+  for(char[] pin:pins)assertArrayEquals(new char[6],pin);
+  var profiles=List.of(new OnKeyBundle.Profile(new CertificateBundle.Entry(pure,12345,"9c","9a","9d","82"),new byte[0]),new OnKeyBundle.Profile(new CertificateBundle.Entry(id,12345,"9c","9a","9d","82"),own.encoded));
+  var storage=new OnKeyAndroidTest.Card(){public int serial(){return 12345;}};storage.keys=OnKeyBundle.bindings(profiles.stream().map(OnKeyBundle.Profile::entry).toList());storage.keys.put("84",keys.get(Slot.RETIRED3).getEncoded());storage.keys.put("85",keys.get(Slot.RETIRED4).getEncoded());
+  byte[] bundle=OnKeyBundle.sign(profiles,1,backend);OnKeyStorage.save(storage,bundle,new char[0]);var restored=OnKeyStorage.load(storage);assertArrayEquals(own.encoded,restored.profiles().get(1).pgp());
+  java.nio.file.Path root=java.nio.file.Files.createTempDirectory(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().getTargetContext().getCacheDir().toPath(),"rfc-restore-");
+  restored.savePgp(root);assertEquals(own.fingerprint(),OpenPgp.loadOwn(root,id).fingerprint());
+  storage.keys.remove("85");try{OnKeyStorage.load(storage);fail("Missing X25519 accepted");}catch(java.io.IOException expectedFailure){}
+  var wrong=new EnumMap<Slot,PublicKey>(expected);wrong.put(Slot.RETIRED3,KeyPairGenerator.getInstance("Ed25519","BC").generateKeyPair().getPublic());int verifies=card.verifies;
+  try{new YubiBackend(()->card,source,12345,wrong).signEd25519(wrong.get(Slot.RETIRED3),new byte[48]);fail("Wrong Ed25519 accepted");}catch(GeneralSecurityException expectedFailure){}assertEquals(verifies,card.verifies);
+ }
+ @Test public void openPgpUsesRealPivAdapter()throws Exception {
   Card card=new Card(TokenProfile.LEVEL3);int[] prompts={0};
   var backend=new YubiBackend(()->card,label->{prompts[0]++;return "123456".toCharArray();},12345,card.publicKeys());
   var keys=card.publicKeys();

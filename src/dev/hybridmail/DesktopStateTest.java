@@ -77,6 +77,22 @@ public final class DesktopStateTest {
                     check(opened.text().contains("Strong signature")&&opened.pinned()&&opened.encrypted()==encrypt,"ML-DSA-87 S/MIME round trip "+algorithm+" encrypted="+encrypt);
                 }
             }
+            var forget=new DesktopState(dir.resolve("forget"));
+            String forgotten=forget.remember(token,"Forget me",null);forget.bindToken(forgotten,"123456","83","9d","82");
+            Identity otherToken=new Identity(renewed.signingCert(),null,renewed.encryptionCert(),null,null);
+            String kept=forget.remember(otherToken,"Keep me",null);
+            forget.set("selected.identity",forgotten);forget.save();forget.forgetYubiKeyIdentity(forgotten);
+            var restoredForget=new DesktopState(forget.directory());
+            check(restoredForget.identities().size()==1&&restoredForget.identities().get(0).id().equals(kept)&&restoredForget.get("selected.identity","").isEmpty(),"forget removes only selected token record and clears selection persistently");
+            check(!Files.exists(forget.directory().resolve("identities").resolve(forgotten))&&restoredForget.get("identity."+forgotten+".token.serial","").isEmpty(),"forget deletes public certificate files and slot mappings");
+            Path softwareFile=dir.resolve("forget-protected-software.p12");software.save(softwareFile,password);
+            String protectedId=forget.remember(software,"Software",softwareFile);
+            try{forget.forgetYubiKeyIdentity(protectedId);throw new AssertionError("software identity forgotten");}catch(java.io.IOException expected){}
+            check(Files.exists(forget.directory().resolve("identities").resolve(protectedId).resolve("identity.p12")),"forget refuses software private-key bundles");
+            var renewalState=new DesktopState(dir.resolve("renewal"));
+            String oldRecord=renewalState.remember(token,"Original",null);renewalState.bindToken(oldRecord,"123456","83","9d","82");
+            String newRecord=renewalState.remember(otherToken,"Updated SANs",null);renewalState.bindToken(newRecord,"123456","83","9d","82");
+            check(renewalState.certificateBundle(otherToken).size()==1&&renewalState.certificateBundle(otherToken).get(0).identity().signingCert().equals(otherToken.signingCert()),"backup selects updated email/SAN set while retaining old local identities");
             state.saveGoogleClient(new GoogleOAuth.Client("test.apps.googleusercontent.com","test-client-secret"));
             var client=GoogleOAuth.Client.read(state.directory().resolve("google-client.json"));
             check(client.id().equals("test.apps.googleusercontent.com")&&client.secret().equals("test-client-secret")&&!Files.readString(state.directory().resolve("settings.properties")).contains("test-client-secret"),"manual OAuth client round trip in separate owner-only config");

@@ -14,8 +14,8 @@ public final class OnKeyBundle {
     public record Bundle(List<Profile> profiles,int signer,byte[] encoded,boolean recoveredMigration){
         public List<CertificateBundle.Entry> entries(){return profiles.stream().map(Profile::entry).toList();}
         public int serial(){return profiles.get(0).entry().serial();}
-        public String review()throws Exception{return CertificateBundle.review(entries())+(recoveredMigration?"\nRecovered mapping: signed bundle said 9a; matching key is now in 83. Import updates this mapping; save the bundle again.\n":"")+"\nVerified on-key bundle signature. This does not establish sender trust.\nOpenPGP identities: "+profiles.stream().filter(p->p.pgp().length>0).count();}
-        public void savePgp(Path root)throws Exception{for(var p:profiles)if(p.pgp().length>0)OpenPgp.saveOwn(root,p.entry().identity(),p.pgp());}
+        public String review()throws Exception{return CertificateBundle.review(entries())+(recoveredMigration?"\nRecovered mapping: signed bundle said 9a; matching key is now in 83. Import updates this mapping; save the bundle again.\n":"")+"\nRFC 9980 OpenPGP profiles use additional slots 84 (Ed25519) and 85 (X25519).\nVerified on-key bundle signature. This does not establish sender trust.\nOpenPGP identities: "+profiles.stream().filter(p->p.pgp().length>0).count();}
+        public void savePgp(Path root)throws Exception{for(var p:profiles)if(p.pgp().length>0)OpenPgp.replaceOwn(root,p.entry().identity(),new OpenPgp.PublicIdentity(p.pgp()));}
     }
     static final class InvalidData extends IOException{InvalidData(String message){super(message);}}
     static void require(boolean b,String message)throws IOException{if(!b)throw new InvalidData(message);}
@@ -70,6 +70,12 @@ public final class OnKeyBundle {
         if(key instanceof CompositePublicKey c){add(map,pq,ec,c.getPublicKeys().get(0));add(map,ec,ec,c.getPublicKeys().get(1));return;}
         byte[] old=map.put(pq,key.getEncoded());require(old==null||Arrays.equals(old,key.getEncoded()),"Conflicting public keys for slot "+pq);
     }
+    public static void checkPgp(Card card,List<Profile> profiles)throws Exception{
+        for(var profile:profiles)if(profile.pgp().length>0){var pgp=new OpenPgp.PublicIdentity(profile.pgp());if(OpenPgp.rfc9980(pgp)){
+            require(MessageDigest.isEqual(pgp.signing.ec().getEncoded(),card.publicKey("84")),"OpenPGP Ed25519 public key mismatch in slot 84");
+            require(MessageDigest.isEqual(pgp.encryption.ec().getEncoded(),card.publicKey("85")),"OpenPGP X25519 public key mismatch in slot 85");
+        }}
+    }
     public static void check(Card card,List<CertificateBundle.Entry> entries)throws Exception{
         int serial=card.serial();for(var e:entries)require(e.serial()==serial,"Wrong YubiKey; expected "+e.serial());
         for(var e:bindings(entries).entrySet())require(MessageDigest.isEqual(e.getValue(),card.publicKey(e.getKey())),"YubiKey public key mismatch in slot "+e.getKey());
@@ -77,8 +83,8 @@ public final class OnKeyBundle {
     public static List<CertificateBundle.Entry> migrated(List<CertificateBundle.Entry> entries){return entries.stream().map(e->new CertificateBundle.Entry(e.identity(),e.serial(),e.signingSlot(),e.traditionalSlot().equals("9a")?"83":e.traditionalSlot(),e.kemSlot(),e.ecdhSlot())).toList();}
     public static Bundle checkOrRecover(Card card,Bundle bundle)throws Exception{
         if(bundle.entries().stream().allMatch(e->e.traditionalSlot().equals("9a"))&&card.publicKey("9a")==null){
-            var mapped=migrated(bundle.entries());check(card,mapped);List<Profile> profiles=new ArrayList<>();for(int i=0;i<mapped.size();i++)profiles.add(new Profile(mapped.get(i),bundle.profiles().get(i).pgp()));return new Bundle(List.copyOf(profiles),bundle.signer(),bundle.encoded(),true);
-        }check(card,bundle.entries());return bundle;
+            var mapped=migrated(bundle.entries());check(card,mapped);checkPgp(card,bundle.profiles());List<Profile> profiles=new ArrayList<>();for(int i=0;i<mapped.size();i++)profiles.add(new Profile(mapped.get(i),bundle.profiles().get(i).pgp()));return new Bundle(List.copyOf(profiles),bundle.signer(),bundle.encoded(),true);
+        }check(card,bundle.entries());checkPgp(card,bundle.profiles());return bundle;
     }
     public static void migrate(Card card,List<CertificateBundle.Entry> entries,char[] management)throws Exception{
         require(entries.stream().allMatch(e->e.traditionalSlot().equals("9a")),"Migration requires existing 9a mappings");

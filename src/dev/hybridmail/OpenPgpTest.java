@@ -47,6 +47,24 @@ public final class OpenPgpTest {
   }
   ok(hardware.ml==hardware.ec&&hardware.kem==hardware.dh&&hardware.clears>0);
   System.out.println("PASS software and external backend signing/decryption, transport serialization, tampering and cleanup");
+  Identity strong=Identity.generate("classical@example.com",Identity.HYBRID_87_SIGN);var ecHardware=new Hardware(strong);var ecToken=new Identity(strong.signingCert(),null,strong.encryptionCert(),null,null);
+  for(boolean hw:new boolean[]{false,true}){var current=hw?ecToken:strong;var own=OpenPgp.create(current,hw?ecHardware:null);ok(own.description().contains("not post-quantum"));
+   for(boolean enc:new boolean[]{false,true}){
+    try{OpenPgp.compose(current,own,enc?own:null,"classical@example.com","classical@example.com","Classical","P-384 test",hw?ecHardware:null);throw new AssertionError("Outgoing classical signing accepted");}catch(GeneralSecurityException expected){}
+    byte[] msg=incomingClassical(current,own,enc,"P-384 test",hw?ecHardware:null);ok(OpenPgp.open(MailEngine.encode(MailEngine.parse(msg)),own,own,current,hw?ecHardware:null).text().equals("P-384 test"));
+   }
+   byte[] bad=own.encoded.clone();bad[bad.length-1]^=1;try{new OpenPgp.PublicIdentity(bad);throw new AssertionError("Invalid classical binding accepted");}catch(GeneralSecurityException expected){}
+  }
+  ok(ecHardware.ml==0&&ecHardware.kem==0&&ecHardware.ec>0&&ecHardware.dh>0);
+  System.out.println("PASS classical P-384 software and token adapters; no ML-DSA/ML-KEM calls; tampered binding rejected");
+ }
+ // Construct external classical fixtures without going through the outgoing compose policy.
+ static byte[] incomingClassical(Identity id,OpenPgp.PublicIdentity own,boolean encrypted,String text,ExternalMu.Backend backend)throws Exception{
+  byte[] plain=OpenPgp.bytes("Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"+Base64.getEncoder().encodeToString(OpenPgp.bytes(text)));
+  var sign=OpenPgp.signer(id,backend);byte[] second;
+  if(encrypted){second=OpenPgp.cat(OpenPgp.bytes("Content-Type: application/octet-stream\r\n\r\n"),OpenPgp.armor(OpenPgp.encrypt(OpenPgp.signed(plain,own,sign),own),"MESSAGE"));plain=OpenPgp.bytes("Content-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n");}
+  else{var req=OpenPgp.request(plain,0,OpenPgp.fingerprint(own.primary),OpenPgp.b(),19);second=OpenPgp.cat(OpenPgp.bytes("Content-Type: application/pgp-signature\r\n\r\n"),OpenPgp.armor(OpenPgp.frame(2,req.finish(sign.sign(req.digest()))),"SIGNATURE"));}
+  return OpenPgp.mimeWrap(plain,second,encrypted,own.email,own.email,"Incoming classical fixture");
  }
  public static void main(String[]args)throws Exception {
   MailEngine.init();

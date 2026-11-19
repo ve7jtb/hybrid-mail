@@ -43,7 +43,7 @@ public final class ExternalKem {
             }catch(Exception e){clearSecrets();throw e;}
         }
         public byte[] decapsulate(PublicKey key,byte[] ct)throws Exception{return invoke(key.getAlgorithm(),key,ct);}
-        public byte[] derive(PublicKey key,PublicKey peer)throws Exception{return invoke(((java.security.interfaces.ECPublicKey)key).getParams().getCurve().getField().getFieldSize()==384?"ECDH-P384":"ECDH-P256",key,peer.getEncoded());}
+        public byte[] derive(PublicKey key,PublicKey peer)throws Exception{if(!(key instanceof java.security.interfaces.ECPublicKey))return invoke("X25519",key,peer.getEncoded());return invoke(((java.security.interfaces.ECPublicKey)key).getParams().getCurve().getField().getFieldSize()==384?"ECDH-P384":"ECDH-P256",key,peer.getEncoded());}
     }
     public static void validatePublicKey(PublicKey key)throws Exception{
         if(key instanceof CompositePublicKey c){

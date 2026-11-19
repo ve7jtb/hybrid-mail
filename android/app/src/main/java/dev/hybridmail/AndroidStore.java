@@ -38,7 +38,7 @@ final class AndroidStore {
         if(selected==null||selected.serial()==0)throw new java.io.IOException("Select a YubiKey identity first");
         List<CertificateBundle.Entry> result=new ArrayList<>();
         for(var e:entries())if(e.serial()==selected.serial()){
-            Identity id=loadToken(e);if(!CertificateBundle.sameKeys(current,id))continue;String[] slots=slots(e);
+            Identity id=loadToken(e);if(!CertificateBundle.sameKeys(current,id))continue;if(!CertificateBundle.emails(current.signingCert()).equals(CertificateBundle.emails(id.signingCert()))||!CertificateBundle.emails(current.encryptionCert()).equals(CertificateBundle.emails(id.encryptionCert())))continue;String[] slots=slots(e);
             result.add(new CertificateBundle.Entry(id,e.serial(),slots[0],slots[1],slots[2],slots[3]));
         }return CertificateBundle.decode(CertificateBundle.encode(result));
     }
@@ -62,6 +62,21 @@ final class AndroidStore {
         var edit=context.getSharedPreferences("slots",0).edit();
         for(var old:entries())if(old.serial()==entries.get(0).serial())for(var e:entries)if(Arrays.equals(loadToken(old).signingCert().getEncoded(),e.identity().signingCert().getEncoded())){var slots=slots(old);slots[1]="83";edit.putString(old.id(),String.join(",",slots));}
         if(!edit.commit())throw new java.io.IOException("Key moved; local mapping save failed. Recover using public backup.");
+    }
+    /** Local-only removal; no YubiKey connection or key operation. */
+    void forgetYubiKeyIdentity(String id)throws Exception{
+        var all=entries();var entry=all.stream().filter(e->e.id().equals(id)).findFirst().orElseThrow(()->new java.io.IOException("Unknown identity"));
+        if(entry.serial()==0)throw new java.io.IOException("Only YubiKey identities can be forgotten here");
+        var identity=loadToken(entry);Path pgp=OpenPgp.supported(identity)?OpenPgp.ownPath(root,identity):null;
+        var remaining=new JSONArray();for(var e:all)if(!e.id().equals(id))remaining.put(new JSONObject().put("id",e.id()).put("label",e.label()).put("bundle",e.bundle()).put("serial",e.serial()).put("sign",e.sign()).put("encrypt",e.encrypt()));
+        if(!context.getSharedPreferences("identities",0).edit().putString("entries",remaining.toString()).commit())throw new java.io.IOException("Cannot save identity catalog");
+        if(!context.getSharedPreferences("slots",0).edit().remove(id).commit())throw new java.io.IOException("Identity forgotten; could not remove local slot record");
+        for(String file:List.of(entry.sign(),entry.encrypt())){
+            Path path=root.resolve(file).normalize();
+            if(!path.getParent().equals(root))throw new java.io.IOException("Invalid local certificate path");
+            if(all.stream().noneMatch(e->!e.id().equals(id)&&(e.sign().equals(file)||e.encrypt().equals(file))))Files.deleteIfExists(path);
+        }
+        if(pgp!=null){boolean shared=false;for(var e:all)if(!e.id().equals(id)&&e.serial()!=0){var other=loadToken(e);if(OpenPgp.supported(other)&&OpenPgp.ownPath(root,other).equals(pgp))shared=true;}if(!shared)Files.deleteIfExists(pgp);}
     }
     void trust(X509Certificate cert)throws Exception{trust(cert,"signing");}
     void trust(X509Certificate cert,String role)throws Exception{

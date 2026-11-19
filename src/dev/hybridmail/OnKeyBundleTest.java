@@ -25,7 +25,7 @@ public final class OnKeyBundleTest {
     public static void main(String[] args)throws Exception{
         MailEngine.init();Path output=args.length==0?null:Path.of(args[0]);
         for(var profile:TokenProfile.values()){
-            byte[] bytes=fixture(profile,"83",output);var bundle=OnKeyBundle.decode(bytes);check(bundle.entries().size()==2);check(bundle.profiles().get(1).pgp().length>0==(profile==TokenProfile.LEVEL3));
+            byte[] bytes=fixture(profile,"83",output);var bundle=OnKeyBundle.decode(bytes);check(bundle.entries().size()==2);check(bundle.profiles().get(1).pgp().length>0==(profile!=TokenProfile.LEVEL2));
             var fake=new Fake();fake.keys.putAll(OnKeyBundle.bindings(bundle.entries()));OnKeyStorage.save(fake,bytes,new char[]{'x'});check(Arrays.equals(bytes,OnKeyStorage.load(fake).encoded()));
             int chunks=(bytes.length+2047)/2048;
             for(int cut=0;cut<=chunks;cut++){var interrupted=fake.copy();interrupted.failAt=cut;fails(()->OnKeyStorage.save(interrupted,bytes,new char[]{'x'}));check(Arrays.equals(bytes,OnKeyStorage.load(interrupted).encoded()));}

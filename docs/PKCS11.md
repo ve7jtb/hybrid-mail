@@ -93,3 +93,13 @@ Generate fresh certificates with the dual-key demo afterward. Touch policy canno
 Software tests pass for ECDSA and RSA composite external signing, certificate-only identity save/load, invalid component rejection, exact RSA-PSS parameters, anonymous PIN-pipe transport, per-signature PIN reuse/cleanup, and provisioning guards. Hardware validation passed on 2026-11-16 for the RSA/no-touch/app-PIN flow. Both keys reported PIN policy Always and touch policy Never. Fresh pure and RSA composite certificates and S/MIME messages verified through Bouncy Castle; both saved messages and signer certificates were independently reopened and verified afterward. The RSA composite used PKCS#11 for both components. Each composite signer scopes one app PIN cache to its two component operations, then clears it. The signing run sent no email and changed no token keys; the separately authorized provisioning step created/replaced the two keys beforehand. Device identifiers, public certificates, identity files and messages remain local.
 
 For token-backed pure/hybrid encryption and decryption, see [PKCS11-KEM.md](PKCS11-KEM.md).
+
+### RFC 9980 extra keys
+
+The desktop adapters route Ed25519 signing to PIV 84 and X25519 derivation to
+85, validating the exported public key before each private operation. Ed25519
+signs the OpenPGP digest as a pure Ed25519 message (`pkeyutl -rawin`), without
+CMS domain separation or Ed25519ph. ML-DSA continues to use external mu.
+The included Yubico module patch also corrects the DER PrintableString length
+for `curve25519` (10 bytes, not 11); otherwise the OpenSSL provider rejects
+CKA_EC_PARAMS for X25519. A native unit test covers this encoding.

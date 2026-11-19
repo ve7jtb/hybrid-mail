@@ -23,7 +23,7 @@ _spec.loader.exec_module(_protocol)
 AdapterError = _protocol.AdapterError
 def read_request(stream):
     algorithm = stream.readline(16385)
-    profiles={b"ML-DSA-44\n":(64,1320,1360),b"ML-DSA-65\n":(64,1900,2100),b"ML-DSA-87\n":(64,2590,2650),b"ECDSA-P256-SHA256\n":(32,80,150),b"ECDSA-P384-SHA384\n":(48,110,150),b"RSA3072-PSS-SHA256\n":(32,390,500)}
+    profiles={b"Ed25519\n":(48,44,44),b"ML-DSA-44\n":(64,1320,1360),b"ML-DSA-65\n":(64,1900,2100),b"ML-DSA-87\n":(64,2590,2650),b"ECDSA-P256-SHA256\n":(32,80,150),b"ECDSA-P384-SHA384\n":(48,110,150),b"RSA3072-PSS-SHA256\n":(32,390,500)}
     if algorithm not in profiles:raise AdapterError("Unsupported signing algorithm")
     fields=[stream.readline(16385) for _ in range(2)]
     if any(len(line)>16384 or not line.endswith(b"\n") for line in fields):raise AdapterError("Malformed signing request")
@@ -119,9 +119,9 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
         raise AdapterError("OPENSSL_BIN must be an absolute path")
     config = configuration(provider, module)
     # The Yubico module maps PIV signature slot 9c to binary CKA_ID 02.
-    if algorithm not in ("ML-DSA-44", "ML-DSA-65", "ML-DSA-87", "ECDSA-P256-SHA256", "ECDSA-P384-SHA384", "RSA3072-PSS-SHA256"):
+    if algorithm not in ("ML-DSA-44", "ML-DSA-65", "ML-DSA-87", "ECDSA-P256-SHA256", "ECDSA-P384-SHA384", "RSA3072-PSS-SHA256", "Ed25519"):
         raise AdapterError("Unsupported signing algorithm")
-    object_id = "%02" if algorithm.startswith("ML-DSA-") else ec_object_id(ec_slot)
+    object_id = "%02" if algorithm.startswith("ML-DSA-") else ec_object_id("84" if algorithm=="Ed25519" else ec_slot)
     uri = "pkcs11:serial=" + serial + ";id=" + object_id + ";type="
     with tempfile.TemporaryDirectory(prefix="hybrid-mail-pkcs11-") as temporary:
         folder = Path(temporary)
@@ -140,7 +140,7 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
         mu_file.write_bytes(mu)
         terminal.write(("\nPQ Mail: PKCS#11 " + algorithm + " signing. Enter PIN and touch the key.\n").encode())
         terminal.flush()
-        options = ["-pkeyopt","mu:1"] if algorithm.startswith("ML-DSA-") else ["-pkeyopt","digest:sha384" if algorithm=="ECDSA-P384-SHA384" else "digest:sha256"]
+        options = ["-rawin"] if algorithm=="Ed25519" else ["-pkeyopt","mu:1"] if algorithm.startswith("ML-DSA-") else ["-pkeyopt","digest:sha384" if algorithm=="ECDSA-P384-SHA384" else "digest:sha256"]
         if algorithm == "RSA3072-PSS-SHA256":
             options += ["-pkeyopt","rsa_padding_mode:pss","-pkeyopt","rsa_pss_saltlen:32","-pkeyopt","rsa_mgf1_md:sha256"]
         command = [executable,"pkeyutl","-provider","default","-provider","pkcs11",
@@ -170,7 +170,7 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
         if signed.returncode:
             raise AdapterError("PKCS#11 "+algorithm+" signing failed; no retry"+safe_openssl_error(signed))
         size = sig_file.stat().st_size
-        if (algorithm == "ML-DSA-44" and size != 2420) or (algorithm == "ML-DSA-65" and size != 3309) or (algorithm == "ML-DSA-87" and size != 4627) or (algorithm == "ECDSA-P384-SHA384" and not 8 <= size <= 104) or (algorithm == "ECDSA-P256-SHA256" and not 8 <= size <= 72) or (algorithm=="RSA3072-PSS-SHA256" and size!=384):
+        if (algorithm == "Ed25519" and size != 64) or (algorithm == "ML-DSA-44" and size != 2420) or (algorithm == "ML-DSA-65" and size != 3309) or (algorithm == "ML-DSA-87" and size != 4627) or (algorithm == "ECDSA-P384-SHA384" and not 8 <= size <= 104) or (algorithm == "ECDSA-P256-SHA256" and not 8 <= size <= 72) or (algorithm=="RSA3072-PSS-SHA256" and size!=384):
             raise AdapterError("Unexpected signature length")
         return sig_file.read_bytes()
 

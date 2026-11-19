@@ -1,9 +1,13 @@
 diff --git a/crates/ykcs11/src/objects.rs b/crates/ykcs11/src/objects.rs
-index ddb872d..8b990ca 100644
+index ddb872d..3df6c24 100644
 --- a/crates/ykcs11/src/objects.rs
 +++ b/crates/ykcs11/src/objects.rs
-@@ -1328,11 +1328,20 @@ pub(crate) const X25519_CURVE_PARAMS: &[u8] = &[
-     0x13, 0x0b, b'c', b'u', b'r', b'v', b'e', b'2', b'5', b'5', b'1', b'9',
+@@ -1325,14 +1325,23 @@ pub(crate) const ED25519_CURVE_PARAMS: &[u8] = &[
+     0x13, 0x0c, b'e', b'd', b'w', b'a', b'r', b'd', b's', b'2', b'5', b'5', b'1', b'9',
+ ];
+ pub(crate) const X25519_CURVE_PARAMS: &[u8] = &[
+-    0x13, 0x0b, b'c', b'u', b'r', b'v', b'e', b'2', b'5', b'5', b'1', b'9',
++    0x13, 0x0a, b'c', b'u', b'r', b'v', b'e', b'2', b'5', b'5', b'1', b'9',
  ];
  
 -fn ec_params_attr(obj: &PivObject, public_key: &PublicKey) -> Option<Vec<u8>> {
@@ -35,7 +39,23 @@ index ddb872d..8b990ca 100644
          }
          CKA_DECAPSULATE => {
              yk_dbg!("DECAPSULATE");
-@@ -1991,6 +2001,23 @@ mod tests {
+@@ -1958,6 +1968,15 @@ fn get_data_attribute(obj: &PivObject, attr_type: CK_ATTRIBUTE_TYPE) -> Option<V
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn curve25519_parameters_have_correct_der_length() {
++        for params in [ED25519_CURVE_PARAMS, X25519_CURVE_PARAMS] {
++            assert_eq!(params[0], 0x13);
++            assert_eq!(params[1] as usize, params.len() - 2);
++        }
++        assert_eq!(&X25519_CURVE_PARAMS[2..], b"curve25519");
++    }
++
+     use crate::backend::PivBackend;
+     use crate::piv_slot::PivSlotData;
+     use pkcs11_common::backend::Slot as EngineSlot;
+@@ -1991,6 +2010,23 @@ mod tests {
          }
      }
  

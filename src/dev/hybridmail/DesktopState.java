@@ -100,6 +100,22 @@ public final class DesktopState {
         LinkedHashSet<String> ids=new LinkedHashSet<>();for(var old:identities())ids.add(old.id());ids.add(id);
         set("identities",String.join(",",ids));set("identity."+id+".name",name);set("identity."+id+".type",token?"token":"pkcs12");set("selected.identity",id);if(token&&get("identity."+id+".token.serial","").isBlank()&&!get("token.serial","").isBlank())bindToken(id,get("token.serial",""),get("token.rsaSlot","9a"),get("token.kemSlot","9d"),get("token.ecdhSlot","82"));save();return id;
     }
+    /** Forget one local token record; never opens a token connection. */
+    public void forgetYubiKeyIdentity(String id)throws Exception{
+        var saved=identities().stream().filter(i->i.id().equals(id)).findFirst().orElseThrow(()->new IOException("Unknown saved identity"));
+        if(saved.passwordRequired())throw new IOException("This action only forgets YubiKey identities");
+        Path folder=identityDirectory(id);
+        Identity identity=loadIdentity(id,new char[0]);
+        Path pgp=OpenPgp.supported(identity)?OpenPgp.ownPath(directory,identity):null;
+        Properties before=new Properties();before.putAll(values);
+        set("identities",String.join(",",identities().stream().map(SavedIdentity::id).filter(other->!other.equals(id)).toList()));
+        for(String key:new ArrayList<>(values.stringPropertyNames()))if(key.startsWith("identity."+id+"."))values.remove(key);
+        if(id.equals(get("selected.identity","")))set("selected.identity",null);
+        try{save();}catch(Exception e){values.clear();values.putAll(before);throw e;}
+        for(String file:List.of("signing.cer","signing.pem","encryption.cer","encryption.pem"))Files.deleteIfExists(folder.resolve(file));
+        if(pgp!=null)Files.deleteIfExists(pgp);
+        try(var files=Files.list(folder)){if(files.findAny().isEmpty())Files.delete(folder);}
+    }
     public void rememberSoftwareProfiles(List<Identity> profiles,Path file,String name)throws Exception{
         for(int i=0;i<profiles.size();i++){
             var identity=profiles.get(i);String id=remember(identity,name+" · "+identity.signatureAlgorithm(),file);
@@ -111,7 +127,7 @@ public final class DesktopState {
         String serial=get("identity."+identityId(selected)+".token.serial","");if(serial.isBlank())throw new IOException("Selected identity has no YubiKey serial");
         List<CertificateBundle.Entry> result=new ArrayList<>();
         for(var saved:identities())if(!saved.passwordRequired()&&serial.equals(get("identity."+saved.id()+".token.serial",""))){
-            Identity id=loadIdentity(saved.id(),new char[0]);if(!CertificateBundle.sameKeys(selected,id))continue;
+            Identity id=loadIdentity(saved.id(),new char[0]);if(!CertificateBundle.sameKeys(selected,id))continue;if(!CertificateBundle.emails(selected.signingCert()).equals(CertificateBundle.emails(id.signingCert()))||!CertificateBundle.emails(selected.encryptionCert()).equals(CertificateBundle.emails(id.encryptionCert())))continue;
             String prefix="identity."+saved.id()+".token.";
             result.add(new CertificateBundle.Entry(id,Integer.parseInt(serial),"9c",get(prefix+"rsaSlot","9a"),get(prefix+"kemSlot","9d"),get(prefix+"ecdhSlot","82")));
         }
@@ -194,6 +210,60 @@ public final class DesktopState {
         Files.move(directory.resolve("contacts").resolve(contact.id()),trash.resolve(contact.id()+"-"+System.currentTimeMillis()));
         var ids=new ArrayList<String>();for(var old:contacts())if(!old.id().equals(contact.id()))ids.add(old.id());
         set("contacts",String.join(",",ids));set("contact."+contact.id()+".email",null);set("contact."+contact.id()+".role",null);save();
+    }
+    private static String pgpId(String email,String fingerprint)throws Exception{
+        OpenPgp.validateEmail(email);if(!fingerprint.matches("(?i)[0-9a-f]{40}|[0-9a-f]{64}"))throw new IOException("Invalid full OpenPGP fingerprint");
+        return OpenPgp.hex(OpenPgp.hash("SHA-256",OpenPgp.bytes(email.toLowerCase(Locale.ROOT)+"\n"+fingerprint.toLowerCase(Locale.ROOT))));
+    }
+    public List<Contact> pgpContacts(){
+        var result=new ArrayList<Contact>();for(String id:get("pgp.contacts","").split(","))if(id.matches("[a-f0-9]{64}"))result.add(new Contact(id,get("pgp."+id+".email",""),"OpenPGP"));return List.copyOf(result);
+    }
+    public String pgpFingerprint(Contact c)throws Exception{
+        if(!pgpContacts().contains(c))throw new IOException("Unknown OpenPGP contact");String fp=get("pgp."+c.id()+".fingerprint","");
+        if(!pgpId(c.email(),fp).equals(c.id()))throw new IOException("OpenPGP contact metadata mismatch");return fp;
+    }
+    public OpenPgp.PublicIdentity pgpCertificate(Contact c)throws Exception{
+        String fp=pgpFingerprint(c);Path path=directory.resolve("openpgp-contacts").resolve(c.id()).resolve("public.asc");
+        if(Files.size(path)>128*1024)throw new IOException("OpenPGP contact too large");var key=new OpenPgp.PublicIdentity(Files.readAllBytes(path));
+        if(!key.fingerprint().equals(fp)||!key.matchesEmail(c.email()))throw new IOException("OpenPGP contact certificate mismatch");return key;
+    }
+    public Contact rememberPgp(OpenPgp.PublicIdentity supplied,String email)throws Exception{
+        var key=new OpenPgp.PublicIdentity(supplied.export());email=email.trim().toLowerCase(Locale.ROOT);
+        if(!key.matchesEmail(email))throw new IOException("Email is not certified by this OpenPGP key");Contact contact=rememberPgpChecked(key,email);save();return contact;
+    }
+    private Contact rememberPgpChecked(OpenPgp.PublicIdentity key,String email)throws Exception{
+        String fp=key.fingerprint(),id=pgpId(email,fp);
+        write(directory.resolve("openpgp-contacts").resolve(id).resolve("public.asc"),key.export());
+        var ids=new LinkedHashSet<String>();for(var c:pgpContacts())ids.add(c.id());ids.add(id);set("pgp.contacts",String.join(",",ids));set("pgp."+id+".email",email);set("pgp."+id+".fingerprint",fp);return new Contact(id,email,"OpenPGP");
+    }
+    public boolean isPgpTrusted(String email,String fp)throws Exception{
+        String id=pgpId(email,fp);var c=pgpContacts().stream().filter(v->v.id().equals(id)).findFirst().orElse(null);
+        if(c==null||!Boolean.parseBoolean(get("pgp."+id+".trusted","false")))return false;
+        pgpCertificate(c);return true; // Trust never overrides validity or certificate binding checks.
+    }
+    public void setPgpTrusted(Contact c,boolean trusted)throws Exception{
+        pgpFingerprint(c);if(trusted)pgpCertificate(c);set("pgp."+c.id()+".trusted",trusted?"true":null);save();
+    }
+    public void setPgpTrustSelection(OpenPgp.PublicIdentity supplied,Set<String> selectedEmails)throws Exception{
+        var key=new OpenPgp.PublicIdentity(supplied.export());var emails=key.certifiedEmails();
+        var selected=new HashSet<String>();for(String email:selectedEmails)selected.add(email.trim().toLowerCase(Locale.ROOT));
+        if(!emails.containsAll(selected))throw new IOException("Trust selection includes an email not certified by this key");
+        Properties before=new Properties();before.putAll(values);
+        try{
+            for(String email:emails){String id=pgpId(email,key.fingerprint());
+                if(selected.contains(email)||pgpContacts().stream().anyMatch(c->c.id().equals(id))){
+                    var c=rememberPgpChecked(key,email);set("pgp."+c.id()+".trusted",selected.contains(email)?"true":null);
+                }
+            }
+            save(); // One atomic settings replacement publishes the entire trust selection.
+        }catch(Exception e){values.clear();values.putAll(before);throw e;}
+    }
+    public void removePgp(Contact c)throws Exception{
+        pgpFingerprint(c);Path folder=directory.resolve("openpgp-contacts").resolve(c.id());
+        Path removed=directory.resolve("removed-contacts");PrivateFiles.directory(removed);
+        if(Files.exists(folder))Files.move(folder,removed.resolve("pgp-"+c.id()+"-"+System.nanoTime()));
+        set("pgp.contacts",String.join(",",pgpContacts().stream().filter(v->!v.id().equals(c.id())).map(Contact::id).toList()));
+        for(String suffix:List.of("email","fingerprint","trusted"))set("pgp."+c.id()+"."+suffix,null);save();
     }
     public void clearCertificate(String role)throws IOException{
         if(!Set.of("recipient","pinned").contains(role))throw new IllegalArgumentException("Invalid certificate role");

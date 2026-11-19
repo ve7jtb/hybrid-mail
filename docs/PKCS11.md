@@ -103,3 +103,43 @@ CMS domain separation or Ed25519ph. ML-DSA continues to use external mu.
 The included Yubico module patch also corrects the DER PrintableString length
 for `curve25519` (10 bytes, not 11); otherwise the OpenSSL provider rejects
 CKA_EC_PARAMS for X25519. A native unit test covers this encoding.
+
+
+## Scoped discovery and single-process signing
+
+The signing adapter sets `YKCS11_DISCOVERY=metadata` and
+`YKCS11_DISCOVERY_ID` to the validated PKCS#11 object ID in its URI. The patched
+Yubico module reads that slot's live public key and policies. It does not generate
+attestation-certificate objects in metadata mode; normal module discovery remains
+unchanged when this mode is not selected. Firmware without metadata falls back
+to existing attestation discovery for the requested slot. Older modules ignore
+the settings and retain their existing discovery behavior.
+
+When `pqmail-pkcs11-sign` is bundled beside OpenSSL and an app PIN is available,
+the adapter invokes it once. The helper compares the live public key before
+reading the PIN from its anonymous input pipe, checks the loaded private-key
+object's public material, signs and independently verifies the signature. It
+explicitly enables the provider's PIN callback mode, avoiding an additional
+terminal prompt. The process exits after the operation and clears its PIN.
+A helper error stops the operation without retry or fallback. Packages without
+the helper, and interactive Terminal callers, retain the two-process path.
+
+ML-DSA verification uses the default provider's digest/message API with `mu=1`:
+the precomputed representative is not hashed again. Software tests cover
+ML-DSA-44/65/87, Ed25519, P-256/P-384 ECDSA and RSA-3072-PSS, including wrong keys,
+altered input/signatures and truncation. Callback tests cover callback selection,
+readiness and PIN delivery without a device. The module's discovery tests and
+adapter tests cover slot selection, inherited-environment cleanup, key binding,
+PIN clearing, timeout handling and no fallback after failure.
+
+`package.sh` invokes `scripts/build-pkcs11-signer.sh` to compile the Mac helper
+and run its software tests against the selected `HYBRID_OPENSSL_ROOT`. The helper
+is signed alongside the existing native binaries and uses bundle-relative
+OpenSSL loading. Windows/Linux helper packaging is not enabled by this change;
+those builds retain their existing signer. No Android/iOS backend changes are
+required. See the README for measured Mac results and physical touch-required
+slot 9c validation.
+
+For local diagnostics, setting `PQMAIL_SIGN_TIMINGS` records phase durations and
+the number of PIN callback invocations on stderr, never PIN contents or APDUs.
+Do not interpret touch/PIN wait time as card computation time.

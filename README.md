@@ -372,3 +372,44 @@ PQ Mail prefers a matching v6 certificate over v4, then prefers a usable support
 For v4 recipients, the desktop RFC 9980 YubiKey identity signs with its existing Ed25519 key and attaches `public-key-v4.asc` (Ed25519 primary, ML-KEM-768 + X25519 subkey) and `public-key-v6.asc` (hybrid signing/encryption). Both attachments are covered by the message signature and are inside encryption when enabled. Their fingerprints remain stable because the compatibility certificate reuses the original key creation timestamps. Public certificates are generated during composition; this does not generate token keys or write an updated on-key backup. A receiving client must support algorithm 35 to use the hybrid subkey. Proton/Thunderbird interoperability for this new outbound mode is not yet established.
 
 Local regression tests cover v6-first selection (including classical v6 over hybrid v4), hybrid subkey preference and revocation fallback, Ed25519 certificate/message validation, both attached certificates, v3 hybrid encryption/decryption and tamper rejection, and continued v6 hybrid signing for v6 or unknown recipients. Hardware calls were simulated in these tests; no email was sent.
+
+### PKCS#11 signing performance — November 19, 2026
+
+Desktop signing now supports a single-process OpenSSL helper that checks the
+live token public key, signs through PKCS#11, and verifies the signature before
+returning it. The Yubico module uses opt-in, slot-scoped metadata discovery,
+avoiding a full PIV-slot scan and generated attestation certificates for routine
+signing. The original signing and APDU transport implementations are preserved.
+
+On macOS with a PQC Beta0 YubiKey, ML-DSA-87 on a dedicated no-touch test key
+produced these results (ten measured operations per path after two warm-ups):
+
+| Signing path | Median elapsed | Range |
+| --- | ---: | ---: |
+| Optimized PKCS#11, separate public-key check and signing processes | 1.174 s | 1.078–1.889 s |
+| Single-process PKCS#11 helper | **0.710 s** | 0.642–1.130 s |
+| ykman with a separate live public-key check | 1.073 s | 0.870–3.170 s |
+
+The single-process helper reduced median elapsed time by **40% versus the
+optimized two-process adapter**, and **34% versus this ykman workflow**. These
+are end-to-end timings including public-key checking, process startup,
+authentication and signing; they exclude human PIN entry and the benchmark's
+independent verification. The helper additionally verifies internally. They are
+not card-only timings or guarantees for other devices. All 36 signatures
+verified, and every helper invocation used exactly one PIN callback. An earlier
+helper run with extra interactive PIN prompts is excluded from the comparison.
+
+Median helper phases were 264 ms for the live public-key check, 10 ms for the
+private-key check/login, 400 ms for signing, 0.6 ms for verification and 19 ms for
+cleanup. Scoped discovery was independently checked against all nine occupied
+slots' public keys. The installed, signed Mac app then passed a separate
+**ML-DSA-87 signing test in slot 9c with PIN Always / Touch Always**: its
+4,627-byte signature verified. Before/after snapshots confirmed that all nine
+public keys and PIN/touch policies were unchanged. This touch-required test is
+functional validation; its elapsed time includes human PIN entry and touch.
+
+Mac packaging builds and tests the helper automatically. Other packages retain
+the existing two-process path until they bundle the helper. A helper failure
+never triggers a signing retry or a fallback. PINs are supplied through an
+anonymous pipe/callback, cleared after the operation, and never placed in
+arguments, environment variables or files. See [PKCS#11 details](docs/PKCS11.md).

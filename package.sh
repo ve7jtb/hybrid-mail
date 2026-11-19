@@ -21,6 +21,8 @@ ditto build/native/PQMailShare.app "$stage/native/PQMailShare.app"
 cp build/native/hybrid-mail-keychain "$stage/native/bin/"
 ./scripts/build-provision.sh
 cp build/native/hybrid-mail-provision "$stage/native/bin/"
+HYBRID_OPENSSL_ROOT="$OPENSSL_ROOT" bash scripts/build-pkcs11-signer.sh
+cp build/native/pqmail-pkcs11-sign "$stage/native/bin/"
 cp adapters/*.py "$stage/adapters/"
 cp native/*.dylib "$stage/native/lib/"
 cp -L "$OPENSSL_ROOT/bin/openssl" "$stage/native/bin/openssl"
@@ -28,7 +30,7 @@ cp -L "$OPENSSL_ROOT/lib/libcrypto.3.dylib" "$OPENSSL_ROOT/lib/libssl.3.dylib" "
 cp "$OPENSSL_ROOT/LICENSE.txt" "$stage/notices/OpenSSL-LICENSE.txt"
 cp docs/THIRD-PARTY.txt docs/YUBIKIT-LICENSE.txt "$stage/notices/"
 # Change only copies. All non-system OpenSSL dependencies become bundle-relative.
-for binary in "$stage/native/bin/openssl" "$stage/native/lib/"*.dylib; do
+for binary in "$stage/native/bin/openssl" "$stage/native/bin/pqmail-pkcs11-sign" "$stage/native/lib/"*.dylib; do
   chmod u+w "$binary"
   if [[ "$binary" == */bin/* ]]; then relative='@loader_path/../lib'; else relative='@loader_path'; fi
   while IFS= read -r dependency; do

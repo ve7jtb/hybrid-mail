@@ -63,11 +63,18 @@ def configuration(provider, module, public=False):
             "pkcs11-module-cache-pins = cache\nactivate = 1\n" + ("pkcs11-module-login-behavior = never\n" if public else ""))
 
 
-def child_environment(config_file):
+def child_environment(config_file, object_id=None):
     env = os.environ.copy()
     for name in list(env):
-        if name.startswith("PKCS11_PROVIDER_") or name in ("OPENSSL_CONF", "OPENSSL_CONF_INCLUDE", "OPENSSL_MODULES"):
+        if name.startswith("PKCS11_PROVIDER_") or name in ("OPENSSL_CONF", "OPENSSL_CONF_INCLUDE", "OPENSSL_MODULES", "YKCS11_DISCOVERY", "YKCS11_DISCOVERY_ID"):
             del env[name]
+    if object_id is not None:
+        if not re.fullmatch(r"%[0-9a-fA-F]{2}", object_id) or not 1 <= int(object_id[1:],16) <= 24:
+            raise AdapterError("Invalid discovery object ID")
+        # Limit live metadata discovery to the exact key we will compare/sign.
+        # Older modules ignore these flags and retain their existing behavior.
+        env["YKCS11_DISCOVERY"] = "metadata"
+        env["YKCS11_DISCOVERY_ID"] = str(int(object_id[1:],16))
     env["OPENSSL_CONF"] = str(config_file)
     return env
 
@@ -114,6 +121,35 @@ def safe_openssl_error(result):
     return "; "+b"; ".join(matches[:3]).decode("ascii",errors="replace")[:600] if matches else ""
 
 
+def single_process_sign(helper,spki,payload,provider,module,serial,object_id,algorithm,pin,run):
+    try:
+        if not 6<=len(pin)<=8 or any(c<32 or c>126 for c in pin):
+            raise AdapterError("Invalid PIN input format")
+        with tempfile.TemporaryDirectory(prefix="pq-mail-pkcs11-sign-") as directory:
+            folder=Path(directory);config=folder/"openssl.cnf";public=folder/"expected.der";data=folder/"input.bin";signature=folder/"signature.bin"
+            config.write_text(configuration(provider,module),encoding="utf-8")
+            public.write_bytes(spki);data.write_bytes(payload)
+            env=child_environment(config,object_id)
+            # The helper checks the live key before reading the PIN, and uses
+            # the provider callback. Never retry/fall back after a failure.
+            command=[str(helper),algorithm,"pkcs11:serial="+serial+";id="+object_id+";type=",str(public),str(data),str(signature)]
+            options={} if os.name=="nt" else {"start_new_session":True}
+            result=run(command,input=bytes(pin)+b"\n",stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,env=env,timeout=100,**options)
+            if result.returncode:
+                raw=getattr(result,"stderr",b"") or b""
+                match=re.search(rb"single-session signer failed at ([a-z -]+); no retry",raw)
+                stage=" at "+match.group(1).decode("ascii") if match else ""
+                raise AdapterError("Single-process PKCS#11 signing failed"+stage+"; no retry")
+            if not signature.exists() or signature.stat().st_size>8192:raise AdapterError("Missing or oversized signature")
+            signed=signature.read_bytes();validate_signature_length(algorithm,len(signed));return signed
+    finally:pin[:]=b"\0"*len(pin)
+
+def validate_signature_length(algorithm,size):
+    valid = {"Ed25519":size==64,"ML-DSA-44":size==2420,"ML-DSA-65":size==3309,"ML-DSA-87":size==4627,
+             "ECDSA-P384-SHA384":8<=size<=104,"ECDSA-P256-SHA256":8<=size<=72,"RSA3072-PSS-SHA256":size==384}
+    if not valid.get(algorithm,False):raise AdapterError("Unexpected signature length")
+
+
 def sign(spki, mu, executable, provider, module, serial, terminal, run=subprocess.run, algorithm="ML-DSA-65", ec_slot="", pin=None):
     if not serial.isdecimal():
         raise AdapterError("Set PKCS11_SERIAL to the intended token serial")
@@ -124,12 +160,15 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
     if algorithm not in ("ML-DSA-44", "ML-DSA-65", "ML-DSA-87", "ECDSA-P256-SHA256", "ECDSA-P384-SHA384", "RSA3072-PSS-SHA256", "Ed25519"):
         raise AdapterError("Unsupported signing algorithm")
     object_id = "%02" if algorithm.startswith("ML-DSA-") else ec_object_id("84" if algorithm=="Ed25519" else ec_slot)
+    helper=Path(executable).with_name("pqmail-pkcs11-sign.exe" if os.name=="nt" else "pqmail-pkcs11-sign")
+    if pin is not None and helper.is_file():
+        return single_process_sign(helper,spki,mu,provider,module,serial,object_id,algorithm,pin,run)
     uri = "pkcs11:serial=" + serial + ";id=" + object_id + ";type="
     with tempfile.TemporaryDirectory(prefix="hybrid-mail-pkcs11-") as temporary:
         folder = Path(temporary)
         config_file, public_file, mu_file, sig_file = (folder / n for n in ("openssl.cnf", "public.der", "mu.bin", "signature.bin"))
         config_file.write_text(configuration(provider,module,public=True), encoding="utf-8")
-        env = child_environment(config_file)
+        env = child_environment(config_file, object_id)
         common = dict(stdin=terminal, stderr=subprocess.PIPE if pin is not None else terminal, stdout=subprocess.DEVNULL, env=env)
         exported = run([executable,"pkey","-provider","default","-provider","pkcs11",
                         "-pubin","-in",uri+"public","-pubout","-outform","DER","-out",str(public_file)],
@@ -172,8 +211,7 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
         if signed.returncode:
             raise AdapterError("PKCS#11 "+algorithm+" signing failed; no retry"+safe_openssl_error(signed))
         size = sig_file.stat().st_size
-        if (algorithm == "Ed25519" and size != 64) or (algorithm == "ML-DSA-44" and size != 2420) or (algorithm == "ML-DSA-65" and size != 3309) or (algorithm == "ML-DSA-87" and size != 4627) or (algorithm == "ECDSA-P384-SHA384" and not 8 <= size <= 104) or (algorithm == "ECDSA-P256-SHA256" and not 8 <= size <= 72) or (algorithm=="RSA3072-PSS-SHA256" and size!=384):
-            raise AdapterError("Unexpected signature length")
+        validate_signature_length(algorithm,size)
         return sig_file.read_bytes()
 
 

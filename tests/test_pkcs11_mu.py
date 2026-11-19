@@ -148,4 +148,49 @@ class RsaEncodingRegressionTest(unittest.TestCase):
             different=bytearray(decoded);different[-1]=3
             self.assertFalse(ADAPTER.public_keys_match(bytes(different),*args))
 
+
+class DiscoveryEnvironmentTest(unittest.TestCase):
+    def test_scoped_metadata_and_inherited_flags(self):
+        with patch.dict(os.environ,{"YKCS11_DISCOVERY":"bad", "YKCS11_DISCOVERY_ID":"24"}):
+            unscoped=ADAPTER.child_environment("/tmp/config")
+            self.assertNotIn("YKCS11_DISCOVERY",unscoped)
+            self.assertNotIn("YKCS11_DISCOVERY_ID",unscoped)
+            for encoded,expected in [("%02","2"),("%09","9"),("%0B","11"),("%0c","12")]:
+                env=ADAPTER.child_environment("/tmp/config",encoded)
+                self.assertEqual(env["YKCS11_DISCOVERY"],"metadata")
+                self.assertEqual(env["YKCS11_DISCOVERY_ID"],expected)
+    def test_invalid_discovery_id_rejected(self):
+        for value in ["", "%00", "%19", "%02;type=private", "02", "%ff"]:
+            with self.assertRaises(ADAPTER.AdapterError):ADAPTER.child_environment("/tmp/config",value)
+
+class SingleProcessAdapterTest(unittest.TestCase):
+    def test_single_call_key_binding_and_secret_cleanup(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            helper=Path(temp)/('pqmail-pkcs11-sign.exe' if os.name=='nt' else 'pqmail-pkcs11-sign');helper.touch();calls=[];pin=bytearray(b'654321');paths=[]
+            def run(command,**kw):
+                calls.append(command);paths.extend([Path(command[3]),Path(command[4])])
+                self.assertEqual(command[2],'pkcs11:serial=123456;id=%02;type=')
+                self.assertEqual(Path(command[3]).read_bytes(),b'p'*2614)
+                self.assertEqual(Path(command[4]).read_bytes(),MU)
+                self.assertEqual(kw['input'],b'654321\n')
+                self.assertNotIn('654321',' '.join(command));self.assertNotIn('654321',str(kw['env']))
+                self.assertEqual(kw['env']['YKCS11_DISCOVERY_ID'],'2')
+                Path(command[5]).write_bytes(b's'*4627)
+                return subprocess.CompletedProcess(command,0)
+            result=ADAPTER.sign(b'p'*2614,MU,str(Path(temp)/'openssl'),'/provider','/module','123456',io.BytesIO(),run,algorithm='ML-DSA-87',pin=pin)
+            self.assertEqual(len(result),4627);self.assertEqual(len(calls),1);self.assertEqual(pin,bytearray(6));self.assertTrue(all(not p.exists() for p in paths))
+    def test_failure_and_timeout_never_fall_back(self):
+        import tempfile
+        for timeout in [False,True]:
+            with tempfile.TemporaryDirectory() as temp:
+                (Path(temp)/('pqmail-pkcs11-sign.exe' if os.name=='nt' else 'pqmail-pkcs11-sign')).touch();pin=bytearray(b'654321');calls=[]
+                def run(command,**kw):
+                    calls.append(command)
+                    if timeout:raise subprocess.TimeoutExpired(command,100)
+                    return subprocess.CompletedProcess(command,1,stderr=b'PQ Mail single-session signer failed at public key check; no retry\n')
+                with self.assertRaises((ADAPTER.AdapterError,subprocess.TimeoutExpired)):
+                    ADAPTER.sign(b'p'*2614,MU,str(Path(temp)/'openssl'),'/provider','/module','123456',io.BytesIO(),run,algorithm='ML-DSA-87',pin=pin)
+                self.assertEqual(len(calls),1);self.assertEqual(pin,bytearray(6))
+
 if __name__=="__main__":unittest.main()

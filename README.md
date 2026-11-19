@@ -4,9 +4,11 @@
 
 PQ Mail is an experimental post-quantum mail application supporting **S/MIME and OpenPGP on macOS, Windows, Linux, Android and iOS**. Desktop and Android use **Jakarta Mail, Eclipse Angus Mail, and Bouncy Castle**; the SwiftUI iOS preview uses **OpenSSL**. Desktop token operations use bundled **PKCS#11** adapters; Android uses **YubiKit 3.3.0** directly. It supports software identities and keys generated and used on a PQC Ready YubiKey. Formerly **Hybrid Mail**, the project now lives at [ve7jtb/pq-mail](https://github.com/ve7jtb/pq-mail).
 
-## Demonstration video
+## Demonstration videos
 
 [Watch the Google OAuth and post-quantum S/MIME demonstration](https://youtu.be/RGiaAeGTCmc) (3:20). The desktop demo shows Gmail read/send consent, a YubiKey-signed message, and a signed-and-encrypted message decrypted locally with the YubiKey. It uses ML-DSA-87 + ECDSA P-384 signatures and ML-KEM-1024 + ECDH P-384 encryption. PIN prompts are included with their fields masked; unrelated inbox content and pauses are removed. Recorded November 17, 2026 using synthetic messages sent to the same account. The video is unlisted on YouTube and accessible through this link.
+
+[Watch the Android Google OAuth and S/MIME demonstration](https://youtube.com/shorts/NPNeXnc8ozU) (1:30). Recorded on a Pixel 10 on November 19, 2026, this companion video shows Gmail read/send consent, sending a synthetic signed-and-encrypted message to the same account, and reading it with successful local YubiKey decryption and hybrid signature verification. Pauses are trimmed and unrelated inbox rows are covered with opaque masks. PIN/password screens are capture-protected and appear black. Both demonstration videos are unlisted and accessible through their links.
 
 ## On-key certificates and migration
 

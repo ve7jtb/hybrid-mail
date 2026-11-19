@@ -74,7 +74,7 @@ public final class MainActivity extends Activity {
     }
     private synchronized void abandonNfc(){activeNfc=null;var previous=nfcRemoval;nfcRemoval=CompletableFuture.completedFuture(null);previous.completeExceptionally(new CancellationException("Activity paused"));}
     @Override protected void onPause(){stopNfc();abandonNfc();deviceGate.cancel();if(pendingPin!=null)pendingPin.cancel(false);if(pendingStage!=null)pendingStage.cancel(false);super.onPause();}
-    @Override protected void onDestroy(){if(manager!=null){manager.stopUsbDiscovery();stopNfc();}if(pendingPin!=null)pendingPin.cancel(true);worker.shutdownNow();identity=null;super.onDestroy();}
+    @Override protected void onDestroy(){if(manager!=null){manager.stopUsbDiscovery();stopNfc();}if(pendingPin!=null)pendingPin.cancel(true);worker.shutdownNow();gmailAccessToken=null;googleAction=null;if(gmail!=null)gmail.close();identity=null;super.onDestroy();}
     private synchronized void discovered(YubiKeyDevice key){
         if(key instanceof com.yubico.yubikit.android.transport.nfc.NfcYubiKeyDevice nfc){
             if(activeNfc!=null||!nfcRemoval.isDone())return;
@@ -95,10 +95,10 @@ public final class MainActivity extends Activity {
     private EditText field(String hint,String value){return field(page,hint,value,false);}
     private void button(String label,Runnable action){Button b=new Button(this);b.setText(label);b.setAllCaps(false);b.setOnClickListener(v->{if(busy){notice("An operation is still running");return;}action.run();});page.addView(b);}
     private void notice(String s){if(status!=null)status.setText(s);}
-    private void error(Throwable e){Throwable last=e;while(last.getCause()!=null && !(last instanceof PivDiagnostic))last=last.getCause();String message=last.getMessage();new AlertDialog.Builder(this).setTitle("PQ Mail").setMessage(message==null?last.getClass().getSimpleName():message).setPositiveButton("OK",null).show();}
+    private void error(Throwable e){if(e instanceof GmailApi.Unauthorized && gmailAccessToken!=null){String invalid=gmailAccessToken;gmailAccessToken=null;com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient(this).clearToken(com.google.android.gms.auth.api.identity.ClearTokenRequest.builder().setToken(invalid).build());}Throwable last=e;while(last.getCause()!=null && !(last instanceof PivDiagnostic))last=last.getCause();String message=last.getMessage();new AlertDialog.Builder(this).setTitle("PQ Mail").setMessage(message==null?last.getClass().getSimpleName():message).setPositiveButton("OK",null).show();}
     private void work(String message,Work action){if(busy)return;busy=true;notice(message);worker.execute(()->{try{action.run();}catch(Exception e){runOnUiThread(()->error(e));}finally{runOnUiThread(()->{releaseNfc();busy=false;dismissHolding();notice("Ready — you can remove the YubiKey.");});}});}
     private void home(){page("PQ Mail");text("Android preview • S/MIME with software keys or YubiKey USB/NFC\n"+(identity==null?"Select an identity to begin.":identity.signatureAlgorithm()+"\n"+(selected.serial()==0?"Software identity unlocked":"YubiKey "+selected.serial())));
-        button("OpenPGP public identities",this::openPgpKeys);button("Identities & certificates",this::identities);button("Compose signed mail",this::compose);button("Open and verify / decrypt .eml",()->pick(uri->openMessage(read(uri))));button("IMAP inbox & SMTP",this::account);
+        button("OpenPGP public identities",this::openPgpKeys);button("Identities & certificates",this::identities);button("Compose signed mail",this::compose);button("Open and verify / decrypt .eml",()->pick(uri->openMessage(read(uri))));button("Gmail API",this::gmailPage);button("IMAP inbox & SMTP",this::account);
         button("Lock software identity",()->{identity=null;selected=null;outgoing=null;home();});
     }
     private void identities(){page("Identities & certificates");
@@ -467,9 +467,63 @@ public final class MainActivity extends Activity {
             }catch(Exception e){error(e);}});
             if(result.signerCertificate()!=null)button("Trust this signer fingerprint",()->new AlertDialog.Builder(this).setTitle("Trust signer?").setMessage("Compare this SHA-256 fingerprint through a trusted channel before accepting:\n"+result.fingerprint()).setNegativeButton("Cancel",null).setPositiveButton("Trust",(d,w)->{try{store.trust(result.signerCertificate());notice("Fingerprint saved as trusted");}catch(Exception e){error(e);}}).show());});
     }
+    private GmailApi gmail;
+    private boolean gmailSmimeOnly;
+    private String gmailAccessToken, gmailEmail="";
+    private Runnable googleAction;
+    private static final int GOOGLE_AUTH=71;
+    private static final List<String> GOOGLE_SCOPES=List.of("https://www.googleapis.com/auth/gmail.readonly","https://www.googleapis.com/auth/gmail.send");
+    private void authorizeGoogle(Runnable action){
+        if(googleAction!=null){notice("Google authorization is already in progress");return;}googleAction=action;
+        var scopes=GOOGLE_SCOPES.stream().map(com.google.android.gms.common.api.Scope::new).toList();
+        var request=com.google.android.gms.auth.api.identity.AuthorizationRequest.builder().setRequestedScopes(scopes).build();
+        com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient(this).authorize(request).addOnSuccessListener(result->{
+            try{if(result.hasResolution())startIntentSenderForResult(result.getPendingIntent().getIntentSender(),GOOGLE_AUTH,null,0,0,0);else googleAuthorized(result);}catch(Exception e){googleAction=null;error(e);}
+        }).addOnFailureListener(e->{googleAction=null;error(new IOException("Google authorization failed. Check the Android OAuth registration for this app package and signing certificate. "+e.getMessage()));});
+    }
+    private void googleAuthorized(com.google.android.gms.auth.api.identity.AuthorizationResult result)throws Exception{
+        Runnable action=googleAction;
+        if(!result.getGrantedScopes().containsAll(GOOGLE_SCOPES)||result.getAccessToken()==null)throw new IOException("Gmail read and send permission are required. No mail operation performed.");
+        gmailAccessToken=result.getAccessToken();
+        if(gmail==null)gmail=new GmailApi(()->{if(gmailAccessToken==null)throw new IOException("Connect Gmail again");return gmailAccessToken.toCharArray();});
+        worker.execute(()->{try{
+            String account=gmail.accountEmail();
+            runOnUiThread(()->{if(googleAction!=action||isFinishing())return;googleAction=null;
+                if(!gmailEmail.isEmpty()&&!gmailEmail.equalsIgnoreCase(account)){gmail.close();gmail=null;gmailAccessToken=null;gmailEmail="";error(new IOException("Google selected a different account. Connect Gmail again before reading or sending."));return;}
+                gmailEmail=account;if(action!=null)action.run();
+            });
+        }catch(Exception e){runOnUiThread(()->{googleAction=null;error(e);});}});
+    }
+    private void gmailPage(){
+        page("Gmail API");text(gmailEmail.isEmpty()?"Connect your Google account":"Connected: "+gmailEmail);
+        text("Google authorization requests Gmail read and send access only. Messages and headers are held in memory, not cached to disk. Google Play services manages account authorization; PQ Mail does not save a Google OAuth refresh token.");
+        CheckBox filter=new CheckBox(this);filter.setText("S/MIME only");filter.setChecked(gmailSmimeOnly);filter.setOnCheckedChangeListener((v,checked)->gmailSmimeOnly=checked);page.addView(filter);
+        button("Connect Gmail / refresh inbox",()->authorizeGoogle(()->loadGmail(0)));
+        button("Send prepared message via Gmail",()->{
+            if(outgoing==null){error(new IOException("Compose and prepare a message first"));return;}
+            final byte[] message=outgoing.clone();
+            try{var parsed=MailEngine.parse(message);String recipients=Arrays.toString(parsed.getAllRecipients());
+                new AlertDialog.Builder(this).setTitle("Send email now?").setMessage("Send the prepared message to "+recipients+" using the authorized Google account?").setNegativeButton("Cancel",null).setPositiveButton("Send",(d,w)->authorizeGoogle(()->work("Sending through Gmail API…",()->{gmail.send(MailEngine.parse(message));runOnUiThread(()->notice("Message sent via Gmail"));}))).show();
+            }catch(Exception e){error(e);}
+        });
+        button("Disconnect local Gmail session",()->{if(gmail!=null)gmail.close();gmail=null;gmailAccessToken=null;gmailEmail="";googleAction=null;gmailPage();});
+        button("Manual IMAP / SMTP for other hosts",this::account);
+    }
+    private void loadGmail(int direction){work("Loading Gmail inbox…",()->{
+        gmail.setSmimeOnly(gmailSmimeOnly);String email=gmail.accountEmail();if(!gmailEmail.isEmpty()&&!gmailEmail.equalsIgnoreCase(email)){gmail.close();gmail=new GmailApi(()->gmailAccessToken.toCharArray());directionResetGmail(email);return;}
+        gmailEmail=email;var entries=direction<0?gmail.newer():direction>0?gmail.older():gmail.latest();runOnUiThread(()->renderGmail(entries));
+    });}
+    private void directionResetGmail(String email)throws Exception{gmailEmail=email;var entries=gmail.latest();runOnUiThread(()->renderGmail(entries));}
+    private void renderGmail(List<ImapInbox.Entry> entries){
+        page("Gmail inbox — "+gmailEmail);button("Gmail account & send",this::gmailPage);button("Refresh",()->authorizeGoogle(()->loadGmail(0)));
+        if(gmail.hasNewer())button("Newer",()->authorizeGoogle(()->loadGmail(-1)));if(gmail.hasOlder())button("Older",()->authorizeGoogle(()->loadGmail(1)));
+        if(entries.isEmpty())text("No messages on this page");
+        for(var entry:entries)button(entry.sender()+"\n"+entry.subject(),()->authorizeGoogle(()->work("Opening Gmail message…",()->openMessage(MailEngine.encode(gmail.message(entry.uid()))))));
+    }
+
     private void account(){page("IMAP inbox & SMTP");var prefs=getSharedPreferences("mail",0);
         EditText user=field("Account username",prefs.getString("user",from)),imap=field("IMAP TLS host (port 993)",prefs.getString("imap","")),smtp=field("SMTP STARTTLS host (port 587)",prefs.getString("smtp",""));
-        EditText pass=field(page,"App password (not saved)","",true);text("TLS is required. Gmail requires an app password where permitted; Google OAuth sign-in is not included in this Android preview.");
+        EditText pass=field(page,"App password (not saved)","",true);text("TLS is required. For Google accounts, use Gmail API from the main menu.");
         button("Load 10 most recent messages",()->{String u=user.getText().toString(),h=imap.getText().toString(),credential=pass.getText().toString();pass.getText().clear();prefs.edit().putString("user",u).putString("imap",h).putString("smtp",smtp.getText().toString()).apply();
             work("Connecting to IMAP…",()->{try(var inbox=ImapInbox.connect(h,993,u,credential,false)){var entries=inbox.latest();List<byte[]> messages=new ArrayList<>();for(var entry:entries)messages.add(MailEngine.encode(inbox.message(entry.uid())));runOnUiThread(()->{page("Recent inbox");for(int i=0;i<entries.size();i++){int n=i;var e=entries.get(i);button(e.sender()+"\n"+e.subject(),()->work("Verifying message…",()->openMessage(messages.get(n))));}});}});});
         button("Send prepared message via SMTP",()->{if(outgoing==null){error(new Exception("Compose and prepare a message first"));return;}String h=smtp.getText().toString(),u=user.getText().toString();
@@ -479,5 +533,5 @@ public final class MainActivity extends Activity {
     private byte[] read(Uri uri)throws Exception {try(var in=getContentResolver().openInputStream(uri);var out=new ByteArrayOutputStream()){if(in==null)throw new IOException("Cannot open file");byte[] block=new byte[8192];int n;while((n=in.read(block))!=-1){if(out.size()+n>MailEngine.MAX_MESSAGE)throw new IOException("File exceeds 20 MiB");out.write(block,0,n);}return out.toByteArray();}}
     private void exportCert(X509Certificate cert,String name){try{export(cert.getEncoded(),name,"application/pkix-cert");}catch(Exception e){error(e);}}
     private void export(byte[] bytes,String name,String mime){exportBytes=bytes;startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType(mime).addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,name),2);}
-    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null){exportBytes=null;documentAction=null;return;}Uri uri=data.getData();if(request==1){IoAction action=documentAction;documentAction=null;work("Opening file…",()->action.accept(uri));}else if(request==2){byte[] bytes=exportBytes;exportBytes=null;work("Saving file…",()->{try(var out=getContentResolver().openOutputStream(uri,"wt")){if(out==null)throw new IOException("Cannot save file");out.write(bytes);}});}}
+    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==GOOGLE_AUTH){if(result!=RESULT_OK||data==null){googleAction=null;notice("Google authorization cancelled");return;}try{googleAuthorized(com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient(this).getAuthorizationResultFromIntent(data));}catch(Exception e){googleAction=null;error(e);}return;}if(result!=RESULT_OK||data==null){exportBytes=null;documentAction=null;return;}Uri uri=data.getData();if(request==1){IoAction action=documentAction;documentAction=null;work("Opening file…",()->action.accept(uri));}else if(request==2){byte[] bytes=exportBytes;exportBytes=null;work("Saving file…",()->{try(var out=getContentResolver().openOutputStream(uri,"wt")){if(out==null)throw new IOException("Cannot save file");out.write(bytes);}});}}
 }

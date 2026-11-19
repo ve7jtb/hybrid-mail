@@ -28,7 +28,7 @@ for old in libs.glob('*.jar'): old.unlink()
 jars=list((root.parent/'lib').glob('*.jar'))
 assert len(jars)>=8, 'Build desktop dependencies first: scripts/build-dependencies.sh'
 for p in jars:
-    if p.name.startswith(('gson', 'jakarta.activation', 'angus-activation')): continue
+    if p.name.startswith(('jakarta.activation', 'angus-activation')): continue
     with zipfile.ZipFile(p) as source, zipfile.ZipFile(libs/p.name,'w',zipfile.ZIP_DEFLATED) as dest:
         for item in source.infolist():
             n=item.filename

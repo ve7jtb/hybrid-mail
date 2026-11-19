@@ -35,6 +35,7 @@ tasks.register('prepareShared', Exec) {
 }
 tasks.named('preBuild').configure { dependsOn 'prepareShared' }
 dependencies {
+    implementation 'com.google.android.gms:play-services-auth:22.0.0'
     implementation fileTree(dir: "$buildDir/android-libs", include: ['*.jar'])
     implementation 'com.yubico.yubikit:android:3.3.0'
     implementation 'com.yubico.yubikit:piv:3.3.0'

@@ -42,7 +42,10 @@ Use **Keys → Forget YubiKey identity…** to remove one local YubiKey profile,
 
 ## Android preview
 
-An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB and NFC**, with the same three software `.p12`, pure PQ, and hybrid profiles. It includes local S/MIME, IMAPS/SMTP, and public-only YubiKey identities. See the Android guide for build instructions, hardware testing, and preview limitations; Google OAuth and token provisioning remain desktop features.
+**Android-to-desktop Gmail interoperability (November 19, 2026):** On a Pixel 10, PQ Mail signed a synthetic message with a Level 5 YubiKey identity (ML-DSA-87 + ECDSA P-384), encrypted it for ML-KEM-1024 + ECDH P-384, and sent it to the same account through the Gmail API. Desktop PQ Mail received it through Gmail, decrypted it using the matching YubiKey, and displayed **SIGNATURE VALID** with the synthetic body. The signer fingerprint matched the Android certificate and the outer From address matched its email. The signer remained untrusted: cryptographic verification did not grant trust. No keys or touch policies were changed. This validates this S/MIME path; it is not an OpenPGP or all-transport hardware claim.
+
+
+An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB and NFC**, with the same three software `.p12`, pure PQ, and hybrid profiles. It includes local S/MIME, Gmail API read/send with Google OAuth, IMAPS/SMTP for other hosts, and public-only YubiKey identities. See the Android guide for build instructions, hardware testing, and preview limitations; token provisioning remains a desktop feature.
 
 ## iOS development preview
 
@@ -114,7 +117,7 @@ not establish v6 or post-quantum interoperability.
 | S/MIME attachments | Yes | Yes | Not yet |
 | Conventional RSA/ECDSA S/MIME | Yes | Yes | Not yet |
 | IMAPS inbox / SMTP | Yes | Yes | Not yet |
-| Gmail API / Google OAuth | Yes | Not yet | Not yet |
+| Gmail API / Google OAuth | Yes | Yes | Not yet |
 | Persistent certificate trust | Yes | Yes | Verification only; no automatic trust |
 
 Level 3 OpenPGP validation includes published draft vectors, desktop/Android adapter tests, Swift tests and bidirectional Java/OpenSSL message exchange. Level 5 classical validation includes software/simulated-token round trips, Android instrumentation, and independent Bouncy Castle signature verification and bidirectional ECDH/v2-SEIPD exchange. A Level 3 hybrid OpenPGP USB round trip was reported successful by the tester; unlike the saved S/MIME tests, that manual flow did not persist a hardware report. Physical OpenPGP NFC and Windows runtime testing remain pending. Existing S/MIME hardware test results do not constitute OpenPGP hardware validation.

@@ -47,6 +47,8 @@ public final class MailApp extends JFrame {
     private MailInbox inbox;
     private final JCheckBox smimeInboxOnly=new JCheckBox("S/MIME only");
     private final JButton newerMail=new JButton("Newer"),olderMail=new JButton("Older");
+    private MicrosoftOAuth.Token microsoftToken;
+    private final JLabel microsoftLabel=new JLabel("Microsoft: signed out");
     private GoogleOAuth.Token googleToken;
     private String googleEmail;
     private java.util.List<ImapInbox.Entry> inboxEntries=java.util.List.of();
@@ -249,10 +251,10 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     }
     private JPanel inboxPanel(){
         JPanel p=panel();JPanel top=new JPanel(new GridLayout(0,1,0,6));
-        top.add(inboxLabel);top.add(googleLabel);
+        top.add(inboxLabel);top.add(googleLabel);top.add(microsoftLabel);
         JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT));
         actions.add(button("Connect IMAP…",()->connectInbox(false)));
-        actions.add(button("Connect Gmail",()->connectInbox(true)));
+        actions.add(button("Connect Gmail",()->connectInbox(true)));actions.add(button("Connect Hotmail / Outlook",this::connectMicrosoft));
         actions.add(button("Refresh",this::refreshInbox));
         newerMail.setEnabled(false);olderMail.setEnabled(false);newerMail.addActionListener(e->gmailPage(false));olderMail.addActionListener(e->gmailPage(true));actions.add(newerMail);actions.add(olderMail);
         smimeInboxOnly.setEnabled(false);smimeInboxOnly.addActionListener(e->{if(inbox instanceof GmailApi api){api.setSmimeOnly(smimeInboxOnly.isSelected());refreshInbox();}});actions.add(smimeInboxOnly);
@@ -261,7 +263,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         google.add(button("Sign in with Google…",this::signInGoogle));
         google.add(button("Sign out of Google",this::signOutGoogle));
         google.add(button("Advanced settings…",this::googleAdvancedSettings));
-        top.add(google);top.add(left(button("Mail servers…",this::mailServerSettings),new JLabel("Manual IMAP / SMTP settings · passwords requested at connection")));p.add(top,BorderLayout.NORTH);
+        top.add(google);top.add(left(button("Sign in with Microsoft…",this::signInMicrosoft),button("Sign out of Microsoft",this::signOutMicrosoft),button("Microsoft advanced settings…",this::microsoftSettings)));top.add(left(button("Mail servers…",this::mailServerSettings),new JLabel("Manual IMAP / SMTP settings · passwords requested at connection")));p.add(top,BorderLayout.NORTH);
         inboxTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);inboxTable.setRowHeight(30);inboxTable.setAutoCreateRowSorter(true);
         // Mail headers are untrusted; disable Swing's implicit HTML renderer.
         inboxTable.setDefaultRenderer(Object.class,new javax.swing.table.DefaultTableCellRenderer(){
@@ -289,10 +291,10 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         var format=java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(java.time.ZoneId.systemDefault());
         for(var entry:entries)inboxModel.addRow(new Object[]{entry.sender(),entry.subject(),entry.received()==null?"":format.format(entry.received())});
         smimeInboxOnly.setEnabled(inbox instanceof GmailApi);
-        newerMail.setEnabled(inbox instanceof GmailApi g&&g.hasNewer());olderMail.setEnabled(inbox instanceof GmailApi g&&g.hasOlder());
+        newerMail.setEnabled(inbox instanceof GmailApi g&&g.hasNewer()||inbox instanceof MicrosoftGraph m&&m.hasNewer());olderMail.setEnabled(inbox instanceof GmailApi g&&g.hasOlder()||inbox instanceof MicrosoftGraph m&&m.hasOlder());
         status.setText(entries.isEmpty()?"No matching messages on this page; use Older if available":"Showing "+entries.size()+" messages, newest first"+(inbox instanceof GmailApi?" · use Older/Newer for the entire inbox":""));
     }
-    private void gmailPage(boolean older){if(!(inbox instanceof GmailApi api))return;job("Loading Gmail headers…",()->older?api.older():api.newer(),this::showInbox);}
+    private void gmailPage(boolean older){if(inbox instanceof MicrosoftGraph api){job("Loading Microsoft headers…",()->older?api.older():api.newer(),this::showInbox);return;}if(!(inbox instanceof GmailApi api))return;job("Loading Gmail headers…",()->older?api.older():api.newer(),this::showInbox);}
     private void refreshInbox(){if(inbox==null){error(new IOException("Connect to an inbox first"));return;}job("Refreshing inbox…",()->inbox.latest(),this::showInbox);}
     private void disconnectInbox(){
         MailInbox previous=inbox;inbox=null;smimeInboxOnly.setEnabled(false);newerMail.setEnabled(false);olderMail.setEnabled(false);inboxEntries=java.util.List.of();inboxModel.setRowCount(0);inboxLabel.setText("Not connected");
@@ -356,6 +358,49 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     }
     private Account googleAccount(boolean smtp){
         try{if(googleToken==null||!googleToken.valid()){if(googleToken!=null)googleToken.close();googleToken=restoreGoogleSession();}return new Account(smtp?"smtp.gmail.com":"imap.gmail.com",smtp?587:993,googleEmail,googleToken.credential(),true);}catch(Exception e){error(e);tabs.setSelectedIndex(3);return null;}
+    }
+    private void microsoftSettings(){
+        try {
+        JTextField id=new JTextField(state().get("microsoft.client.id",""),38);
+        JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("Optional custom Microsoft public application ID (blank uses shared PQ Mail client)"));form.add(id);form.add(new JLabel("No client secret. Personal accounts; desktop redirect http://localhost"));
+        if(JOptionPane.showConfirmDialog(this,form,"Microsoft advanced settings",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+        try{String value=id.getText().trim();if(!value.isEmpty())new MicrosoftOAuth.Client(value);state().set("microsoft.client.id",value);state().save();if(microsoftToken!=null)microsoftToken.close();microsoftToken=null;status.setText("Microsoft client updated. Sign in again.");}catch(Exception e){error(e);}
+        }catch(Exception e){error(e);}
+    }
+    private void signInMicrosoft(){
+        try{
+            var client=MicrosoftSession.client(state());
+            String hint=state().get("microsoft.email","");
+            if(JOptionPane.showConfirmDialog(this,"Sign in with your personal Hotmail / Outlook.com account.\nAllow reading and sending mail and basic account identification. No modify/delete permission.\nYour Microsoft OAuth refresh token will be saved in "+credentialStore()+" until local sign-out.","Sign in with Microsoft",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+            var cancelled=new java.util.concurrent.atomic.AtomicBoolean();
+            JDialog progress=new JDialog(this,"Microsoft sign-in",false);JPanel content=new JPanel(new BorderLayout(12,12));content.setBorder(new EmptyBorder(20,20,20,20));content.add(new JLabel("Complete Microsoft sign-in in your browser."));content.add(button("Cancel",()->cancelled.set(true)),BorderLayout.SOUTH);progress.setContentPane(content);progress.pack();progress.setLocationRelativeTo(this);progress.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);progress.addWindowListener(new java.awt.event.WindowAdapter(){public void windowClosing(java.awt.event.WindowEvent e){cancelled.set(true);}});progress.setVisible(true);
+            job("Waiting for Microsoft sign-in…",()->{
+                try{var token=MicrosoftOAuth.authorize(client,hint,uri->{try{Desktop.getDesktop().browse(uri);}catch(Exception e){throw new IllegalStateException("Cannot open browser");}},cancelled::get);
+                    try(var api=new MicrosoftGraph(token::credential)){String email=api.account();if(cancelled.get())throw new IOException("Microsoft sign-in cancelled");MicrosoftSession.save(client,email,token);state().set("microsoft.email",email);state().save();return token;}catch(Exception e){token.close();throw e;}
+                }finally{SwingUtilities.invokeLater(progress::dispose);}
+            },token->{try{if(microsoftToken!=null)microsoftToken.close();microsoftToken=token;microsoftLabel.setText("Microsoft: "+state().get("microsoft.email","")+" · saved in "+credentialStore());status.setText("Microsoft sign-in ready. Connect Hotmail / Outlook to read mail.");}catch(Exception e){error(e);}});
+        }catch(Exception e){error(e);}
+    }
+    private synchronized char[] microsoftCredential()throws Exception{
+        if(microsoftToken==null||!microsoftToken.valid()){if(microsoftToken!=null)microsoftToken.close();microsoftToken=MicrosoftSession.restore(MicrosoftSession.client(state()),state().get("microsoft.email",""));}
+        return microsoftToken.credential();
+    }
+    private void connectMicrosoft(){
+        job("Connecting to Hotmail / Outlook…",()->{
+            var api=new MicrosoftGraph(this::microsoftCredential);
+            try{api.verifyAccount(state().get("microsoft.email",""));var entries=api.latest();if(inbox!=null)inbox.close();inbox=api;return entries;}catch(Exception e){api.close();throw e;}
+        },entries->{try{showInbox(entries);microsoftLabel.setText("Microsoft: "+state().get("microsoft.email",""));inboxLabel.setText(state().get("microsoft.email","")+" · Microsoft Graph · 50 per page · no disk cache");tabs.setSelectedIndex(3);}catch(Exception e){error(e);}});
+    }
+    private Account microsoftAccount(){
+        try{
+            String email=state().get("microsoft.email","");if(email.isBlank())throw new IOException("Sign in with Microsoft from Inbox first.");
+            // Token acquisition and refresh happen in the background send worker.
+            MicrosoftSession.client(state());return new Account("graph.microsoft.com",443,email,new char[0],true);
+        }catch(Exception e){error(e);tabs.setSelectedIndex(3);return null;}
+    }
+    private void signOutMicrosoft(){
+        if(inbox instanceof MicrosoftGraph)disconnectInbox();
+        job("Removing Microsoft OAuth refresh token…",()->{synchronized(this){if(microsoftToken!=null)microsoftToken.close();microsoftToken=null;MacKeychain.delete("microsoft-session");}return true;},ok->{microsoftLabel.setText("Microsoft: signed out");status.setText("Microsoft OAuth refresh token removed locally. Access can also be revoked in your Microsoft account.");});
     }
     private JPanel certificatesPanel(){
         JPanel p=panel();JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -786,13 +831,13 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         job(send?"Signing and sending…":"Signing and saving…",()->{
             try {
                 MimeMessage m=pgp?MailEngine.parse(OpenPgp.composeForRecipient(id,OpenPgp.loadOwn(state().directory(),id),pgpTo,pgpEncrypt,f,t,s,b,backend)):MailEngine.compose(id,f,t,s,b,r,backend,files);
-                if(send){if(a.oauth){try(var api=new GmailApi(this::googleCredential)){api.verifyAccount(a.user);api.send(m);}}else MailEngine.send(m,a.host,a.port,a.user,new String(a.password),false);}
+                if(send){if(a.host.equals("graph.microsoft.com")){try(var api=new MicrosoftGraph(this::microsoftCredential)){api.verifyAccount(a.user);api.send(m);}}else if(a.oauth){try(var api=new GmailApi(this::googleCredential)){api.verifyAccount(a.user);api.send(m);}}else MailEngine.send(m,a.host,a.port,a.user,new String(a.password),false);}
                 else Files.write(file,MailEngine.encode(m),StandardOpenOption.CREATE_NEW);
                 return send?"Message sent":"Saved "+file.getFileName();
             } finally {if(a!=null)Arrays.fill(a.password,'\0');}
         },result->{
             status.setText(result);
-            if(send){JTextArea receipt=new JTextArea("Message sent\n\nTo: "+t+"\nSubject: "+s+"\nVia: "+(a.oauth?"Gmail API":a.host)+"\n\nThe sending service accepted the message. This is not a delivery or read receipt.",7,58);receipt.setEditable(false);receipt.setLineWrap(true);receipt.setWrapStyleWord(true);receipt.setOpaque(false);JOptionPane.showMessageDialog(this,receipt,"Message sent",JOptionPane.INFORMATION_MESSAGE);}
+            if(send){JTextArea receipt=new JTextArea("Message sent\n\nTo: "+t+"\nSubject: "+s+"\nVia: "+(a.host.equals("graph.microsoft.com")?"Microsoft Graph":a.oauth?"Gmail API":a.host)+"\n\nThe sending service accepted the message. This is not a delivery or read receipt.",7,58);receipt.setEditable(false);receipt.setLineWrap(true);receipt.setWrapStyleWord(true);receipt.setOpaque(false);JOptionPane.showMessageDialog(this,receipt,"Message sent",JOptionPane.INFORMATION_MESSAGE);}
         });
     }
     private ReadResult display(MimeMessage message,Identity id,X509Certificate pin)throws Exception {
@@ -811,6 +856,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             for(var signer:candidates)try{var opened=OpenPgp.open(encoded,signer,own,id,kemAdapter==null?null:ExternalKem.executable(kemAdapter));opened=new OpenPgp.Opened(opened.text(),opened.email(),opened.fingerprint(),opened.encrypted(),signer.matchesEmail(mailbox),opened.profile(),opened.postQuantum());return new ReadResult(opened.display(),null,message.getSubject(),opened,signer.matchesEmail(mailbox)?mailbox:null,signer);}catch(Exception e){failure=e;}
             throw failure==null?new IOException("No matching OpenPGP signer certificate"):failure;
         }
+        message=MailEngine.normalizeSmime(message);
         if(MailPreview.isOrdinary(message))return new ReadResult(MailPreview.display(message),null,message.getSubject());
         var opened=MailEngine.open(message,id,pin,kemAdapter==null?null:ExternalKem.executable(kemAdapter));
         return new ReadResult(null,opened,message.getSubject());
@@ -906,7 +952,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     }
     private record Account(String host,int port,String user,char[] password,boolean oauth){}
     private Account account(boolean smtp){
-        if(smtp){Object[] choices={"Gmail API","Other host (SMTP)","Cancel"};int choice=JOptionPane.showOptionDialog(this,"Choose how to authenticate for sending","Send using",JOptionPane.DEFAULT_OPTION,JOptionPane.QUESTION_MESSAGE,null,choices,choices[0]);if(choice==0)return googleAccount(true);if(choice!=1)return null;}
+        if(smtp){Object[] choices={"Gmail API","Hotmail / Outlook (Microsoft)","Other host (SMTP)","Cancel"};int choice=JOptionPane.showOptionDialog(this,"Choose how to authenticate for sending","Send using",JOptionPane.DEFAULT_OPTION,JOptionPane.QUESTION_MESSAGE,null,choices,choices[0]);if(choice==0)return googleAccount(true);if(choice==1)return microsoftAccount();if(choice!=2)return null;}
         String prefix=smtp?"smtp.":"imap.";
         DesktopState settings;try{settings=state();}catch(Exception e){error(e);return null;}
         JTextField host=new JTextField(settings.get(prefix+"host","")),port=new JTextField(settings.get(prefix+"port",smtp?"587":"993")),user=new JTextField(settings.get(prefix+"user",from.getText()));JPasswordField pass=new JPasswordField();

@@ -118,6 +118,32 @@ public final class MailEngine {
         if (bytes.length > MAX_MESSAGE) throw new IOException("Message exceeds 20 MiB limit");
         return new MimeMessage(session(), new ByteArrayInputStream(bytes));
     }
+    /** Some mail transports wrap CMS as an attachment and discard smime-type. */
+    static MimeMessage normalizeSmime(MimeMessage message)throws Exception {
+        Part cms=message;
+        if(message.isMimeType("multipart/mixed")){
+            Multipart mixed=(Multipart)message.getContent();Part candidate=null;
+            for(int i=0;i<mixed.getCount();i++){
+                Part child=mixed.getBodyPart(i);
+                if(child.isMimeType("application/pkcs7-mime")||child.isMimeType("application/x-pkcs7-mime")){
+                    if(candidate!=null)throw new GeneralSecurityException("Multiple S/MIME attachments; select one explicitly");candidate=child;
+                }
+            }
+            if(candidate==null)return message;cms=candidate;
+        }
+        if(!cms.isMimeType("application/pkcs7-mime")&&!cms.isMimeType("application/x-pkcs7-mime"))return message;
+        byte[] bytes;try(var in=cms.getInputStream()){bytes=readBounded(in,MAX_MESSAGE);}
+        var info=org.bouncycastle.asn1.cms.ContentInfo.getInstance(org.bouncycastle.asn1.ASN1Primitive.fromByteArray(bytes));
+        String type;
+        if(info.getContentType().equals(org.bouncycastle.asn1.cms.CMSObjectIdentifiers.authEnvelopedData))type="authEnveloped-data";
+        else if(info.getContentType().equals(org.bouncycastle.asn1.cms.CMSObjectIdentifiers.envelopedData))type="enveloped-data";
+        else if(info.getContentType().equals(org.bouncycastle.asn1.cms.CMSObjectIdentifiers.signedData))type="signed-data";
+        else throw new GeneralSecurityException("Unsupported CMS content type");
+        var copy=new MimeMessage(message);
+        copy.setDataHandler(new DataHandler(new ByteArrayDataSource(bytes,"application/pkcs7-mime; smime-type="+type)));
+        copy.setHeader("Content-Type","application/pkcs7-mime; smime-type="+type);
+        copy.setHeader("Content-Transfer-Encoding","base64");return copy;
+    }
     public record Opened(String text, boolean encrypted, String signatureAlgorithm, String fingerprint, boolean pinned, boolean fromMatches, X509Certificate signerCertificate, List<Attachment> attachments) {
         public Opened { attachments=List.copyOf(attachments); }
     }
@@ -126,6 +152,7 @@ public final class MailEngine {
     }
     @SuppressWarnings("unchecked")
     public static Opened open(MimeMessage message,Identity id,X509Certificate pinned,ExternalKem.Backend token)throws Exception {
+        message=normalizeSmime(message);
         Part part = message;
         String smimeType=new ContentType(part.getContentType()).getParameter("smime-type");
         boolean authenticated="authEnveloped-data".equalsIgnoreCase(smimeType);

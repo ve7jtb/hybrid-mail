@@ -9,7 +9,7 @@ final class MacKeychain {
     static byte[] call(String operation,String account,byte[] input)throws IOException{
         Path helper=DesktopState.resources().resolve(DesktopState.windows()?"native/bin/hybrid-mail-credentials.exe":DesktopState.linux()?"native/bin/hybrid-mail-credentials":"native/bin/hybrid-mail-keychain");
         Path protectedHelper=DesktopState.resources().resolve("../Helpers/PQMailKeychain.app/Contents/MacOS/PQMailKeychain").normalize();
-        if(!DesktopState.windows()&&Files.isExecutable(protectedHelper))helper=protectedHelper;
+        if(!account.equals("microsoft-session")&&!DesktopState.windows()&&Files.isExecutable(protectedHelper))helper=protectedHelper;
         if(!Files.isExecutable(helper))helper=Path.of("build/native/hybrid-mail-keychain").toAbsolutePath();
         if(!Files.isExecutable(helper))throw new IOException("Credential-store helper is unavailable. Use the packaged desktop app.");
         Process process=new ProcessBuilder(helper.toString(),operation,account).redirectError(ProcessBuilder.Redirect.DISCARD).start();

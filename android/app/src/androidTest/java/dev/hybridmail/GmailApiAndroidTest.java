@@ -30,6 +30,7 @@ public final class GmailApiAndroidTest {
    api.setSmimeOnly(true);check(api.latest().isEmpty()&&api.hasOlder(),"filtered empty page preserves navigation without body downloads");api.setSmimeOnly(false);var first=api.latest();long uid=first.get(0).uid();check(first.get(0).subject().equals("café")&&api.hasOlder()&&!api.hasNewer(),"decoded headers and first-page controls");
    api.older();check(!api.hasOlder()&&api.hasNewer(),"older page controls");reject(()->api.message(uid),"previous page no longer retained");
    var back=api.newer();check(api.hasOlder()&&!api.hasNewer(),"return to newer page");
+   api.setSearch("from:a@example.test subject:hello");api.latest();check(!api.hasNewer()&&api.pageNumber()==1,"search resets cursor");check(calls.stream().anyMatch(r->r.path().contains("q=from%3Aa%40example.test+subject%3Ahello")),"server search encoded");back=api.latest();
    for(var profile:TokenProfile.values())for(var id:Identity.generateSoftwareProfile("a@example.test",profile,List.of()))for(boolean encrypt:new boolean[]{false,true}){
     var m=MailEngine.compose(id,"a@example.test","a@example.test","API","MIME preserved café",encrypt?id.encryptionCert():null,null);
     byte[] original=MailEngine.encode(m);api.send(m);check(Arrays.equals(original,wire[0]),"raw MIME bytes preserved on send");

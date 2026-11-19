@@ -201,12 +201,50 @@ Compose defaults to OpenPGP for identities that support outgoing OpenPGP. It sel
 
 ## Gmail API and Google authorization
 
-Open **Gmail API → Connect Gmail / refresh inbox** and authorize Gmail read and send access. The Android app uses Google Play services AuthorizationClient (22.0.0), not the desktop loopback OAuth flow. The Google project must contain an Android OAuth client for package `org.pqmail.android` and the APK signing certificate SHA-1; no client secret is embedded. A differently signed release needs its own matching Android client registration.
+On the first screen choose **Continue with Google** (or **Reconnect Gmail**) and authorize Gmail read and send access. The Android app uses Google Play services AuthorizationClient (22.0.0), not the desktop loopback OAuth flow. The Google project must contain an Android OAuth client for package `org.pqmail.android` and the APK signing certificate SHA-1; no client secret is embedded. A differently signed release needs its own matching Android client registration.
 
-The inbox pages through 50 messages with Older/Newer controls and an optional S/MIME-only filter. Headers are fetched for the current page; raw MIME is downloaded when a message is opened. Messages and headers remain in memory. Gmail raw send preserves the prepared S/MIME or PGP/MIME bytes and requires a confirmation. Prepare the message in Compose first, then use **Gmail API → Send prepared message via Gmail**. A failed or ambiguous send is never automatically retried; check Sent before retrying.
+The inbox pages through 50 messages with Older/Newer controls, Gmail search syntax, and an optional S/MIME-only filter. Headers are fetched for the current page; raw MIME is downloaded when a message is opened. Messages and headers remain in memory. Gmail raw send preserves the prepared S/MIME or PGP/MIME bytes and requires a confirmation. Choose **Compose**, select an identity if requested, then **Sign and review message → Send message**. Saving an .eml copy is optional. A failed or ambiguous send is never automatically retried; check Sent before retrying.
 
 Only `gmail.readonly` and `gmail.send` are requested. Google Play services maintains authorization; PQ Mail stores neither an OAuth refresh token nor access tokens on disk. After a restart, Connect Gmail obtains a new access token without repeat consent when Google's grant remains valid. Disconnect clears the app's in-memory session; it does not revoke the Google grant. Account changes are rejected before message access/sending. Manual IMAP/SMTP remains available for other providers.
 
 Pixel 10 synthetic transport tests passed for pagination, metadata-only listing, MIME preservation, all six pure/hybrid S/MIME profiles with and without encryption, temporary-token clearing, sanitized API errors, and Compose defaults. These tests use a fake transport and do not send email. Live Google authorization and inbox loading also passed on the Pixel 10. Google reused an existing PQ Mail grant without another consent screen; the app verified that both read and send scopes were granted. A live read-only test downloaded and verified a synthetic hybrid S/MIME message without saving its body or changing trust.
 
 **Android-to-desktop Gmail interoperability (November 19, 2026):** On a Pixel 10, PQ Mail signed a synthetic message with a Level 5 YubiKey identity (ML-DSA-87 + ECDSA P-384), encrypted it for ML-KEM-1024 + ECDH P-384, and sent it to the same account through the Gmail API. Desktop PQ Mail received it through Gmail, decrypted it using the matching YubiKey, and displayed **SIGNATURE VALID** with the synthetic body. The signer fingerprint matched the Android certificate and the outer From address matched its email. The signer remained untrusted: cryptographic verification did not grant trust. No keys or touch policies were changed. This validates this S/MIME path; it is not an OpenPGP or all-transport hardware claim.
+
+### Temporary demonstration recording
+
+Screenshots and screen recording are blocked by default. For an OAuth demonstration,
+choose **Settings → Temporary demo recording…** and confirm **Enable recording**.
+The in-memory permission lasts at most 15 minutes, is not restored after an app restart,
+and can be ended with **Stop recording mode**. Use Android's **Entire screen** recorder
+so Google's separate consent screen can also appear. Recording mode exposes message
+bodies, inbox headers and addresses: use synthetic mail and review/redact before sharing.
+
+PIN, software password and YubiKey management-key dialogs keep both their own window
+and the underlying activity secure. The manual IMAP/SMTP password page stays secure.
+Background activity snapshots are protected. Google controls recording of its own
+consent/sign-in screens. Black frames during protected credential entry are expected.
+
+## Mail-first Android navigation
+
+The opening screen selects Google, Microsoft (Hotmail/Outlook.com), or another IMAP/SMTP provider and connects or reconnects. The inbox uses sender/subject cards, Search, Newer/Older paging, Refresh and Compose. Settings contains identities, public certificates, account configuration, file import and the temporary recording option. Selecting an identity from Compose returns to Compose. Existing YubiKey identities and trust records are preserved.
+
+Other providers use read-only IMAP over TLS on port 993 and SMTP STARTTLS on port 587. IMAP shows 20 messages per page and searches sender or subject on the server. Only visible-page headers and opened messages are fetched; the IMAP session also retains matching UIDs in memory. Hostnames and username persist; passwords are requested in protected dialogs and are not saved. Gmail queries are restricted to the inbox. Ordinary unsigned text/HTML mail is displayed as text with an explicit unverified-sender label; remote HTML content is never loaded. Cryptographically protected MIME still goes through verification/decryption.
+
+## Hotmail / Outlook.com on Android
+
+Choose **Continue with Microsoft · Hotmail / Outlook** (or **Reconnect Hotmail / Outlook**) on the opening screen. Sign in through Microsoft's browser page and consent to **Mail.Read**, **Mail.Send**, and **User.Read**. The shared PQ Mail application registration includes the Android preview package and signing hash. A differently signed release needs its own matching Android redirect. Microsoft MSAL 8.7.0 manages the protected local OAuth cache and refresh; PQ Mail does not store the account password or serialize Microsoft tokens.
+
+Microsoft Graph provides 50-message inbox pages, Older/Newer navigation, subject search, raw MIME reads, and confirmed MIME sends. Search is subject text, not Gmail query syntax. Only visible-page headers and explicitly opened bodies are loaded, in memory. Existing S/MIME and OpenPGP verification/decryption remains local. Message send success means Graph accepted the message; a failed or ambiguous send is never automatically retried.
+
+**Settings → Microsoft account** provides reconnect, local mailbox disconnect (keeps the MSAL session), and sign-out on this device (removes the app's Microsoft session; browser cookies may remain). This registration currently targets personal Microsoft accounts, including Hotmail and Outlook.com. Gmail and manual IMAP/SMTP remain available. The fixed teal/lime loading banner is visible during connection and inbox operations.
+
+Microsoft references: [Android MSAL configuration](https://learn.microsoft.com/en-us/entra/msal/android/msal-configuration), [Graph message listing](https://learn.microsoft.com/en-us/graph/api/user-list-messages).
+
+## Live mail-first interface validation
+
+**Mail-first Android interface:** Start by selecting Gmail, Hotmail/Outlook.com, or another IMAP/SMTP provider and signing in or reconnecting. The inbox has sender/subject cards, Search, Newer/Older paging, Refresh and Compose. Identities, certificates, account options and file tools are under **Settings**. Dark teal headers and lime controls match the app icon; a fixed loading banner stays visible during connection, search, refresh and paging. Compose guides users to identity selection when needed, then offers review and confirmed sending; exporting an `.eml` is optional.
+
+**Live Pixel 10 inbox checks (November 19, 2026):** Gmail and Hotmail both passed reconnect, subject search with matching and empty results, opening a signed synthetic message through its inbox card, visible signature verification and sender/certificate matching, and clearing search back to page 1. Gmail verified **ML-DSA-87 + ECDSA P-384**; Hotmail verified **ML-DSA-65**. Older/Newer passed for both: Gmail used a diagnostic-only two-message page because the inbox fit on one normal page, then restored the normal size; Hotmail used normal 50-message pages. No messages were sent, trust changed, or message contents/OAuth tokens written to the test reports. These checks validate signed-message reading, not a new encrypted-send hardware test.
+
+Gmail supports Gmail search syntax and an optional S/MIME-only filter. Hotmail uses Microsoft Graph with subject-text search and MSAL-managed authorization/session restoration. Manual IMAP uses 20-message pages and sender/subject search. Ordinary unsigned text/HTML mail is shown as text with an unverified-sender label; remote HTML resources are not loaded. Mail headers and opened bodies remain in memory unless explicitly exported.

@@ -1,0 +1,9 @@
+{
+ "client_id":"a8ec73d4-2c8c-465b-9570-6cbe34857fab",
+ "redirect_uri":"msauth://org.pqmail.android/blzVMjzH3J0y9UioCkOtwsqCWdg%3D",
+ "broker_redirect_uri_registered":false,
+ "authorization_user_agent":"BROWSER",
+ "account_mode":"SINGLE",
+ "authorities":[{"type":"AAD","audience":{"type":"PersonalMicrosoftAccount"}}],
+ "logging":{"pii_enabled":false,"log_level":"ERROR"}
+}

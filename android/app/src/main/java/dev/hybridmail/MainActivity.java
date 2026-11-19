@@ -28,8 +28,22 @@ public final class MainActivity extends Activity {
     private volatile String lastTransport="unknown";
     private YubiKitManager manager;
     private AndroidStore store;
+    private RecordingProtection recording;
+    private String mailboxProvider="",mailSearch="",imapUser="",smtpHost="";
+    private AndroidImapMailbox imapMailbox;
+    private List<ImapInbox.Entry> inboxEntries=List.of();
+    private boolean composeAfterSelection;
+    private static final int INK=0xff16383e, TEAL=0xff00566b, LIME=0xffa4ce39, SURFACE=0xfff1f7f5;
+    private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
+    private android.graphics.drawable.GradientDrawable rounded(int color){var d=new android.graphics.drawable.GradientDrawable();d.setColor(color);d.setCornerRadius(dp(20));return d;}
+    private void row(String left,Runnable a,boolean enabledLeft,String right,Runnable b,boolean enabledRight){var r=new LinearLayout(this);r.setOrientation(LinearLayout.HORIZONTAL);page.addView(r);for(int n=0;n<2;n++){final Runnable action=n==0?a:b;Button button=new Button(this);button.setText(n==0?left:right);button.setAllCaps(false);button.setEnabled(n==0?enabledLeft:enabledRight);button.setTextColor(new android.content.res.ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{0xff6b807b,TEAL}));button.setBackground(rounded(n==0?LIME:0xffdceadf));var spacing=new LinearLayout.LayoutParams(0,dp(52),1);spacing.setMargins(dp(3),dp(4),dp(3),dp(4));button.setOnClickListener(v->{if(!busy)action.run();});r.addView(button,spacing);}}
+
     private LinearLayout page;
-    private TextView status;
+    private TextView status,loadingLabel;
+    private LinearLayout loadingBanner;
+    private String loadingMessage="";
+    private void loading(String message){loadingMessage=message;if(loadingBanner!=null){loadingLabel.setText(message);loadingBanner.setVisibility(message.isEmpty()?View.GONE:View.VISIBLE);}}
+
     private Identity identity;
     private AndroidStore.Entry selected;
     private X509Certificate recipient;
@@ -52,7 +66,7 @@ public final class MainActivity extends Activity {
     interface IoAction { void accept(Uri uri)throws Exception; }
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        recording=new RecordingProtection(getWindow());
         Security.removeProvider("BC");Security.insertProviderAt(new BouncyCastleProvider(),1);MailEngine.init();
         try {store=new AndroidStore(this);manager=new YubiKitManager(this);
             manager.startUsbDiscovery(new UsbConfiguration().handlePermissions(true),this::discovered);
@@ -63,7 +77,7 @@ public final class MainActivity extends Activity {
     private com.yubico.yubikit.android.transport.nfc.NfcYubiKeyDevice activeNfc;
     private boolean nfcStarted;
     // Match Authenticator 7.5.0: foreground reader mode, normal NDEF check, 5s timeout.
-    @Override protected void onResume(){super.onResume();if(manager!=null&&!nfcStarted)try{
+    @Override protected void onResume(){super.onResume();if(recording!=null)recording.paused(false);if(manager!=null&&!nfcStarted)try{
         manager.startNfcDiscovery(new NfcConfiguration().timeout(5000),this,this::discovered);nfcStarted=true;
     }catch(Exception e){notice("NFC unavailable: "+e.getMessage()+". USB remains available.");}}
     private void stopNfc(){if(manager!=null&&nfcStarted){manager.stopNfcDiscovery(this);nfcStarted=false;}}
@@ -73,8 +87,8 @@ public final class MainActivity extends Activity {
         try{key.remove(()->removed.complete(null));}catch(RuntimeException e){removed.completeExceptionally(e);}
     }
     private synchronized void abandonNfc(){activeNfc=null;var previous=nfcRemoval;nfcRemoval=CompletableFuture.completedFuture(null);previous.completeExceptionally(new CancellationException("Activity paused"));}
-    @Override protected void onPause(){stopNfc();abandonNfc();deviceGate.cancel();if(pendingPin!=null)pendingPin.cancel(false);if(pendingStage!=null)pendingStage.cancel(false);super.onPause();}
-    @Override protected void onDestroy(){if(manager!=null){manager.stopUsbDiscovery();stopNfc();}if(pendingPin!=null)pendingPin.cancel(true);worker.shutdownNow();gmailAccessToken=null;googleAction=null;if(gmail!=null)gmail.close();identity=null;super.onDestroy();}
+    @Override protected void onPause(){if(recording!=null)recording.paused(true);stopNfc();abandonNfc();deviceGate.cancel();if(pendingPin!=null)pendingPin.cancel(false);if(pendingStage!=null)pendingStage.cancel(false);super.onPause();}
+    @Override protected void onDestroy(){if(recording!=null)recording.stop();if(manager!=null){manager.stopUsbDiscovery();stopNfc();}if(pendingPin!=null)pendingPin.cancel(true);worker.shutdownNow();microsoftToken=null;if(microsoft!=null)microsoft.close();gmailAccessToken=null;googleAction=null;loading("");if(gmail!=null)gmail.close();if(imapMailbox!=null){var old=imapMailbox;new Thread(()->{try{old.close();}catch(Exception ignored){}}).start();}identity=null;super.onDestroy();}
     private synchronized void discovered(YubiKeyDevice key){
         if(key instanceof com.yubico.yubikit.android.transport.nfc.NfcYubiKeyDevice nfc){
             if(activeNfc!=null||!nfcRemoval.isDone())return;
@@ -84,23 +98,70 @@ public final class MainActivity extends Activity {
         deviceGate.discovered(key);runOnUiThread(()->notice("YubiKey detected over "+key.getTransport()+". Keep it connected during the operation."));
     }
     private void page(String title){
-        var scroll=new ScrollView(this);page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setPadding(32,24,32,32);scroll.addView(page);setContentView(scroll);
-        if(android.os.Build.VERSION.SDK_INT>=30)scroll.setOnApplyWindowInsetsListener((v,insets)->{var bars=insets.getInsets(WindowInsets.Type.systemBars());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);return insets;});
-        TextView heading=new TextView(this);heading.setText(title);heading.setTextSize(26);page.addView(heading);
+        recording.secretPage(false);
+        var scroll=new ScrollView(this);page=new LinearLayout(this);page.setOrientation(LinearLayout.VERTICAL);page.setPadding(dp(16),dp(12),dp(16),dp(24));page.setBackgroundColor(SURFACE);scroll.addView(page);
+        var root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(SURFACE);
+        loadingBanner=new LinearLayout(this);loadingBanner.setGravity(android.view.Gravity.CENTER_VERTICAL);loadingBanner.setPadding(dp(20),dp(16),dp(20),dp(16));loadingBanner.setBackgroundColor(TEAL);
+        var spinner=new ProgressBar(this);spinner.setIndeterminate(true);spinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(LIME));loadingBanner.addView(spinner,new LinearLayout.LayoutParams(dp(48),dp(48)));
+        loadingLabel=new TextView(this);loadingLabel.setTextColor(android.graphics.Color.WHITE);loadingLabel.setTextSize(18);loadingLabel.setTypeface(null,android.graphics.Typeface.BOLD);loadingLabel.setPadding(dp(16),0,0,0);loadingLabel.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);loadingBanner.addView(loadingLabel,new LinearLayout.LayoutParams(0,-2,1));
+        root.addView(loadingBanner);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));setContentView(root);loading(loadingMessage);
+        if(android.os.Build.VERSION.SDK_INT>=30)root.setOnApplyWindowInsetsListener((v,insets)->{var bars=insets.getInsets(WindowInsets.Type.systemBars());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);return insets;});
+        TextView heading=new TextView(this);heading.setText(title);heading.setTextSize(28);heading.setTextColor(android.graphics.Color.WHITE);heading.setBackground(rounded(TEAL));heading.setPadding(dp(18),dp(16),dp(18),dp(16));heading.setTypeface(null,android.graphics.Typeface.BOLD);page.addView(heading);
+        if(recording.active()){text("RECORDING MODE — screen content may be captured (15-minute limit). PIN/password screens remain protected.");button("Stop recording mode",()->{recording.stop();home();});}
         status=new TextView(this);status.setPadding(0,12,0,16);page.addView(status);
-        if(!title.equals("PQ Mail"))button("Home",this::home);
+        if(!title.equals("PQ Mail"))row(mailboxProvider.isEmpty()?"Accounts":"Inbox",this::home,true,"Settings",this::settings,!title.equals("Settings"));
     }
-    private void text(String s){TextView t=new TextView(this);t.setText(s);t.setTextIsSelectable(true);t.setPadding(0,12,0,12);page.addView(t);}
-    private EditText field(LinearLayout p,String hint,String value,boolean secret){EditText e=new EditText(this);e.setHint(hint);e.setText(value);e.setSingleLine(true);if(secret)e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);p.addView(e);return e;}
+    private void text(String s){TextView t=new TextView(this);t.setText(s);t.setTextColor(INK);t.setTextSize(16);t.setTextIsSelectable(true);t.setPadding(0,12,0,12);page.addView(t);}
+    private EditText field(LinearLayout p,String hint,String value,boolean secret){EditText e=new EditText(this);e.setHint(hint);e.setText(value);e.setSingleLine(true);if(secret){recording.secretPage(true);e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);}p.addView(e);return e;}
     private EditText field(String hint,String value){return field(page,hint,value,false);}
-    private void button(String label,Runnable action){Button b=new Button(this);b.setText(label);b.setAllCaps(false);b.setOnClickListener(v->{if(busy){notice("An operation is still running");return;}action.run();});page.addView(b);}
+    private void button(String label,Runnable action){Button b=new Button(this);b.setText(label);b.setAllCaps(false);b.setTextColor(TEAL);b.setBackground(rounded(LIME));var lp=new LinearLayout.LayoutParams(-1,-2);lp.setMargins(0,dp(5),0,dp(5));b.setLayoutParams(lp);b.setMinHeight(dp(48));b.setOnClickListener(v->{if(busy){notice("An operation is still running");return;}action.run();});page.addView(b);}
     private void notice(String s){if(status!=null)status.setText(s);}
     private void error(Throwable e){if(e instanceof GmailApi.Unauthorized && gmailAccessToken!=null){String invalid=gmailAccessToken;gmailAccessToken=null;com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient(this).clearToken(com.google.android.gms.auth.api.identity.ClearTokenRequest.builder().setToken(invalid).build());}Throwable last=e;while(last.getCause()!=null && !(last instanceof PivDiagnostic))last=last.getCause();String message=last.getMessage();new AlertDialog.Builder(this).setTitle("PQ Mail").setMessage(message==null?last.getClass().getSimpleName():message).setPositiveButton("OK",null).show();}
-    private void work(String message,Work action){if(busy)return;busy=true;notice(message);worker.execute(()->{try{action.run();}catch(Exception e){runOnUiThread(()->error(e));}finally{runOnUiThread(()->{releaseNfc();busy=false;dismissHolding();notice("Ready — you can remove the YubiKey.");});}});}
-    private void home(){page("PQ Mail");text("Android preview • S/MIME with software keys or YubiKey USB/NFC\n"+(identity==null?"Select an identity to begin.":identity.signatureAlgorithm()+"\n"+(selected.serial()==0?"Software identity unlocked":"YubiKey "+selected.serial())));
-        button("OpenPGP public identities",this::openPgpKeys);button("Identities & certificates",this::identities);button("Compose signed mail",this::compose);button("Open and verify / decrypt .eml",()->pick(uri->openMessage(read(uri))));button("Gmail API",this::gmailPage);button("IMAP inbox & SMTP",this::account);
-        button("Lock software identity",()->{identity=null;selected=null;outgoing=null;home();});
+    private void work(String message,Work action){if(busy)return;busy=true;notice(message);loading(message);worker.execute(()->{try{action.run();}catch(Exception e){runOnUiThread(()->error(e));}finally{runOnUiThread(()->{releaseNfc();busy=false;loading("");dismissHolding();notice("Ready");});}});}
+    private void home(){if(!mailboxProvider.isEmpty()){renderInbox();return;}welcome();}
+    private void welcome(){page("PQ Mail");text("Your mail, protected.");text("Choose a mail provider to sign in or reconnect.");
+        var prefs=getSharedPreferences("mail",0);String last=prefs.getString("provider","");
+        button(last.equals("gmail")?"Reconnect Gmail":"Continue with Google",()->authorizeGoogle(()->loadGmail(0)));
+        button(last.equals("microsoft")?"Reconnect Hotmail / Outlook":"Continue with Microsoft · Hotmail / Outlook",()->authorizeMicrosoft(()->loadMicrosoft(0)));
+        button(last.equals("imap")?"Reconnect IMAP / SMTP":"Other mail provider · IMAP / SMTP",this::account);
+        text("Gmail and Hotmail / Outlook use provider authorization for reading and sending. Other hosts use TLS and an app password. Mail is not automatically saved to disk.");
+        button("Settings",this::settings);
     }
+    private void settings(){page("Settings");text("Signing identity: "+(identity==null?"Not selected":identity.signatureAlgorithm()));
+        button("Identities & certificates",this::identities);button("OpenPGP public identities",this::openPgpKeys);
+        button("Google account",this::gmailPage);button("Microsoft account",this::microsoftPage);button("IMAP / SMTP configuration",this::account);
+        button("Change mail provider",this::welcome);
+        button("Open and verify / decrypt .eml",()->pick(uri->openMessage(read(uri))));
+        if(!recording.active())button("Temporary demo recording…",this::recordingPrompt);
+        button("Lock software identity",()->{identity=null;selected=null;outgoing=null;settings();});
+        button("Disconnect mailbox",this::disconnectMailbox);
+    }
+    private void disconnectMailbox(){if(microsoft!=null)microsoft.close();microsoft=null;microsoftToken=null;microsoftEmail="";if(gmail!=null)gmail.close();gmail=null;gmailAccessToken=null;gmailEmail="";googleAction=null;loading("");var old=imapMailbox;imapMailbox=null;if(old!=null)worker.execute(()->{try{old.close();}catch(Exception ignored){}});mailboxProvider="";inboxEntries=List.of();mailSearch="";welcome();}
+    private void refreshMailbox(int direction){if(mailboxProvider.equals("gmail"))authorizeGoogle(()->loadGmail(direction));else if(mailboxProvider.equals("microsoft"))authorizeMicrosoft(()->loadMicrosoft(direction));else if(imapMailbox!=null)loadImap(direction);else welcome();}
+    private void renderInbox(){page("Inbox");text(mailboxEmail());
+        var search=field("Search inbox",mailSearch);search.setBackground(rounded(0xffe1eee9));search.setPadding(dp(16),dp(12),dp(16),dp(12));search.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+        Runnable apply=()->{mailSearch=search.getText().toString().trim();refreshMailbox(0);};search.setOnEditorActionListener((v,id,event)->{if(id==android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH){if(!busy)apply.run();return true;}return false;});
+        row("Search",apply,true,"Clear",()->{mailSearch="";refreshMailbox(0);},!mailSearch.isEmpty());
+        if(mailboxProvider.equals("gmail")){text("Search this inbox with Gmail syntax, such as from: or subject:.");var filter=new CheckBox(this);filter.setText("S/MIME only");filter.setChecked(gmailSmimeOnly);filter.setOnCheckedChangeListener((v,checked)->{if(busy){filter.setChecked(gmailSmimeOnly);return;}gmailSmimeOnly=checked;refreshMailbox(0);});page.addView(filter);}else text(mailboxProvider.equals("microsoft")?"Search subject in this Outlook inbox.":"Search sender or subject in this inbox.");
+        row("Compose",this::compose,true,"Refresh",()->refreshMailbox(0),true);
+        if(outgoing!=null)button("Review prepared message",this::preparedMessage);
+        boolean newer=mailboxProvider.equals("gmail")?gmail!=null&&gmail.hasNewer():mailboxProvider.equals("microsoft")?microsoft!=null&&microsoft.hasNewer():imapMailbox!=null&&imapMailbox.hasNewer();
+        boolean older=mailboxProvider.equals("gmail")?gmail!=null&&gmail.hasOlder():mailboxProvider.equals("microsoft")?microsoft!=null&&microsoft.hasOlder():imapMailbox!=null&&imapMailbox.hasOlder();
+        int number=mailboxProvider.equals("gmail")?gmail.pageNumber():mailboxProvider.equals("microsoft")?microsoft.pageNumber():imapMailbox.pageNumber();
+        text("Page "+number+" · "+inboxEntries.size()+" messages");row("‹ Newer",()->refreshMailbox(-1),newer,"Older ›",()->refreshMailbox(1),older);
+        if(inboxEntries.isEmpty())text("No messages on this page."+(older?" Try Older to continue.":" Try another search or refresh."));
+        for(var entry:inboxEntries){var card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(16),dp(12),dp(16),dp(12));card.setBackground(rounded(0xffffffff));var lp=new LinearLayout.LayoutParams(-1,-2);lp.setMargins(0,dp(4),0,dp(4));page.addView(card,lp);
+            var sender=new TextView(this);sender.setText(entry.sender());sender.setTextColor(INK);sender.setTextSize(16);sender.setTypeface(null,android.graphics.Typeface.BOLD);sender.setMaxLines(1);sender.setEllipsize(android.text.TextUtils.TruncateAt.END);card.addView(sender);
+            var subjectView=new TextView(this);subjectView.setText(entry.subject());subjectView.setTextColor(INK);subjectView.setTextSize(16);subjectView.setMaxLines(2);card.addView(subjectView);
+            if(entry.received()!=null){var date=new TextView(this);date.setText(java.time.format.DateTimeFormatter.ofPattern("MMM d, HH:mm").withZone(java.time.ZoneId.systemDefault()).format(entry.received()));card.addView(date);}
+            card.setContentDescription(entry.sender()+". "+entry.subject());card.setFocusable(true);card.setOnClickListener(v->{if(busy)return;Runnable open=()->work("Opening message…",()->openMessage(MailEngine.encode(mailboxProvider.equals("gmail")?gmail.message(entry.uid()):mailboxProvider.equals("microsoft")?microsoft.message(entry.uid()):imapMailbox.message(entry.uid()))));if(mailboxProvider.equals("gmail"))authorizeGoogle(open);else if(mailboxProvider.equals("microsoft"))authorizeMicrosoft(open);else open.run();});
+        }
+    }
+    private void loadImap(int direction){work("Loading IMAP inbox…",()->{var entries=direction==0?imapMailbox.latest(mailSearch):imapMailbox.move(direction);runOnUiThread(()->{inboxEntries=entries;renderInbox();});});}
+    private void preparedMessage(){page("Message ready");text("To: "+to+"\nSubject: "+subject);text("Signed message prepared locally. Review the recipient before sending.");if(!mailboxProvider.isEmpty())button("Send message",this::sendPrepared);else button("Connect a mail provider",this::welcome);button("Save .eml copy",()->export(outgoing,"message.eml","message/rfc822"));}
+    private void sendPrepared(){if(outgoing==null){error(new IOException("Compose a message first"));return;}byte[] message=outgoing.clone();try{String recipients=Arrays.toString(MailEngine.parse(message).getAllRecipients());new AlertDialog.Builder(this).setTitle("Send email now?").setMessage("Send to "+recipients+" using "+mailboxEmail()+"?").setNegativeButton("Cancel",null).setPositiveButton("Send",(d,w)->{if(mailboxProvider.equals("gmail"))authorizeGoogle(()->work("Sending through Gmail…",()->{gmail.send(MailEngine.parse(message));sentMessage();}));else if(mailboxProvider.equals("microsoft"))authorizeMicrosoft(()->work("Sending through Outlook…",()->{microsoft.verifyAccount(microsoftEmail);microsoft.send(MailEngine.parse(message));sentMessage();}));else password("SMTP app password (not saved)",pass->{MailEngine.send(MailEngine.parse(message),smtpHost,587,imapUser,new String(pass),false);sentMessage();});}).show();}catch(Exception e){error(e);}}
+    private void sentMessage(){runOnUiThread(()->{outgoing=null;home();new AlertDialog.Builder(this).setTitle("Message sent").setMessage("The mail provider accepted your message.").setPositiveButton("OK",null).show();});}
+    private void recordingPrompt(){new AlertDialog.Builder(this).setTitle("Enable demo recording for 15 minutes?").setMessage("Allows screen recording of PQ Mail, including message bodies, inbox headers and email addresses. Use only demonstration content. PIN, password and management-key dialogs remain blocked. Google controls its own consent screens. This mode is not saved and ends after 15 minutes or when the app restarts. Background previews remain protected.").setNegativeButton("Cancel",null).setPositiveButton("Enable recording",(d,w)->{recording.start();home();}).show();}
     private void identities(){page("Identities & certificates");
         button("Import and trust signing certificate",()->importTrustedCertificate("signing"));
         button("Import and trust encryption certificate",()->importTrustedCertificate("encryption"));
@@ -316,16 +377,17 @@ public final class MainActivity extends Activity {
                 char[] pin=new char[input.length()];input.getText().getChars(0,input.length(),pin,0);boolean valid=pin.length>=6&&pin.length<=8;for(char c:pin)valid&=c>=32&&c<=126;
                 if(!valid){Arrays.fill(pin,'\0');input.setError("Use a 6–8 character ASCII PIV PIN");return;}
                 input.getText().clear();if(!result.complete(pin))Arrays.fill(pin,'\0');dialog.dismiss();
-            });});dialog.show();
+            });});recording.showSecret(dialog,()->input.getText().clear());
             result.whenComplete((p,e)->runOnUiThread(()->{input.getText().clear();dialog.dismiss();}));
         });
         try{return result.get(180,TimeUnit.SECONDS);}finally{pendingPin=null;if(!result.isDone())result.cancel(false);}
     }
     interface PasswordAction{void accept(char[] password)throws Exception;}
     private void password(String title,PasswordAction action){EditText input=new EditText(this);input.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
-        new AlertDialog.Builder(this).setTitle(title).setView(input).setNegativeButton("Cancel",(d,w)->input.getText().clear()).setPositiveButton("Continue",(d,w)->{
+        var dialog=new AlertDialog.Builder(this).setTitle(title).setView(input).setNegativeButton("Cancel",(d,w)->input.getText().clear()).setPositiveButton("Continue",(d,w)->{
             char[] pass=new char[input.length()];input.getText().getChars(0,input.length(),pass,0);input.getText().clear();work("Processing encrypted identity…",()->{try{action.accept(pass);}finally{Arrays.fill(pass,'\0');}});
-        }).show();
+        }).create();
+        recording.showSecret(dialog,()->input.getText().clear());
     }
     private void importBundle(byte[] bytes,char[] pass)throws Exception {
         String id=UUID.randomUUID().toString();Path p=store.root.resolve(id+".p12");Files.write(p,bytes);
@@ -386,14 +448,15 @@ public final class MainActivity extends Activity {
             .setMessage(cert.getSubjectX500Principal()+"\n"+cert.getPublicKey().getAlgorithm()+"\nSHA-256: "+fingerprint+"\nCompare this fingerprint with the owner. This trusts this exact certificate, not a CA chain.")
             .setNegativeButton("Cancel",null).setPositiveButton("Trust",(d,w)->{try{store.trust(cert,role);if(role.equals("encryption"))recipient=cert;notice("Certificate fingerprint trusted for "+role);}catch(Exception e){error(e);}}).show());
     });}
-    private void select(AndroidStore.Entry e){if(e.serial()!=0)work("Loading public certificates…",()->{identity=store.loadToken(e);selected=e;runOnUiThread(this::home);});
+    private void select(AndroidStore.Entry e){if(e.serial()!=0)work("Loading public certificates…",()->{identity=store.loadToken(e);selected=e;runOnUiThread(this::identitySelected);});
         else password("Unlock software .p12",pass->{var ids=Identity.loadProfiles(store.root.resolve(e.bundle()),pass);runOnUiThread(()->chooseView(e,ids));});}
     private void chooseView(AndroidStore.Entry e,List<Identity> ids){String[] labels=ids.stream().map(Identity::signatureAlgorithm).toArray(String[]::new);
-        new AlertDialog.Builder(this).setTitle("Outgoing identity profile").setItems(labels,(d,n)->{identity=ids.get(n);selected=e;try{for(var san:identity.signingCert().getSubjectAlternativeNames())if(Integer.valueOf(1).equals(san.get(0))){from=(String)san.get(1);break;}}catch(Exception ignored){}home();}).show();}
+        new AlertDialog.Builder(this).setTitle("Outgoing identity profile").setItems(labels,(d,n)->{identity=ids.get(n);selected=e;identitySelected();}).show();}
+    private void identitySelected(){try{for(var san:identity.signingCert().getSubjectAlternativeNames())if(Integer.valueOf(1).equals(san.get(0))){from=(String)san.get(1);break;}}catch(Exception ignored){}if(composeAfterSelection){composeAfterSelection=false;compose();}else home();}
     private void openPgpKeys(){
         page("OpenPGP public identities");
         if(identity!=null&&OpenPgp.supported(identity)){try{text(OpenPgp.loadOwn(store.root,identity).description());}catch(Exception missing){text("No saved OpenPGP certificate for this identity. Restore its certificate bundle or create one.");}}
-        text("Level 3: RFC 9980 with Ed25519/X25519 in 84/85, or experimental NIST/Brainpool draft with P-384 in 83/82. Restore the saved certificate bundle from your YubiKey to use its exact OpenPGP identity. Level 5: classical ECDSA/ECDH P-384 OpenPGP (not post-quantum), using slots 83/82. Existing keys are reused; no YubiKey slots change. Public identities are separate from X.509 certificates.");
+        text("Level 3: RFC 9980 with Ed25519/X25519 in 84/85, or experimental NIST/Brainpool draft with P-384 in 83/82. Restore the saved certificate bundle from your YubiKey to use its exact OpenPGP identity. Level 5: restore the v4 P-384 compatibility certificate to use preferred ML-KEM-768/X25519 encryption (84/85) and P-384 fallback (88/89). Compatibility signatures are classical. Existing keys are reused; no YubiKey slots change. Public identities are separate from X.509 certificates.");
         if(OpenPgp.supported(identity)){
             button("Create OpenPGP public identity",()->work("Creating three OpenPGP binding signatures; keep the key connected…",()->{var own=OpenPgp.createOwn(store.root,identity,selected.serial()==0?null:backend());String detail=own.description();runOnUiThread(()->new AlertDialog.Builder(this).setTitle("OpenPGP identity ready").setMessage(detail).setPositiveButton(selected.serial()==0?"OK":"Back up bundle…",(d,w)->{if(selected.serial()!=0)onKeyAction(false);}).setNegativeButton("Later",null).show());}));
             button("Import my existing OpenPGP public identity",()->pick(uri->{var own=OpenPgp.saveOwn(store.root,identity,read(uri));runOnUiThread(()->notice("Own OpenPGP public identity imported."));}));
@@ -416,7 +479,7 @@ public final class MainActivity extends Activity {
     private void importPgpContact(boolean recipientRole){
         pick(uri->{var key=new OpenPgp.PublicIdentity(read(uri));String description=key.description();runOnUiThread(()->new AlertDialog.Builder(this).setTitle("Use OpenPGP public key?").setMessage(description).setNegativeButton("Cancel",null).setPositiveButton("Use key",(d,w)->{if(recipientRole){pgpRecipient=key;to=key.email;}else pgpSigner=key;notice("OpenPGP public key selected; trust not established.");}).show());});
     }
-    private void compose(){if(identity==null){error(new Exception("Select an identity first"));return;}outgoing=null;page("Compose signed mail");text(identity.signatureAlgorithm()+" • "+(selected.serial()==0?"software":"YubiKey "+selected.serial()));
+    private void compose(){if(identity==null){composeAfterSelection=true;identities();notice("Choose a signing identity below to continue composing.");return;}outgoing=null;page("Compose signed mail");text(identity.signatureAlgorithm()+" • "+(selected.serial()==0?"software":"YubiKey "+selected.serial()));
         EditText f=field("From",from),t=field("To",to),s=field("Subject",subject),b=field("Message",body);b.setSingleLine(false);b.setMinLines(5);
         CheckBox format=new CheckBox(this);format.setText("Use hybrid PQ OpenPGP (plain text only)");format.setChecked(openPgpDraft);format.setEnabled(Identity.HYBRID_65_P384_SIGN.equals(identity.signatureAlgorithm()));if(!Identity.HYBRID_65_P384_SIGN.equals(identity.signatureAlgorithm())){openPgpDraft=false;format.setChecked(false);}format.setOnCheckedChangeListener((v,checked)->openPgpDraft=checked);page.addView(format);
         CheckBox encrypt=new CheckBox(this);encrypt.setText("Also encrypt (S/MIME certificate or OpenPGP recipient key)");encrypt.setChecked(encryptDraft);encrypt.setOnCheckedChangeListener((v,checked)->encryptDraft=checked);page.addView(encrypt);
@@ -447,16 +510,27 @@ public final class MainActivity extends Activity {
                 var attachment=new MailEngine.Attachment(name,bytes);runOnUiThread(()->{attachments.add(attachment);compose();});
             });
         });
-        button("Sign and prepare .eml",()->{from=f.getText().toString().trim();to=t.getText().toString().trim();subject=s.getText().toString();body=b.getText().toString();boolean enc=encrypt.isChecked();if(enc&&!openPgpDraft&&recipient==null){error(new Exception("Import recipient encryption certificate first"));return;}
+        button("Sign and review message",()->{from=f.getText().toString().trim();to=t.getText().toString().trim();subject=s.getText().toString();body=b.getText().toString();boolean enc=encrypt.isChecked();if(enc&&!openPgpDraft&&recipient==null){error(new Exception("Import recipient encryption certificate first"));return;}
             if(openPgpDraft&&(!Identity.HYBRID_65_P384_SIGN.equals(identity.signatureAlgorithm())||!attachments.isEmpty()||(enc&&(pgpRecipient==null||!pgpRecipient.matchesEmail(to)||!pgpRecipient.canEncrypt())))){error(new Exception("Outgoing OpenPGP requires a Level 3 hybrid identity, no attachments, and a matching usable recipient key when encrypting."));return;}
-            Runnable prepare=()->work("Signing "+identity.signatureAlgorithm()+ (enc?" and encrypting…":"…"),()->{outgoing=openPgpDraft?OpenPgp.compose(identity,OpenPgp.loadOwn(store.root,identity),enc?pgpRecipient:null,from,to,subject,body,selected.serial()==0?null:pgpBackend()):MailEngine.encode(MailEngine.composeAttachments(identity,from,to,subject,body,enc?recipient:null,selected.serial()==0?null:backend(),List.copyOf(attachments)));runOnUiThread(()->export(outgoing,"message.eml","message/rfc822"));});
+            Runnable signMessage=()->work("Signing "+identity.signatureAlgorithm()+ (enc?" and encrypting…":"…"),()->{outgoing=openPgpDraft?OpenPgp.composeForRecipient(identity,OpenPgp.loadOwn(store.root,identity),pgpRecipient,enc,from,to,subject,body,selected.serial()==0?null:pgpBackend()):MailEngine.encode(MailEngine.composeAttachments(identity,from,to,subject,body,enc?recipient:null,selected.serial()==0?null:backend(),List.copyOf(attachments)));runOnUiThread(this::preparedMessage);});
+            Runnable prepare=()->{if(openPgpDraft&&pgpRecipient!=null&&pgpRecipient.version()==4)new AlertDialog.Builder(this).setTitle("Classical v4 signature").setMessage("Use classical compatibility signing (P-384 for Level 5; Ed25519 for Level 3)? This signature is not post-quantum resistant. Public compatibility certificates will be attached.").setNegativeButton("Cancel",null).setPositiveButton("Sign",(d,w)->signMessage.run()).show();else signMessage.run();};
             if(enc&&(openPgpDraft?!pgpRecipient.quantumEncryption():!CryptoWarnings.pq(recipient.getPublicKey(),false)))new AlertDialog.Builder(this).setTitle("Non-PQ encryption").setMessage(CryptoWarnings.encryption(openPgpDraft?pgpRecipient.encryptionDescription():recipient.getPublicKey().getAlgorithm())).setNegativeButton("Cancel",null).setPositiveButton("Encrypt anyway",(d,w)->prepare.run()).show();else prepare.run();});
+    }
+    private boolean containsSecureMime(jakarta.mail.Part part,int depth)throws Exception {
+        if(depth>12)throw new IOException("MIME nesting limit exceeded");
+        if(part.isMimeType("multipart/signed")||part.isMimeType("multipart/encrypted")||part.isMimeType("application/pkcs7-mime")||part.isMimeType("application/x-pkcs7-mime"))return true;
+        if(part.isMimeType("multipart/*")){var m=(jakarta.mail.Multipart)part.getContent();if(m.getCount()>100)throw new IOException("Too many MIME parts");for(int i=0;i<m.getCount();i++)if(containsSecureMime(m.getBodyPart(i),depth+1))return true;}return false;
     }
     private void openMessage(byte[] bytes)throws Exception {
         if(OpenPgp.isOpenPgp(bytes)){
-            OpenPgp.PublicIdentity own=null;if(OpenPgp.parts(bytes).encrypted()||pgpSigner==null)own=OpenPgp.loadOwn(store.root,identity);
+            OpenPgp.PublicIdentity own=null;if(identity!=null&&(OpenPgp.parts(bytes).encrypted()||pgpSigner==null))own=OpenPgp.loadOwn(store.root,identity);
             var opened=OpenPgp.open(bytes,pgpSigner==null?own:pgpSigner,own,identity,OpenPgp.parts(bytes).encrypted()&&selected!=null&&selected.serial()!=0?pgpBackend():null);
             runOnUiThread(()->{page("OpenPGP message");text(opened.display());});return;
+        }
+        var mime=MailEngine.parse(bytes);
+        if(!containsSecureMime(mime,0)&&(mime.isMimeType("text/plain")||mime.isMimeType("text/html")||mime.isMimeType("multipart/alternative")||mime.isMimeType("multipart/related")||mime.isMimeType("multipart/mixed"))){
+            String display=VerifiedMime.display(bytes);String title=mime.getSubject();
+            runOnUiThread(()->{page("Message");text(title==null?"(No subject)":title);text("Unsigned — sender not verified");text(display);});return;
         }
         var result=MailEngine.open(MailEngine.parse(bytes),identity,null,selected!=null&&selected.serial()!=0?backend():null);
         runOnUiThread(()->{page("S/MIME message");text((result.signerCertificate()!=null&&!CryptoWarnings.pq(result.signerCertificate().getPublicKey(),true)?CryptoWarnings.SIGNATURE:"")+(result.signerCertificate()==null?"UNSIGNED — sender not verified":"Signature valid • "+result.signatureAlgorithm())+"\n"+(result.encrypted()?"Decrypted":"Unencrypted")+"\nSender address "+(result.fromMatches()?"matches certificate":"DOES NOT match certificate")+"\n"+(store.trusted(result.fingerprint())?"Trusted fingerprint":"Untrusted fingerprint")+"\n"+result.fingerprint());text(result.text());
@@ -467,6 +541,23 @@ public final class MainActivity extends Activity {
             }catch(Exception e){error(e);}});
             if(result.signerCertificate()!=null)button("Trust this signer fingerprint",()->new AlertDialog.Builder(this).setTitle("Trust signer?").setMessage("Compare this SHA-256 fingerprint through a trusted channel before accepting:\n"+result.fingerprint()).setNegativeButton("Cancel",null).setPositiveButton("Trust",(d,w)->{try{store.trust(result.signerCertificate());notice("Fingerprint saved as trusted");}catch(Exception e){error(e);}}).show());});
     }
+    private MicrosoftGraph microsoft;
+    private final MicrosoftAndroidAuth microsoftAuth=new MicrosoftAndroidAuth();
+    private String microsoftToken,microsoftEmail="";
+    private boolean microsoftConnecting;
+    private String mailboxEmail(){return mailboxProvider.equals("gmail")?gmailEmail:mailboxProvider.equals("microsoft")?microsoftEmail:imapUser;}
+    private void authorizeMicrosoft(Runnable action){
+        if(microsoftConnecting||busy)return;microsoftConnecting=true;loading("Connecting to Hotmail / Outlook…");
+        microsoftAuth.connect(this,new MicrosoftAndroidAuth.Callback(){
+            public void ready(String token){runOnUiThread(()->{if(isFinishing())return;microsoftToken=token;if(microsoft==null)microsoft=new MicrosoftGraph(()->{if(microsoftToken==null)throw new IOException("Reconnect Microsoft");return microsoftToken.toCharArray();});
+                worker.execute(()->{try{String email=microsoft.account();runOnUiThread(()->{microsoftConnecting=false;loading("");if(!microsoftEmail.isEmpty()&&!microsoftEmail.equalsIgnoreCase(email)){microsoft.close();microsoft=null;microsoftToken=null;error(new IOException("Microsoft account changed. Disconnect the mailbox before switching accounts."));return;}microsoftEmail=email;if(action!=null)action.run();});}catch(Exception e){failed(e);}});
+            });}
+            public void failed(Exception e){runOnUiThread(()->{microsoftConnecting=false;loading("");error(new IOException("Microsoft sign-in failed. Check the Android registration and consent. "+e.getClass().getSimpleName()));});}
+            public void cancelled(){runOnUiThread(()->{microsoftConnecting=false;loading("");notice("Microsoft sign-in cancelled");});}
+        });
+    }
+    private void loadMicrosoft(int direction){work("Loading Outlook inbox…",()->{microsoft.setSearch(mailSearch);microsoft.verifyAccount(microsoftEmail);var entries=direction<0?microsoft.newer():direction>0?microsoft.older():microsoft.latest();runOnUiThread(()->{mailboxProvider="microsoft";inboxEntries=entries;getSharedPreferences("mail",0).edit().putString("provider","microsoft").apply();renderInbox();});});}
+    private void microsoftPage(){page("Microsoft account");text(microsoftEmail.isEmpty()?"Hotmail / Outlook.com":"Connected: "+microsoftEmail);text("Microsoft authorizes reading and sending through Graph. MSAL manages its protected session cache. Message bodies remain in memory unless exported.");button("Connect Hotmail / Outlook",()->authorizeMicrosoft(()->loadMicrosoft(0)));button("Disconnect local mailbox",this::disconnectMailbox);button("Sign out of Microsoft on this device",()->microsoftAuth.signOut(()->runOnUiThread(this::disconnectMailbox),e->runOnUiThread(()->error(e))));}
     private GmailApi gmail;
     private boolean gmailSmimeOnly;
     private String gmailAccessToken, gmailEmail="";
@@ -474,12 +565,12 @@ public final class MainActivity extends Activity {
     private static final int GOOGLE_AUTH=71;
     private static final List<String> GOOGLE_SCOPES=List.of("https://www.googleapis.com/auth/gmail.readonly","https://www.googleapis.com/auth/gmail.send");
     private void authorizeGoogle(Runnable action){
-        if(googleAction!=null){notice("Google authorization is already in progress");return;}googleAction=action;
+        if(googleAction!=null){notice("Google authorization is already in progress");return;}googleAction=action;loading("Connecting to Gmail…");
         var scopes=GOOGLE_SCOPES.stream().map(com.google.android.gms.common.api.Scope::new).toList();
         var request=com.google.android.gms.auth.api.identity.AuthorizationRequest.builder().setRequestedScopes(scopes).build();
         com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient(this).authorize(request).addOnSuccessListener(result->{
-            try{if(result.hasResolution())startIntentSenderForResult(result.getPendingIntent().getIntentSender(),GOOGLE_AUTH,null,0,0,0);else googleAuthorized(result);}catch(Exception e){googleAction=null;error(e);}
-        }).addOnFailureListener(e->{googleAction=null;error(new IOException("Google authorization failed. Check the Android OAuth registration for this app package and signing certificate. "+e.getMessage()));});
+            try{if(result.hasResolution())startIntentSenderForResult(result.getPendingIntent().getIntentSender(),GOOGLE_AUTH,null,0,0,0);else googleAuthorized(result);}catch(Exception e){googleAction=null;loading("");error(e);}
+        }).addOnFailureListener(e->{googleAction=null;loading("");error(new IOException("Google authorization failed. Check the Android OAuth registration for this app package and signing certificate. "+e.getMessage()));});
     }
     private void googleAuthorized(com.google.android.gms.auth.api.identity.AuthorizationResult result)throws Exception{
         Runnable action=googleAction;
@@ -488,50 +579,25 @@ public final class MainActivity extends Activity {
         if(gmail==null)gmail=new GmailApi(()->{if(gmailAccessToken==null)throw new IOException("Connect Gmail again");return gmailAccessToken.toCharArray();});
         worker.execute(()->{try{
             String account=gmail.accountEmail();
-            runOnUiThread(()->{if(googleAction!=action||isFinishing())return;googleAction=null;
+            runOnUiThread(()->{if(googleAction!=action||isFinishing())return;googleAction=null;loading("");
                 if(!gmailEmail.isEmpty()&&!gmailEmail.equalsIgnoreCase(account)){gmail.close();gmail=null;gmailAccessToken=null;gmailEmail="";error(new IOException("Google selected a different account. Connect Gmail again before reading or sending."));return;}
                 gmailEmail=account;if(action!=null)action.run();
             });
-        }catch(Exception e){runOnUiThread(()->{googleAction=null;error(e);});}});
+        }catch(Exception e){runOnUiThread(()->{googleAction=null;loading("");error(e);});}});
     }
-    private void gmailPage(){
-        page("Gmail API");text(gmailEmail.isEmpty()?"Connect your Google account":"Connected: "+gmailEmail);
-        text("Google authorization requests Gmail read and send access only. Messages and headers are held in memory, not cached to disk. Google Play services manages account authorization; PQ Mail does not save a Google OAuth refresh token.");
-        CheckBox filter=new CheckBox(this);filter.setText("S/MIME only");filter.setChecked(gmailSmimeOnly);filter.setOnCheckedChangeListener((v,checked)->gmailSmimeOnly=checked);page.addView(filter);
-        button("Connect Gmail / refresh inbox",()->authorizeGoogle(()->loadGmail(0)));
-        button("Send prepared message via Gmail",()->{
-            if(outgoing==null){error(new IOException("Compose and prepare a message first"));return;}
-            final byte[] message=outgoing.clone();
-            try{var parsed=MailEngine.parse(message);String recipients=Arrays.toString(parsed.getAllRecipients());
-                new AlertDialog.Builder(this).setTitle("Send email now?").setMessage("Send the prepared message to "+recipients+" using the authorized Google account?").setNegativeButton("Cancel",null).setPositiveButton("Send",(d,w)->authorizeGoogle(()->work("Sending through Gmail API…",()->{gmail.send(MailEngine.parse(message));runOnUiThread(()->notice("Message sent via Gmail"));}))).show();
-            }catch(Exception e){error(e);}
-        });
-        button("Disconnect local Gmail session",()->{if(gmail!=null)gmail.close();gmail=null;gmailAccessToken=null;gmailEmail="";googleAction=null;gmailPage();});
-        button("Manual IMAP / SMTP for other hosts",this::account);
-    }
+    private void gmailPage(){page("Google account");text(gmailEmail.isEmpty()?"Connect your Google account":"Connected: "+gmailEmail);text("Gmail read/send access only. Mail remains in memory unless explicitly exported. Google Play services manages authorization; PQ Mail does not save a Google OAuth refresh token.");button("Connect Gmail / refresh inbox",()->authorizeGoogle(()->loadGmail(0)));button("Disconnect local Gmail session",this::disconnectMailbox);}
     private void loadGmail(int direction){work("Loading Gmail inbox…",()->{
-        gmail.setSmimeOnly(gmailSmimeOnly);String email=gmail.accountEmail();if(!gmailEmail.isEmpty()&&!gmailEmail.equalsIgnoreCase(email)){gmail.close();gmail=new GmailApi(()->gmailAccessToken.toCharArray());directionResetGmail(email);return;}
-        gmailEmail=email;var entries=direction<0?gmail.newer():direction>0?gmail.older():gmail.latest();runOnUiThread(()->renderGmail(entries));
+        gmail.setSmimeOnly(gmailSmimeOnly);gmail.setSearch(mailSearch);String email=gmail.accountEmail();if(!gmailEmail.isEmpty()&&!gmailEmail.equalsIgnoreCase(email))throw new IOException("Google account changed. Reconnect before reading mail.");
+        var entries=direction<0?gmail.newer():direction>0?gmail.older():gmail.latest();runOnUiThread(()->{gmailEmail=email;mailboxProvider="gmail";inboxEntries=entries;getSharedPreferences("mail",0).edit().putString("provider","gmail").apply();renderInbox();});
     });}
-    private void directionResetGmail(String email)throws Exception{gmailEmail=email;var entries=gmail.latest();runOnUiThread(()->renderGmail(entries));}
-    private void renderGmail(List<ImapInbox.Entry> entries){
-        page("Gmail inbox — "+gmailEmail);button("Gmail account & send",this::gmailPage);button("Refresh",()->authorizeGoogle(()->loadGmail(0)));
-        if(gmail.hasNewer())button("Newer",()->authorizeGoogle(()->loadGmail(-1)));if(gmail.hasOlder())button("Older",()->authorizeGoogle(()->loadGmail(1)));
-        if(entries.isEmpty())text("No messages on this page");
-        for(var entry:entries)button(entry.sender()+"\n"+entry.subject(),()->authorizeGoogle(()->work("Opening Gmail message…",()->openMessage(MailEngine.encode(gmail.message(entry.uid()))))));
-    }
-
-    private void account(){page("IMAP inbox & SMTP");var prefs=getSharedPreferences("mail",0);
+    private void account(){page("IMAP / SMTP configuration");var prefs=getSharedPreferences("mail",0);
         EditText user=field("Account username",prefs.getString("user",from)),imap=field("IMAP TLS host (port 993)",prefs.getString("imap","")),smtp=field("SMTP STARTTLS host (port 587)",prefs.getString("smtp",""));
-        EditText pass=field(page,"App password (not saved)","",true);text("TLS is required. For Google accounts, use Gmail API from the main menu.");
-        button("Load 10 most recent messages",()->{String u=user.getText().toString(),h=imap.getText().toString(),credential=pass.getText().toString();pass.getText().clear();prefs.edit().putString("user",u).putString("imap",h).putString("smtp",smtp.getText().toString()).apply();
-            work("Connecting to IMAP…",()->{try(var inbox=ImapInbox.connect(h,993,u,credential,false)){var entries=inbox.latest();List<byte[]> messages=new ArrayList<>();for(var entry:entries)messages.add(MailEngine.encode(inbox.message(entry.uid())));runOnUiThread(()->{page("Recent inbox");for(int i=0;i<entries.size();i++){int n=i;var e=entries.get(i);button(e.sender()+"\n"+e.subject(),()->work("Verifying message…",()->openMessage(messages.get(n))));}});}});});
-        button("Send prepared message via SMTP",()->{if(outgoing==null){error(new Exception("Compose and prepare a message first"));return;}String h=smtp.getText().toString(),u=user.getText().toString();
-            new AlertDialog.Builder(this).setTitle("Send email now?").setMessage("Send the prepared signed message to "+to+" through "+h+"?").setNegativeButton("Cancel",null).setPositiveButton("Send",(d,w)->{String credential=pass.getText().toString();pass.getText().clear();work("Sending SMTP…",()->{MailEngine.send(MailEngine.parse(outgoing),h,587,u,credential,false);runOnUiThread(()->new AlertDialog.Builder(this).setMessage("Message sent").setPositiveButton("OK",null).show());});}).show();});
+        text("TLS is required. Server names and username are saved; passwords are never saved. Use an app password if your provider requires one.");
+        button("Connect to inbox",()->{String u=user.getText().toString().trim(),h=imap.getText().toString().trim(),out=smtp.getText().toString().trim();if(u.isEmpty()||h.isEmpty()||out.isEmpty()){error(new IOException("Enter username, IMAP host and SMTP host."));return;}password("IMAP app password (not saved)",pass->{var next=AndroidImapMailbox.connect(h,u,new String(pass));try{var entries=next.latest("");var old=imapMailbox;imapMailbox=next;if(old!=null)try{old.close();}catch(Exception ignored){}prefs.edit().putString("provider","imap").putString("user",u).putString("imap",h).putString("smtp",out).apply();runOnUiThread(()->{imapUser=u;smtpHost=out;mailSearch="";mailboxProvider="imap";inboxEntries=entries;renderInbox();});}catch(Exception e){next.close();throw e;}});});
     }
     private void pick(IoAction action){documentAction=action;Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(i,1);}
     private byte[] read(Uri uri)throws Exception {try(var in=getContentResolver().openInputStream(uri);var out=new ByteArrayOutputStream()){if(in==null)throw new IOException("Cannot open file");byte[] block=new byte[8192];int n;while((n=in.read(block))!=-1){if(out.size()+n>MailEngine.MAX_MESSAGE)throw new IOException("File exceeds 20 MiB");out.write(block,0,n);}return out.toByteArray();}}
     private void exportCert(X509Certificate cert,String name){try{export(cert.getEncoded(),name,"application/pkix-cert");}catch(Exception e){error(e);}}
     private void export(byte[] bytes,String name,String mime){exportBytes=bytes;startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType(mime).addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,name),2);}
-    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==GOOGLE_AUTH){if(result!=RESULT_OK||data==null){googleAction=null;notice("Google authorization cancelled");return;}try{googleAuthorized(com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient(this).getAuthorizationResultFromIntent(data));}catch(Exception e){googleAction=null;error(e);}return;}if(result!=RESULT_OK||data==null){exportBytes=null;documentAction=null;return;}Uri uri=data.getData();if(request==1){IoAction action=documentAction;documentAction=null;work("Opening file…",()->action.accept(uri));}else if(request==2){byte[] bytes=exportBytes;exportBytes=null;work("Saving file…",()->{try(var out=getContentResolver().openOutputStream(uri,"wt")){if(out==null)throw new IOException("Cannot save file");out.write(bytes);}});}}
+    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==GOOGLE_AUTH){if(result!=RESULT_OK||data==null){googleAction=null;loading("");notice("Google authorization cancelled");return;}try{googleAuthorized(com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient(this).getAuthorizationResultFromIntent(data));}catch(Exception e){googleAction=null;loading("");error(e);}return;}if(result!=RESULT_OK||data==null){exportBytes=null;documentAction=null;return;}Uri uri=data.getData();if(request==1){IoAction action=documentAction;documentAction=null;work("Opening file…",()->action.accept(uri));}else if(request==2){byte[] bytes=exportBytes;exportBytes=null;work("Saving file…",()->{try(var out=getContentResolver().openOutputStream(uri,"wt")){if(out==null)throw new IOException("Cannot save file");out.write(bytes);}});}}
 }

@@ -30,7 +30,9 @@ def read_request(stream):
     try:spki,payload=[base64.b64decode(line.strip(),validate=True) for line in fields]
     except ValueError as error:raise AdapterError("Invalid base64 request") from error
     size,low,high=profiles[algorithm]
-    if len(payload)!=size or not low<=len(spki)<=high:raise AdapterError("Invalid signing key or input length")
+    # Ed25519 signs the OpenPGP hash as a raw message: v6 SHA-384 or v4 SHA-512.
+    valid_size = len(payload) in (48,64) if algorithm==b"Ed25519\n" else len(payload)==size
+    if not valid_size or not low<=len(spki)<=high:raise AdapterError("Invalid signing key or input length")
     return algorithm.decode().strip(),spki,payload
 
 

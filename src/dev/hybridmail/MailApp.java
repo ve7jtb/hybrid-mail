@@ -84,10 +84,10 @@ public final class MailApp extends JFrame {
         pgpLookupTimer.setRepeats(false);
         mailFormat.addActionListener(e->{encrypt.setSelected(false);refreshSaved();recipientAddressChanged();((CardLayout)encryptionOptions.getLayout()).show(encryptionOptions,usePgp()?"OpenPGP":"S/MIME");if(!usePgp())encrypt.setEnabled(true);});
         to.getDocument().addDocumentListener(new javax.swing.event.DocumentListener(){public void insertUpdate(javax.swing.event.DocumentEvent e){recipientAddressChanged();}public void removeUpdate(javax.swing.event.DocumentEvent e){recipientAddressChanged();}public void changedUpdate(javax.swing.event.DocumentEvent e){recipientAddressChanged();}});
-        pgpEncryption.addActionListener(e->{if(!syncingPgp){pgpRecipient=(OpenPgp.PublicIdentity)pgpEncryption.getSelectedItem();encrypt.setEnabled(!usePgp()||pgpRecipient!=null);if(pgpRecipient==null)encrypt.setSelected(false);else pgpLookupStatus.setText(pgpTrustStatus(pgpRecipient,to.getText().trim())+" · "+(pgpRecipient.quantumEncryption()?"Hybrid PQ encryption":"WARNING: Classical encryption — not post-quantum resistant."));}});
+        pgpEncryption.addActionListener(e->{if(!syncingPgp)refreshPgpChoices();});
         outgoingIdentity.addActionListener(e->{if(!syncingOutgoing){var chosen=(DesktopState.SavedIdentity)outgoingIdentity.getSelectedItem();if(chosen!=null)openSaved(chosen);}});
         outgoingEncryption.setEnabled(!usePgp()&&encrypt.isSelected());encrypt.addActionListener(e->outgoingEncryption.setEnabled(!usePgp()&&encrypt.isSelected()));
-        outgoingEncryption.addActionListener(e->{if(!syncingOutgoing){var chosen=(EncryptionChoice)outgoingEncryption.getSelectedItem();if(chosen!=null){recipient=chosen.certificate();to.setText(chosen.email());recipientLabel.setText(chosen.email()+" · "+recipient.getPublicKey().getAlgorithm());try{state().saveCertificate("recipient",recipient);}catch(Exception error){error(error);}}}}); fields.add(new JLabel("Outgoing OpenPGP signatures are hybrid PQ. To lookups go to keys.openpgp.org; a found key is not automatically trusted.")); for(Component item:fields.getComponents())if(item instanceof JComponent c){c.setAlignmentX(Component.LEFT_ALIGNMENT);c.setMaximumSize(new Dimension(Integer.MAX_VALUE,c.getPreferredSize().height));}p.add(fields,BorderLayout.NORTH);
+        outgoingEncryption.addActionListener(e->{if(!syncingOutgoing){var chosen=(EncryptionChoice)outgoingEncryption.getSelectedItem();if(chosen!=null){recipient=chosen.certificate();to.setText(chosen.email());recipientLabel.setText(chosen.email()+" · "+recipient.getPublicKey().getAlgorithm());try{state().saveCertificate("recipient",recipient);}catch(Exception error){error(error);}}}}); fields.add(new JLabel("Prefer v6: hybrid signing. V4 recipients: Ed25519 compatibility signing. Lookup never grants trust.")); for(Component item:fields.getComponents())if(item instanceof JComponent c){c.setAlignmentX(Component.LEFT_ALIGNMENT);c.setMaximumSize(new Dimension(Integer.MAX_VALUE,c.getPreferredSize().height));}p.add(fields,BorderLayout.NORTH);
         JPanel content=new JPanel(new BorderLayout(0,6));content.add(new JScrollPane(body));
         JPanel attachments=new JPanel(new BorderLayout());attachmentList.setVisibleRowCount(2);
         attachments.add(new JScrollPane(attachmentList));JPanel fileActions=new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -101,7 +101,7 @@ public final class MailApp extends JFrame {
     }
     private void selectPgpRecipient(OpenPgp.PublicIdentity key)throws Exception{
         state().rememberPgp(key,key.matchesEmail(to.getText().trim())?to.getText().trim():key.email);refreshContacts();pgpRecipients.remember(key);to.setText(key.matchesEmail(to.getText().trim())?to.getText().trim():key.email);
-        recipientAddressChanged();pgpLookupTimer.stop();refreshPgpChoices();pgpEncryption.setSelectedItem(key);pgpStatus.setText(pgpContactDescription(key,to.getText().trim()));
+        recipientAddressChanged();pgpLookupTimer.stop();refreshPgpChoices();pgpStatus.setText(pgpContactDescription(key,to.getText().trim()));
     }
     private void recipientAddressChanged(){
         pgpLookupTimer.stop();pgpLookupTicket=pgpRecipients.change(to.getText());pgpRecipient=null;
@@ -110,11 +110,11 @@ public final class MailApp extends JFrame {
         }
     }
     private void refreshPgpChoices(){
-        var previous=pgpRecipient;syncingPgp=true;
-        try{pgpEncryption.removeAllItems();for(var key:pgpRecipients.choices())pgpEncryption.addItem(key);if(previous!=null)for(int i=0;i<pgpEncryption.getItemCount();i++)try{if(pgpEncryption.getItemAt(i).fingerprint().equals(previous.fingerprint()))pgpEncryption.setSelectedIndex(i);}catch(Exception ignored){}
+        syncingPgp=true;
+        try{pgpEncryption.removeAllItems();for(var key:pgpRecipients.choices())pgpEncryption.addItem(key);
             pgpRecipient=(OpenPgp.PublicIdentity)pgpEncryption.getSelectedItem();
-            if(usePgp()){encrypt.setEnabled(pgpRecipient!=null);if(pgpRecipient==null)encrypt.setSelected(false);}
-            pgpLookupStatus.setText(pgpRecipient==null?"No usable recipient key — encryption unavailable.":pgpTrustStatus(pgpRecipient,to.getText().trim())+" · "+(pgpRecipient.quantumEncryption()?"Hybrid PQ encryption":"WARNING: Classical encryption — not post-quantum resistant."));
+            if(usePgp()){encrypt.setEnabled(pgpRecipient!=null&&pgpRecipient.canEncrypt());if(pgpRecipient==null||!pgpRecipient.canEncrypt())encrypt.setSelected(false);}
+            pgpLookupStatus.setText(pgpRecipient==null?"No usable recipient key — encryption unavailable.":pgpTrustStatus(pgpRecipient,to.getText().trim())+" · "+(pgpRecipient.version()==4?"v4 Ed25519 compatibility signing":"v6 hybrid signing")+" · "+(!pgpRecipient.canEncrypt()?"No usable encryption subkey":pgpRecipient.quantumEncryption()?"Hybrid PQ encryption":"WARNING: Classical encryption — not post-quantum resistant."));
         }finally{syncingPgp=false;}
     }
     private void lookupPgpRecipient(){
@@ -744,11 +744,13 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             if(!usePgp()&&encrypt.isSelected()&&!Identity.matchesEmail(recipient,to.getText().trim())){tabs.setSelectedIndex(4);throw new IOException("Choose an encryption certificate matching the To address, or turn off optional encryption to send signed-only mail");}
         }catch(Exception e){error(e);return;}
         if(usePgp()&&(!Identity.HYBRID_65_P384_SIGN.equals(identity.signatureAlgorithm())||!attachmentModel.isEmpty())){error(new IOException("Outgoing OpenPGP requires a Level 3 hybrid signing identity and plain text. Use S/MIME for attachments."));return;}
+        if(usePgp())refreshPgpChoices();
         if(usePgp()&&encrypt.isSelected()&&(pgpRecipient==null||!pgpRecipient.matchesEmail(to.getText().trim())||!pgpRecipient.canEncrypt())){error(new IOException("Wait for a matching, usable recipient key in Compose, or import it from the OpenPGP tab."));tabs.setSelectedIndex(5);return;}
         if(encrypt.isSelected()&&(usePgp()?!pgpRecipient.quantumEncryption():!CryptoWarnings.pq(recipient.getPublicKey(),false))){
             String algorithm=usePgp()?pgpRecipient.encryptionDescription():recipient.getPublicKey().getAlgorithm();
             if(JOptionPane.showOptionDialog(this,CryptoWarnings.encryption(algorithm),"Non-PQ encryption",JOptionPane.DEFAULT_OPTION,JOptionPane.WARNING_MESSAGE,null,new Object[]{"Cancel","Encrypt anyway"},"Cancel")!=1)return;
         }
+        if(usePgp()&&pgpRecipient!=null&&pgpRecipient.version()==4&&JOptionPane.showConfirmDialog(this,"This recipient has a v4 certificate. Use classical Ed25519 compatibility signing?\nYour v4 and v6 public certificates, plus a signing-only v4 copy for older clients, will be attached.\nEd25519 signatures are not post-quantum resistant.","v4 compatibility signing",JOptionPane.OK_CANCEL_OPTION,JOptionPane.WARNING_MESSAGE)!=JOptionPane.OK_OPTION)return;
         final boolean pgp=usePgp(),pgpEncrypt=encrypt.isSelected();final OpenPgp.PublicIdentity pgpTo=pgpRecipient;
         Path file=send?null:chooseSave("Save signed message", "message.eml", "eml");if(!send&&file==null)return;
         Account a=send?account(true):null;if(send&&a==null)return;
@@ -759,7 +761,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         if(send&&JOptionPane.showConfirmDialog(this,"Send this "+((pgp?pgpEncrypt:r!=null)?"signed and encrypted":"signed, unencrypted")+" message with "+files.size()+" attachment(s) to "+t+"?","Send message",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){Arrays.fill(a.password,'\0');return;}
         job(send?"Signing and sending…":"Signing and saving…",()->{
             try {
-                MimeMessage m=pgp?MailEngine.parse(OpenPgp.compose(id,OpenPgp.loadOwn(state().directory(),id),pgpEncrypt?pgpTo:null,f,t,s,b,backend)):MailEngine.compose(id,f,t,s,b,r,backend,files);
+                MimeMessage m=pgp?MailEngine.parse(OpenPgp.composeForRecipient(id,OpenPgp.loadOwn(state().directory(),id),pgpTo,pgpEncrypt,f,t,s,b,backend)):MailEngine.compose(id,f,t,s,b,r,backend,files);
                 if(send){if(a.oauth){try(var api=new GmailApi(this::googleCredential)){api.verifyAccount(a.user);api.send(m);}}else MailEngine.send(m,a.host,a.port,a.user,new String(a.password),false);}
                 else Files.write(file,MailEngine.encode(m),StandardOpenOption.CREATE_NEW);
                 return send?"Message sent":"Saved "+file.getFileName();

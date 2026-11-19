@@ -153,7 +153,7 @@ public final class OpenPgp {
         verifyDigest(sig,digest,parseKey(key,true));return new Checked(map,salt,h);
     }
     public static final class PublicIdentity {
-        final byte[] primary,subkey,encoded;final Keys signing,encryption;final String email;final int mode;final LegacyOpenPgp legacy;
+        final byte[] primary,subkey,encoded;final Keys signing,encryption;final String email;final int mode;final LegacyOpenPgp legacy; final LegacyOpenPgp v6;
         public PublicIdentity(byte[] input)throws Exception {
             encoded=unarmor(input,"PUBLIC KEY BLOCK");
             check(encoded.length<=128*1024,"Public certificate exceeds 128 KiB");
@@ -161,11 +161,17 @@ public final class OpenPgp {
             if((header&64)!=0){check((header&63)==6&&peek.length()>0,"Expected primary public key");}
             else{check(((header>>2)&15)==6&&(header&3)!=3,"Expected bounded primary key");peek.number(1<<(header&3));}
             if(peek.one()==4){
-                legacy=new LegacyOpenPgp(encoded);primary=legacy.primary.getPublicKeyPacket().getEncodedContents();
+                v6=null;legacy=new LegacyOpenPgp(encoded);primary=legacy.primary.getPublicKeyPacket().getEncodedContents();
                 subkey=legacy.recipient==null?primary:legacy.recipient.getPublicKeyPacket().getEncodedContents();
                 signing=null;encryption=null;email=legacy.emails.get(0);mode=0;return;
             }
-            legacy=null;List<Packet> p=packets(encoded);check(p.stream().map(Packet::tag).toList().equals(List.of(6,2,13,2,14,2)),"Expected one v6 primary, direct signature, certified email and bound encryption subkey; unsupported/revoked keys are rejected");
+            legacy=null;List<Packet> p=packets(encoded);
+            if(p.get(0).body[5]==30){
+                v6=new LegacyOpenPgp(encoded,6);primary=v6.primary.getPublicKeyPacket().getEncodedContents();
+                subkey=v6.recipient==null?primary:v6.recipient.getPublicKeyPacket().getEncodedContents();
+                signing=parseKey(primary,true);encryption=v6.recipient==null?null:parseKey(subkey,false);email=v6.emails.get(0);mode=v6.recipient==null?0:2;return;
+            }
+            v6=null;check(p.stream().map(Packet::tag).toList().equals(List.of(6,2,13,2,14,2)),"Expected one v6 primary, direct signature, certified email and bound encryption subkey; unsupported/revoked keys are rejected");
             primary=p.get(0).body;subkey=p.get(4).body;signing=parseKey(primary,true);encryption=parseKey(subkey,false);check((signing.pq==null)==(encryption.pq==null)&&modern(signing)==modern(encryption),"Mixed OpenPGP key profiles");
             String uid=new String(p.get(2).body,StandardCharsets.UTF_8);int l=uid.lastIndexOf('<');email=l>=0&&uid.endsWith(">")?uid.substring(l+1,uid.length()-1):uid;validateEmail(email);
             Checked direct=verify(p.get(1).body,keyHash(primary),31,primary);
@@ -177,19 +183,20 @@ public final class OpenPgp {
             for(int i=0;i<pref.length;i+=2)if(pref[i]==9&&(pref[i+1]==2||pref[i+1]==3))mode=Math.max(mode,pref[i+1]);this.mode=mode;
         }
         public int version(){return primary[0]&255;}
-        public String signingAlgorithms(){return legacy!=null?legacy.signingAlgorithms():signing.pq==null?"ECDSA P-384":modern(signing)?"ML-DSA-65 + Ed25519":"ML-DSA-65 + ECDSA P-384 (experimental)";}
-        public String encryptionAlgorithm(){return legacy!=null?legacy.encryptionAlgorithm():encryption.pq==null?"ECDH P-384":modern(encryption)?"ML-KEM-768 + X25519":"ML-KEM-768 + ECDH P-384 (experimental)";}
-        public boolean quantumEncryption(){return legacy==null&&encryption.pq!=null;}
-        public boolean canEncrypt(){try{if(legacy!=null){var current=new LegacyOpenPgp(encoded);return current.recipient!=null&&current.cipher!=0;}new PublicIdentity(encoded);return mode!=0;}catch(Exception e){return false;}}
+        public String signingAlgorithms(){return v6!=null?v6.signingAlgorithms():legacy!=null?legacy.signingAlgorithms():signing.pq==null?"ECDSA P-384":modern(signing)?"ML-DSA-65 + Ed25519":"ML-DSA-65 + ECDSA P-384 (experimental)";}
+        public String encryptionAlgorithm(){return v6!=null?v6.encryptionAlgorithm():legacy!=null?legacy.encryptionAlgorithm():encryption.pq==null?"ECDH P-384":modern(encryption)?"ML-KEM-768 + X25519":"ML-KEM-768 + ECDH P-384 (experimental)";}
+        public boolean quantumEncryption(){return v6!=null?v6.recipient!=null&&v6.recipient.getAlgorithm()==35:legacy==null?encryption.pq!=null:legacy.recipient!=null&&legacy.recipient.getAlgorithm()==35;}
+        public boolean canEncrypt(){try{if(v6!=null){var current=new LegacyOpenPgp(encoded,6);return current.recipient!=null;}if(legacy!=null){var current=new LegacyOpenPgp(encoded);return current.recipient!=null&&current.cipher!=0;}new PublicIdentity(encoded);return mode!=0;}catch(Exception e){return false;}}
         public String encryptionDescription(){
-            if(legacy!=null){var k=legacy.recipient;if(k==null)return "No usable encryption subkey";return "v4 classical "+legacy.encryptionAlgorithm()+" (not PQ)";}
+            if(v6!=null)return "v6 "+v6.encryptionAlgorithm();
+            if(legacy!=null){var k=legacy.recipient;if(k==null)return "No usable encryption subkey";return "v4 "+(quantumEncryption()?"hybrid ":"classical ")+legacy.encryptionAlgorithm()+(quantumEncryption()?"":" (not PQ)");}
             return encryption.pq==null?"v6 ECDH P-384 (not PQ)":modern(encryption)?"v6 ML-KEM-768 + X25519":"v6 ML-KEM-768 + P-384 (experimental)";
         }
         @Override public String toString(){try{return encryptionDescription()+" · "+fingerprint();}catch(Exception e){return encryptionDescription();}}
         public byte[] export(){return armor(encoded,"PUBLIC KEY BLOCK");}
         public String fingerprint()throws Exception{return hex(OpenPgp.fingerprint(primary));}
-        public java.util.List<String> certifiedEmails(){return (legacy==null?java.util.List.of(email):legacy.emails).stream().map(v->v.toLowerCase(Locale.ROOT)).distinct().toList();}
-        public boolean matchesEmail(String address){return legacy==null?email.equalsIgnoreCase(address):legacy.matches(address);}
+        public java.util.List<String> certifiedEmails(){return (v6!=null?v6.emails:legacy==null?java.util.List.of(email):legacy.emails).stream().map(v->v.toLowerCase(Locale.ROOT)).distinct().toList();}
+        public boolean matchesEmail(String address){return v6!=null?v6.matches(address):legacy==null?email.equalsIgnoreCase(address):legacy.matches(address);}
         public String profile(){return legacy==null?OpenPgp.profile(signing):"OpenPGP v4 classical — not post-quantum";}
         public String description()throws Exception{return email+" · "+profile()+"\nVersion: v"+version()+"\nSigning: "+signingAlgorithms()+"\nEncryption: "+encryptionAlgorithm()+"\nFingerprint: "+fingerprint()+"\nSelf-signatures verified. Trust is not established; confirm the fingerprint independently.";}
         static int flag(Checked c,int id){byte[] v=c.subs.get(id);return v==null||v.length==0?0:v[0]&255;}
@@ -256,6 +263,7 @@ public final class OpenPgp {
         try{while(r.left()>16){int len=Math.min(size+16,r.left()-16);check(len>=16,"Truncated chunk");out.put(aead(false,mode,key,cat(iv,n(index++,8)),info,r.take(len)));}aead(false,mode,key,cat(iv,n(index,8)),cat(info,n(out.size(),8)),r.take(16));return out.toByteArray();}finally{wipe(derived);wipe(key);}
     }
     static byte[] encrypt(byte[] signed,PublicIdentity recipient)throws Exception {
+        if(recipient.v6!=null)return new LegacyOpenPgp(recipient.encoded,6).encrypt(signed);
         if(recipient.legacy!=null)return new LegacyOpenPgp(recipient.encoded).encrypt(signed);
         check(recipient.mode!=0,"Recipient must advertise AES-256 OCB or GCM");byte[] session=random(32);Encapsulation kem=encapsulate(recipient);
         try{byte[] wrapped=wrap(true,kem.kek,recipient.encryption.pq==null?paddedSession(session):session),pkesk=cat(b(6,33,6),fingerprint(recipient.subkey),b(algorithm(recipient.encryption,false)),recipient.encryption.pq==null?mpi(kem.ciphertext):kem.ciphertext,b(wrapped.length),wrapped);return cat(frame(1,pkesk),seipd(signed,session,recipient.mode));}finally{wipe(session);wipe(kem.kek);}
@@ -272,6 +280,7 @@ public final class OpenPgp {
         return cat(frame(4,cat(b(6,0,9,own.primary[5]&255,24),req.salt,fingerprint(own.primary),b(1))),frame(11,cat(b(98,0),n(0,4),plain)),frame(2,req.finish(sig)));
     }
     static byte[] openSigned(byte[] data,PublicIdentity signer)throws Exception {
+        if(signer.v6!=null)return new LegacyOpenPgp(signer.encoded,6).openSigned(data);
         if(signer.legacy!=null)return new LegacyOpenPgp(signer.encoded).openSigned(data);
         List<Packet> p=packets(data);check(p.stream().map(Packet::tag).toList().equals(List.of(4,11,2)),"Unsupported signed message; compression is not supported");Reader r=new Reader(p.get(1).body);check(List.of(98,116,117).contains(r.one()),"Invalid literal packet");r.take(r.one()+4);byte[] plain=r.take(r.left());Checked sig=verify(p.get(2).body,plain,0,signer.primary);check(Arrays.equals(p.get(0).body,cat(b(6,0,sig.hash,signer.primary[5]&255,sig.salt.length),sig.salt,fingerprint(signer.primary),b(1))),"One-pass signature mismatch");return plain;
     }
@@ -298,20 +307,83 @@ public final class OpenPgp {
         validateEmail(from);validateEmail(to);check(subject.length()<=500&&!subject.contains("\r")&&!subject.contains("\n"),"Invalid subject");String boundary="pqmail-"+UUID.randomUUID(),type=encrypted?"encrypted":"signed",protocol=encrypted?"application/pgp-encrypted":"application/pgp-signature";
         return cat(bytes("From: "+from+"\r\nTo: "+to+"\r\nSubject: "+subject+"\r\nMIME-Version: 1.0\r\nContent-Type: multipart/"+type+"; protocol=\""+protocol+"\"; "+(encrypted?"":"micalg=pgp-sha384; ")+"boundary=\""+boundary+"\"\r\n\r\n--"+boundary+"\r\n"),first,bytes("\r\n--"+boundary+"\r\n"),second,bytes("\r\n--"+boundary+"--\r\n"));
     }
+    /** v4 compatibility uses the existing RFC 9980 Ed25519 key, never an empty primary. */
+    static byte[] v4KeyHash(byte[] body){return cat(b(0x99),n(body.length,2),body);}
+    static byte[] v4Signature(byte[] data,int type,byte[] primary,byte[] extra,Signer signer)throws Exception {
+        byte[] fp=fingerprint(primary),subs=cat(sub(2,n(now(),4)),sub(33,cat(b(4),fp)),extra);
+        byte[] header=cat(b(4,type,22,10),n(subs.length,2),subs);
+        byte[] digest=hash("SHA-512",cat(data,header,b(4,255),n(header.length,4))),sig=signer.sign(digest);
+        check(sig.length==64,"Invalid Ed25519 signature length");
+        byte[] unhashed=sub(16,slice(fp,12,20));
+        return cat(header,n(unhashed.length,2),unhashed,slice(digest,0,2),mpi(slice(sig,0,32)),mpi(slice(sig,32,64)));
+    }
+    static PublicIdentity compatibilityCertificate(PublicIdentity own,Signer signer)throws Exception {
+        check(rfc9980(own),"v4 compatibility requires an RFC 9980 identity with Ed25519 in slot 84 and X25519 in slot 85");
+        // Reuse the v6 creation timestamps so primary/subkey fingerprints remain stable.
+        byte[] primary=cat(b(4),slice(own.primary,1,5),b(22,9,0x2b,6,1,4,1,0xda,0x47,0xf,1),mpi(cat(b(0x40),raw(own.signing.ec))));
+        byte[] subkey=cat(b(4),slice(own.subkey,1,5),b(35),raw(own.encryption.ec),raw(own.encryption.pq)),uid=bytes(own.email);
+        byte[] prefs=cat(sub(27,b(3)),sub(11,b(9,7)),sub(21,b(10,9,8)),sub(22,b(0)),sub(30,b(1)));
+        byte[] cert=v4Signature(cat(v4KeyHash(primary),b(0xb4),n(uid.length,4),uid),19,primary,prefs,signer);
+        byte[] bind=v4Signature(cat(v4KeyHash(primary),v4KeyHash(subkey)),24,primary,sub(27,b(12)),signer);
+        return new PublicIdentity(cat(frame(6,primary),frame(13,uid),frame(2,cert),frame(14,subkey),frame(2,bind)));
+    }
+    static PublicIdentity signingOnlyCompatibility(PublicIdentity certificate)throws Exception {
+        check(certificate.version()==4,"Expected v4 compatibility certificate");var out=new Buffer();
+        for(var packet:packets(certificate.encoded)){if(packet.tag==14)break;out.put(frame(packet.tag,packet.body));}
+        var result=new PublicIdentity(out.toByteArray());check(result.fingerprint().equals(certificate.fingerprint())&&!result.canEncrypt(),"Invalid signing-only certificate view");return result;
+    }
+    static byte[] withPublicCertificate(byte[] plain,PublicIdentity certificate,PublicIdentity modern)throws Exception {
+        String boundary="pqmail-key-"+UUID.randomUUID();
+        return cat(bytes("Content-Type: multipart/mixed; boundary=\""+boundary+"\"\r\n\r\n--"+boundary+"\r\n"),plain,
+            bytes("\r\n--"+boundary+"\r\nContent-Type: application/pgp-keys\r\nContent-Disposition: attachment; filename=\"public-key-v4.asc\"\r\n\r\n"),certificate.export(),bytes("\r\n--"+boundary+"\r\nContent-Type: application/pgp-keys\r\nContent-Disposition: attachment; filename=\"public-key-v4-signing.asc\"\r\n\r\n"),signingOnlyCompatibility(certificate).export(),bytes("\r\n--"+boundary+"\r\nContent-Type: application/pgp-keys\r\nContent-Disposition: attachment; filename=\"public-key-v6.asc\"\r\n\r\n"),modern.export(),bytes("\r\n--"+boundary+"--\r\n"));
+    }
+    public static byte[] composeForRecipient(Identity id,PublicIdentity own,PublicIdentity selected,boolean encrypted,String from,String to,String subject,String text,ExternalMu.Backend backend)throws Exception {
+        check(!encrypted||selected!=null,"Select a recipient certificate before encrypting");validateEmail(to);validateEmail(from);check(subject.length()<=500&&!subject.contains("\r")&&!subject.contains("\n"),"Invalid subject");
+        if(selected==null||selected.version()!=4)return compose(id,own,encrypted?selected:null,from,to,subject,text,backend);
+        match(own,id);check(selected.matchesEmail(to),"Recipient address mismatch");check(own.email.equalsIgnoreCase(from),"Sender address mismatch");
+        check(rfc9980(own)&&backend!=null,"Ed25519 compatibility signing requires your RFC 9980 YubiKey identity (Ed25519 slot 84). Select that identity before sending to a v4 recipient.");
+        check(text.length()<LIMIT/4,"Message too large");
+        ExternalMu.Backend op=backend.newOperation();
+        try {
+            Signer signer=digest->{byte[] sig=op.signEd25519(own.signing.ec,digest);Signature verify=Signature.getInstance("Ed25519","BC");verify.initVerify(own.signing.ec);verify.update(digest);check(verify.verify(sig),"Invalid compatibility signature");return sig;};
+            PublicIdentity compat=compatibilityCertificate(own,signer);
+            byte[] plain=withPublicCertificate(cat(bytes("Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"),bytes(Base64.getMimeEncoder(64,b(13,10)).encodeToString(bytes(text)))),compat,own);
+            byte[] sig=v4Signature(plain,0,compat.primary,b(),signer);compat.legacy.verify(frame(2,sig),plain);
+            if(encrypted){byte[] fp=fingerprint(compat.primary),signed=cat(frame(4,cat(b(3,0,10,22),slice(fp,12,20),b(1))),frame(11,cat(b(98,0),n(0,4),plain)),frame(2,sig));
+                return mimeWrap(bytes("Content-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n"),cat(bytes("Content-Type: application/octet-stream\r\n\r\n"),armor(encrypt(signed,selected),"MESSAGE")),true,from,to,subject);
+            }
+            return new String(mimeWrap(plain,cat(bytes("Content-Type: application/pgp-signature; name=\"signature.asc\"\r\nContent-Disposition: attachment; filename=\"signature.asc\"\r\nContent-Transfer-Encoding: 7bit\r\n\r\n"),armor(frame(2,sig),"SIGNATURE")),false,from,to,subject),StandardCharsets.UTF_8).replace("micalg=pgp-sha384;","micalg=pgp-sha512;").getBytes(StandardCharsets.UTF_8);
+        }finally{op.clearSecrets();}
+    }
     public static byte[] compose(Identity id,PublicIdentity own,PublicIdentity recipient,String from,String to,String subject,String text,ExternalMu.Backend backend)throws Exception {
         match(own,id);check(own.signing.pq!=null,"Outgoing OpenPGP signing requires a post-quantum hybrid profile");check(from.equalsIgnoreCase(own.email),"Sender address mismatch");validateEmail(to);check(subject.length()<=500&&!subject.contains("\r")&&!subject.contains("\n"),"Invalid subject");check(text.length()<LIMIT/4,"Message too large");if(recipient!=null)check(recipient.matchesEmail(to),"Recipient address mismatch");
         byte[] plain=cat(bytes("Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"),bytes(Base64.getMimeEncoder(64,b(13,10)).encodeToString(bytes(text))));
         ExternalMu.Backend op=backend==null?null:backend.newOperation();
         try{Signer signer=signer(id,op,own.signing);if(recipient!=null)return mimeWrap(bytes("Content-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n"),cat(bytes("Content-Type: application/octet-stream\r\n\r\n"),armor(encrypt(signed(plain,own,signer),recipient),"MESSAGE")),true,from,to,subject);
-            Request req=request(plain,0,fingerprint(own.primary),b(),own.primary[5]&255);return mimeWrap(plain,cat(bytes("Content-Type: application/pgp-signature\r\n\r\n"),armor(frame(2,req.finish(signer.sign(req.digest))),"SIGNATURE")),false,from,to,subject);
+            Request req=request(plain,0,fingerprint(own.primary),b(),own.primary[5]&255);return mimeWrap(plain,cat(bytes("Content-Type: application/pgp-signature; name=\"signature.asc\"\r\nContent-Disposition: attachment; filename=\"signature.asc\"\r\nContent-Transfer-Encoding: 7bit\r\n\r\n"),armor(frame(2,req.finish(signer.sign(req.digest))),"SIGNATURE")),false,from,to,subject);
         }finally{if(op!=null)op.clearSecrets();}
     }
     public record Opened(String text,String email,String fingerprint,boolean encrypted,boolean fromMatches,String profile,boolean postQuantum) {
         public String display(){return (postQuantum?"":CryptoWarnings.SIGNATURE)+profile+"\nSignature valid; trust not established\nSigner: "+email+"\nFingerprint: "+fingerprint+"\nEncrypted: "+encrypted+"\nUnsigned From matches: "+fromMatches+"\n\n"+text;}
     }
+    static byte[] openCompatibilityEncrypted(byte[] encoded,PublicIdentity own,Identity id,ExternalKem.Backend backend)throws Exception {
+        check(rfc9980(own),"v4 hybrid decryption requires the matching RFC 9980 identity");
+        var packets=packets(encoded);check(packets.stream().map(Packet::tag).toList().equals(List.of(1,18)),"Expected one recipient and integrity-protected encrypted data");
+        byte[] subkey=cat(b(4),slice(own.subkey,1,5),b(35),raw(own.encryption.ec),raw(own.encryption.pq)),fp=fingerprint(subkey);
+        Reader r=new Reader(packets.get(0).body);check(r.one()==3&&Arrays.equals(r.take(8),slice(fp,12,20))&&r.one()==35,"v4 hybrid recipient does not match selected identity");
+        byte[] ct=r.take(1120);int len=r.one(),cipher=r.one();check(len==r.left()+1&&List.of(7,8,9).contains(cipher),"Invalid v3 hybrid session key");byte[] wrapped=r.take(r.left()),kek=recover(ct,id,backend,own),session=null;
+        try {
+            session=wrap(false,kek,wrapped);check(session.length==(cipher==7?16:cipher==8?24:32),"Invalid AES session key length");
+            var factory=LegacyOpenPgp.objects(encoded);Object object=factory.nextObject();check(object instanceof org.bouncycastle.openpgp.PGPEncryptedDataList,"Expected encrypted data");
+            var data=((org.bouncycastle.openpgp.PGPEncryptedDataList)object).extractSessionKeyEncryptedData();check(data.isIntegrityProtected(),"Unprotected encrypted data rejected");
+            byte[] plain=LegacyOpenPgp.bounded(data.getDataStream(new org.bouncycastle.openpgp.operator.jcajce.JceSessionKeyDataDecryptorFactoryBuilder().setProvider("BC").build(new org.bouncycastle.openpgp.PGPSessionKey(cipher,session))));
+            check(data.verify(),"Encrypted message integrity check failed");return plain;
+        }finally{wipe(kek);wipe(session);}
+    }
     public static Opened open(byte[] message,PublicIdentity signer,PublicIdentity own,Identity id,ExternalKem.Backend backend)throws Exception {
         check(signer!=null,"Import the sender's OpenPGP public key");Parts p=parts(message);byte[] plain;
-        if(p.encrypted){check(own!=null&&id!=null,"Select the decryption identity");match(own,id);Envelope env=envelope(unarmor(decoded(mime(p.second)),"MESSAGE"),own);byte[] kek=recover(env.ct,id,backend,own);try{plain=openSigned(env.open(kek),signer);}finally{wipe(kek);}}
+        if(p.encrypted){check(own!=null&&id!=null,"Select the decryption identity");match(own,id);byte[] encoded=unarmor(decoded(mime(p.second)),"MESSAGE");var payload=packets(encoded);if(!payload.isEmpty()&&payload.get(0).tag==1&&payload.get(0).body[0]==3)plain=openSigned(openCompatibilityEncrypted(encoded,own,id,backend),signer);else{Envelope env=envelope(encoded,own);byte[] kek=recover(env.ct,id,backend,own);try{plain=openSigned(env.open(kek),signer);}finally{wipe(kek);}}}
+        else if(signer.v6!=null){new LegacyOpenPgp(signer.encoded,6).verify(unarmor(decoded(mime(p.second)),"SIGNATURE"),p.first);plain=p.first;}
         else if(signer.legacy!=null){new LegacyOpenPgp(signer.encoded).verify(unarmor(decoded(mime(p.second)),"SIGNATURE"),p.first);plain=p.first;}
         else{List<Packet> sig=packets(unarmor(decoded(mime(p.second)),"SIGNATURE"));check(sig.size()==1&&sig.get(0).tag==2,"Expected one detached signature");verify(sig.get(0).body,p.first,0,signer.primary);plain=p.first;}
         return new Opened(VerifiedMime.display(plain),signer.email,signer.fingerprint(),p.encrypted,signer.matchesEmail(p.root.headers.get("from")),signer.profile(),signer.legacy==null&&signer.signing.pq!=null);

@@ -13,5 +13,5 @@ final class OpenPgpRecipients {
  boolean accept(Ticket ticket,OpenPgp.PublicIdentity key)throws Exception{
   if(!current(ticket)||!key.matchesEmail(address))return false;remember(key);return true;
  }
- List<OpenPgp.PublicIdentity> choices(){return known.values().stream().filter(k->k.matchesEmail(address)&&k.canEncrypt()).toList();}
+ List<OpenPgp.PublicIdentity> choices(){return known.values().stream().filter(k->k.matchesEmail(address)).sorted(Comparator.comparingInt(OpenPgp.PublicIdentity::version).reversed().thenComparing(k->!k.quantumEncryption())).toList();}
 }

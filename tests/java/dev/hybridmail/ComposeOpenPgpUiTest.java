@@ -14,7 +14,7 @@ public class ComposeOpenPgpUiTest {
    format.setSelectedIndex(1);stop(app);app.addNotify();app.validate();ok(to.getHeight()<50);ok(!encrypt.isEnabled());
    var select=MailApp.class.getDeclaredMethod("selectPgpRecipient",OpenPgp.PublicIdentity.class);select.setAccessible(true);select.invoke(app,classical);stop(app);ok(encrypt.isEnabled()&&choices.getItemCount()==1&&status.getText().contains("WARNING"));
    select.invoke(app,hybrid);stop(app);ok(choices.getItemCount()==2&&status.getText().contains("Hybrid PQ")&&!status.getText().contains("WARNING"));
-   for(int i=0;i<choices.getItemCount();i++)if(((OpenPgp.PublicIdentity)choices.getItemAt(i)).fingerprint().equals(classical.fingerprint()))choices.setSelectedIndex(i);ok(status.getText().contains("WARNING"));encrypt.setSelected(true);to.setText("unrelated@example.com");stop(app);ok(!encrypt.isEnabled()&&!encrypt.isSelected()&&choices.getItemCount()==0&&field(app,"pgpRecipient")==null);
+   for(int i=0;i<choices.getItemCount();i++)if(((OpenPgp.PublicIdentity)choices.getItemAt(i)).fingerprint().equals(classical.fingerprint()))choices.setSelectedIndex(i);ok(!status.getText().contains("WARNING")&&((OpenPgp.PublicIdentity)choices.getSelectedItem()).version()==6);encrypt.setSelected(true);to.setText("unrelated@example.com");stop(app);ok(!encrypt.isEnabled()&&!encrypt.isSelected()&&choices.getItemCount()==0&&field(app,"pgpRecipient")==null);
    format.setSelectedIndex(0);stop(app);ok(encrypt.isEnabled());
    System.out.println("PASS Compose: v4/v6 recipient-only options, hybrid warning exemption, address-change invalidation, encryption gating, S/MIME switch");
   }catch(Exception e){throw new RuntimeException(e);}finally{try{stop(app);}catch(Exception ignored){}app.dispose();}});

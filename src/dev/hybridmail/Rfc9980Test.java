@@ -21,7 +21,7 @@ public final class Rfc9980Test {
   var own=OpenPgp.createRfc9980(id,hw,hw.ed.getPublic(),hw.x.getPublic());ok(own.primary[5]==30&&own.subkey[5]==35);
   for(boolean encrypt:new boolean[]{false,true}){byte[] message=OpenPgp.compose(id,own,encrypt?own:null,"rfc@example.com","rfc@example.com","Test","RFC 9980 test",hw);var opened=OpenPgp.open(MailEngine.encode(MailEngine.parse(message)),own,own,id,hw);ok(opened.text().equals("RFC 9980 test")&&opened.encrypted()==encrypt);}
   ok(hw.pq.ml==hw.edCalls&&hw.pq.kem==hw.xCalls&&hw.pq.ec==0&&hw.pq.dh==0&&hw.pq.clears>0);
-  byte[] bad=own.encoded.clone();bad[bad.length-1]^=1;OnKeyBundleTest.fails(()->new OpenPgp.PublicIdentity(bad));
+  byte[] bad=own.encoded.clone();bad[bad.length-1]^=1;ok(!new OpenPgp.PublicIdentity(bad).canEncrypt());OnKeyBundleTest.fails(()->OpenPgp.encrypt(new byte[0],new OpenPgp.PublicIdentity(bad)));
   OnKeyBundleTest.fails(()->OpenPgp.combine(new byte[32],new byte[32],new byte[32],new byte[32]));
   var profiles=List.of(new OnKeyBundle.Profile(new CertificateBundle.Entry(ids.get(0),123456,"9c","83","9d","82"),new byte[0]),new OnKeyBundle.Profile(new CertificateBundle.Entry(id,123456,"9c","83","9d","82"),own.encoded));
   byte[] encoded=OnKeyBundle.sign(profiles,1,hw.pq);var card=new OnKeyBundleTest.Fake();card.keys.putAll(OnKeyBundle.bindings(profiles.stream().map(OnKeyBundle.Profile::entry).toList()));

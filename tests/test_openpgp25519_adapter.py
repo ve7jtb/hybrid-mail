@@ -16,7 +16,12 @@ class ExtraKeysTest(unittest.TestCase):
   self.assertEqual(SIGN.sign(pub,digest,'/openssl','/provider','/module','123456',io.BytesIO(),run,algorithm='Ed25519',ec_slot='83'),b's'*64)
   self.assertEqual(len(calls),2)
  def test_request_sizes(self):
-  for mod,alg,size in [(SIGN,'Ed25519',48),(KEM,'X25519',44)]:
+  for mod,alg,size in [(SIGN,'Ed25519',48),(SIGN,'Ed25519',64),(KEM,'X25519',44)]:
    request=lambda n:io.BytesIO(alg.encode()+b'\n'+base64.b64encode(b'p'*44)+b'\n'+base64.b64encode(b'd'*n)+b'\n')
    self.assertEqual(mod.read_request(request(size))[0],alg)
    with self.assertRaises(mod.AdapterError):mod.read_request(request(size+1))
+
+ def test_ed25519_rejects_other_hash_lengths(self):
+  for size in (0,32,47,49,63,65,128):
+   request=io.BytesIO(b'Ed25519\n'+base64.b64encode(b'p'*44)+b'\n'+base64.b64encode(b'd'*size)+b'\n')
+   with self.assertRaises(SIGN.AdapterError):SIGN.read_request(request)

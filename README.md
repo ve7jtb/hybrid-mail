@@ -415,3 +415,10 @@ behavior on Windows or Linux. Packages without the helper retain the two-process
 never triggers a signing retry or a fallback. PINs are supplied through an
 anonymous pipe/callback, cleared after the operation, and never placed in
 arguments, environment variables or files. See [PKCS#11 details](docs/PKCS11.md).
+
+Compose defaults to **OpenPGP**. If the recipient has saved S/MIME certificates
+and no matching saved OpenPGP certificate, it defaults to **S/MIME** instead.
+Recipients with both formats, or no known certificate, default to OpenPGP.
+An explicit format choice is retained until the recipient changes; selecting a
+specific contact certificate selects its format. This does not grant trust or
+automatically enable encryption.

@@ -17,6 +17,7 @@ python3 scripts/bundle-google-client.py
 jar --create --file build/hybrid-mail.jar --main-class dev.hybridmail.MailApp -C build/classes .
 if [[ "${1:-}" == test ]]; then
   java scripts/CheckJava.java --test
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.ComposeFormatPolicyTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.SelfTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.TokenIdentityTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.TokenKemTest

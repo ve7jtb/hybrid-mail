@@ -41,6 +41,8 @@ public final class MailApp extends JFrame {
     private final javax.swing.Timer pgpLookupTimer=new javax.swing.Timer(900,e->lookupPgpRecipient());
     private boolean syncingPgp;
     private final JTextArea pgpStatus=new JTextArea("Select Level 3 hybrid for outgoing OpenPGP signing. Classical v4 certificates are supported for recipient encryption and incoming verification. OpenPGP uses separate public identities and fingerprints; private keys stay in the existing software bundle or YubiKey.");
+    private final ComposeFormatPolicy composeFormatPolicy=new ComposeFormatPolicy();
+    private boolean adjustingComposeFormat;
     private boolean usePgp(){return mailFormat.getSelectedIndex()==1;}
     private MailInbox inbox;
     private final JCheckBox smimeInboxOnly=new JCheckBox("S/MIME only");
@@ -75,14 +77,16 @@ public final class MailApp extends JFrame {
         reader.setEditable(false); reader.setLineWrap(true); reader.setWrapStyleWord(true); reader.setFont(new Font(Font.MONOSPACED,Font.PLAIN,13)); reader.setMargin(new Insets(16,16,16,16));
     }
     private JPanel composePanel() {
+        mailFormat.setSelectedIndex(1); // Prefer OpenPGP unless only S/MIME is known.
         JPanel p = panel(); JPanel fields = new JPanel();fields.setLayout(new BoxLayout(fields,BoxLayout.Y_AXIS));
         fields.add(row("From",from)); fields.add(row("To",to)); fields.add(row("Subject",subject));
         fields.add(row("Message format",mailFormat));fields.add(row("Sign with",outgoingIdentity));fields.add(encrypt);encryptionOptions.add(row("Encrypt to",outgoingEncryption),"S/MIME");
         JPanel pgpOptions=new JPanel(new GridLayout(0,1,0,3));pgpOptions.add(row("Recipient key",pgpEncryption));pgpOptions.add(pgpLookupStatus);
         pgpOptions.add(left(button("Look up To on keys.openpgp.org",this::lookupPgpRecipient),button("Review recipient key…",()->{try{if(pgpRecipient!=null)JOptionPane.showMessageDialog(this,pgpContactDescription(pgpRecipient,to.getText().trim()));}catch(Exception e){error(e);}})));
         encryptionOptions.add(pgpOptions,"OpenPGP");fields.add(encryptionOptions);
+        ((CardLayout)encryptionOptions.getLayout()).show(encryptionOptions,"OpenPGP");encrypt.setEnabled(false);
         pgpLookupTimer.setRepeats(false);
-        mailFormat.addActionListener(e->{encrypt.setSelected(false);refreshSaved();recipientAddressChanged();((CardLayout)encryptionOptions.getLayout()).show(encryptionOptions,usePgp()?"OpenPGP":"S/MIME");if(!usePgp())encrypt.setEnabled(true);});
+        mailFormat.addActionListener(e->{if(!adjustingComposeFormat)composeFormatPolicy.choose(to.getText(),usePgp());encrypt.setSelected(false);refreshSaved();recipientAddressChanged();((CardLayout)encryptionOptions.getLayout()).show(encryptionOptions,usePgp()?"OpenPGP":"S/MIME");if(!usePgp())encrypt.setEnabled(true);});
         to.getDocument().addDocumentListener(new javax.swing.event.DocumentListener(){public void insertUpdate(javax.swing.event.DocumentEvent e){recipientAddressChanged();}public void removeUpdate(javax.swing.event.DocumentEvent e){recipientAddressChanged();}public void changedUpdate(javax.swing.event.DocumentEvent e){recipientAddressChanged();}});
         pgpEncryption.addActionListener(e->{if(!syncingPgp)refreshPgpChoices();});
         outgoingIdentity.addActionListener(e->{if(!syncingOutgoing){var chosen=(DesktopState.SavedIdentity)outgoingIdentity.getSelectedItem();if(chosen!=null)openSaved(chosen);}});
@@ -101,9 +105,29 @@ public final class MailApp extends JFrame {
     }
     private void selectPgpRecipient(OpenPgp.PublicIdentity key)throws Exception{
         state().rememberPgp(key,key.matchesEmail(to.getText().trim())?to.getText().trim():key.email);refreshContacts();pgpRecipients.remember(key);to.setText(key.matchesEmail(to.getText().trim())?to.getText().trim():key.email);
-        recipientAddressChanged();pgpLookupTimer.stop();refreshPgpChoices();pgpStatus.setText(pgpContactDescription(key,to.getText().trim()));
+        mailFormat.setSelectedIndex(1);recipientAddressChanged();pgpLookupTimer.stop();refreshPgpChoices();pgpStatus.setText(pgpContactDescription(key,to.getText().trim()));
+    }
+    private void updateComposeFormat(){
+        if(adjustingComposeFormat)return;
+        String address=to.getText().trim();boolean hasPgp=false,hasSmime=false;
+        if(desktopState!=null){
+            var contacts=new java.util.ArrayList<>(desktopState.contacts());contacts.addAll(desktopState.pgpContacts());
+            for(var contact:contacts)try{
+                if(contact.role().equals("OpenPGP")){
+                    if(desktopState.pgpCertificate(contact).matchesEmail(address))hasPgp=true;
+                }else if(Identity.matchesEmail(desktopState.contactCertificate(contact),address))hasSmime=true;
+            }catch(Exception invalid){/* Invalid/unavailable certificates cannot select a format. */}
+        }
+        try{if(recipient!=null&&Identity.matchesEmail(recipient,address))hasSmime=true;}catch(Exception invalid){/* Ignore invalid legacy selection. */}
+        int selected=composeFormatPolicy.select(address,hasPgp,hasSmime)?1:0;
+        if(mailFormat.getSelectedIndex()!=selected){
+            adjustingComposeFormat=true;
+            try{mailFormat.setSelectedIndex(selected);}finally{adjustingComposeFormat=false;}
+        }
     }
     private void recipientAddressChanged(){
+        if(adjustingComposeFormat)return;
+        updateComposeFormat();
         pgpLookupTimer.stop();pgpLookupTicket=pgpRecipients.change(to.getText());pgpRecipient=null;
         if(usePgp()){encrypt.setSelected(false);encrypt.setEnabled(false);refreshPgpChoices();
             try{OpenPgp.validateEmail(to.getText().trim());if(pgpRecipient==null){pgpLookupStatus.setText("Looking up To on keys.openpgp.org…");pgpLookupTimer.restart();}}catch(Exception e){pgpLookupStatus.setText("Enter one complete recipient email address.");}
@@ -352,7 +376,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
                 try{var key=state().pgpCertificate(contact);pgpRecipients.remember(key);certificateModel.addRow(new Object[]{contact.email(),"OpenPGP",state().isPgpTrusted(contact.email(),key.fingerprint())?"Trusted":"Not trusted","v"+key.version(),key.signingAlgorithms(),key.encryptionAlgorithm(),key.fingerprint()});}
                 catch(Exception invalid){certificateModel.addRow(new Object[]{contact.email(),"OpenPGP","Unavailable / invalid","Unknown","Refresh or reimport","Refresh or reimport",state().get("pgp."+contact.id()+".fingerprint","")});}
             }else{var certificate=state().contactCertificate(contact);certificateModel.addRow(new Object[]{contact.email(),contact.role(),state().isTrusted(certificate,contact.role())?"Trusted":"Not trusted","X.509 v"+certificate.getVersion(),contact.role().equals("signing")?certificate.getPublicKey().getAlgorithm():"—",contact.role().equals("encryption")?certificate.getPublicKey().getAlgorithm():"—",Identity.fingerprint(certificate)});}}
-            refreshOutgoingEncryption();if(usePgp())refreshPgpChoices();
+            refreshOutgoingEncryption();updateComposeFormat();if(usePgp())refreshPgpChoices();
         }catch(Exception e){error(e);}
     }
     private boolean pgpContactAction(DesktopState.Contact contact,String action){
@@ -390,7 +414,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     }
     private void applyContact(DesktopState.Contact contact,X509Certificate certificate)throws Exception{
         certificate.checkValidity();
-        if(contact.role().equals("encryption")){recipient=certificate;recipientLabel.setText(contact.email()+" · "+certificate.getPublicKey().getAlgorithm());to.setText(contact.email());encrypt.setSelected(true);state().saveCertificate("recipient",certificate);refreshOutgoingEncryption();tabs.setSelectedIndex(0);status.setText("Encryption enabled for "+contact.email());}
+        if(contact.role().equals("encryption")){recipient=certificate;recipientLabel.setText(contact.email()+" · "+certificate.getPublicKey().getAlgorithm());to.setText(contact.email());mailFormat.setSelectedIndex(0);encrypt.setSelected(true);state().saveCertificate("recipient",certificate);refreshOutgoingEncryption();tabs.setSelectedIndex(0);status.setText("Encryption enabled for "+contact.email());}
         else{pinnedSigner=certificate;state().saveCertificate("pinned",certificate);status.setText(state().isTrusted(certificate,"signing")?"Trusted signing certificate selected":"Signing certificate selected but not trusted; use Mark trusted in Certificates");}
     }
     private void exportContact(){

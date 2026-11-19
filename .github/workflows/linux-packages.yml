@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, feature/on-key-certificates]
     paths: ['src/**', 'adapters/**', 'native-src/**', 'patches/**', 'scripts/**', 'assets/**', 'build.sh', '.github/workflows/linux-packages.yml']
 permissions:
   contents: read

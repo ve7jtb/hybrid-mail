@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 #include <openssl/evp.h>
 #include <openssl/store.h>
 #include <openssl/ui.h>
@@ -17,8 +21,14 @@
 static void timing(const char *phase) {
     static double previous;
     if(!getenv("PQMAIL_SIGN_TIMINGS"))return;
+#ifdef _WIN32
+    LARGE_INTEGER counter,frequency;
+    if(!QueryPerformanceFrequency(&frequency)||!QueryPerformanceCounter(&counter))return;
+    double now=(double)counter.QuadPart/frequency.QuadPart;
+#else
     struct timespec ts;if(clock_gettime(CLOCK_MONOTONIC,&ts))return;
     double now=ts.tv_sec+ts.tv_nsec/1e9;
+#endif
     if(previous)fprintf(stderr,"PQMAIL_PHASE %s %.3f ms\n",phase,(now-previous)*1000);
     previous=now;
 }

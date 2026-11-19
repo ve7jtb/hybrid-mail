@@ -35,9 +35,19 @@ static void test(const char *alg,const char *type,const char *group,size_t inlen
  EVP_PKEY_free(key);EVP_PKEY_free(wrong);ERR_clear_error();
 }
 static void test_pin_callback(void) {
- unsetenv("HYBRID_MAIL_PIN_STDIN");assert(use_pin_callback());
+#ifdef _WIN32
+ _putenv_s("HYBRID_MAIL_PIN_STDIN","");
+#else
+ unsetenv("HYBRID_MAIL_PIN_STDIN");
+#endif
+ assert(use_pin_callback());
  assert(!strcmp(getenv("HYBRID_MAIL_PIN_STDIN"),"1"));
- setenv("HYBRID_MAIL_PIN_STDIN","0",1);assert(use_pin_callback());
+#ifdef _WIN32
+ _putenv_s("HYBRID_MAIL_PIN_STDIN","0");
+#else
+ setenv("HYBRID_MAIL_PIN_STDIN","0",1);
+#endif
+ assert(use_pin_callback());
  assert(!strcmp(getenv("HYBRID_MAIL_PIN_STDIN"),"1"));
  UI_METHOD *method=UI_create_method("Test private callback");assert(method);
  assert(UI_method_set_reader(method,pin_reader)==0);

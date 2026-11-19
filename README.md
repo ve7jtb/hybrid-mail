@@ -408,8 +408,10 @@ slots' public keys. The installed, signed Mac app then passed a separate
 public keys and PIN/touch policies were unchanged. This touch-required test is
 functional validation; its elapsed time includes human PIN entry and touch.
 
-Mac packaging builds and tests the helper automatically. Other packages retain
-the existing two-process path until they bundle the helper. A helper failure
+Mac, Windows (x64/ARM64), and Linux (amd64/ARM64) packaging build and test the
+helper automatically against the packaged OpenSSL. Hardware validation above is
+macOS-specific; CI software and loader tests do not establish physical-device
+behavior on Windows or Linux. Packages without the helper retain the two-process path. A helper failure
 never triggers a signing retry or a fallback. PINs are supplied through an
 anonymous pipe/callback, cleared after the operation, and never placed in
 arguments, environment variables or files. See [PKCS#11 details](docs/PKCS11.md).

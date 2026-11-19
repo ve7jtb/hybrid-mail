@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, feature/on-key-certificates]
     paths: ['src/**', 'adapters/**', 'native-src/**', 'patches/**', 'scripts/**', 'assets/**', '.gitattributes', '.github/workflows/windows-installers.yml']
 permissions:
   contents: read
@@ -102,6 +102,7 @@ jobs:
           meson setup .deps/provider/build .deps/provider -Dbuild_info=HybridMail-PR818
           meson compile -C .deps/provider/build
           cp .deps/provider/build/src/pkcs11.dll build/native/
+          CC=${{ matrix.compiler }} HYBRID_OPENSSL_ROOT="$MINGW_PREFIX" bash scripts/build-pkcs11-signer.sh
           mkdir -p build/native/openssl
           cp "$MINGW_PREFIX/bin/openssl.exe" "$MINGW_PREFIX/bin/"*.dll build/native/openssl/
           cp "$MINGW_PREFIX/share/licenses/openssl/LICENSE.txt" build/native/openssl/ || true

@@ -10,6 +10,7 @@ New-Item -ItemType Directory -Force "$stage/native/bin","$stage/native/lib","$st
 Copy-Item build/hybrid-mail.jar,lib/*.jar $stage
 Copy-Item adapters/*.py "$stage/adapters"
 Copy-Item docs/THIRD-PARTY.txt,docs/YUBIKIT-LICENSE.txt "$stage/notices"
+if (!(Test-Path build/native/pqmail-pkcs11-sign.exe)) { throw 'Build the single-process PKCS11 helper first.' }
 Copy-Item build/native/*.exe "$stage/native/bin"
 Copy-Item build/native/*.dll "$stage/native/lib"
 Copy-Item build/native/openssl/* "$stage/native/bin"
@@ -24,6 +25,13 @@ Get-ChildItem "$stage/native/python" -Filter 'vcruntime*.dll' | Copy-Item -Desti
 # Embedded Python's stdlib is sufficient for all adapters.
 $env:PATH="$stage/native/bin;$env:PATH"
 & "$stage/native/bin/openssl.exe" version; Checked
+# Verify software signatures against the staged OpenSSL DLLs, without hardware.
+$env:OPENSSL_CONF='NUL'
+& "$PWD/build/tests/test-pkcs11-sign.exe"; Checked
+Remove-Item Env:OPENSSL_CONF
+# No-argument helper invocation must reach its own argument validation.
+$helperProcess=Start-Process -FilePath "$stage/native/bin/pqmail-pkcs11-sign.exe" -Wait -PassThru -NoNewWindow -RedirectStandardError "$PWD/build/helper-load.txt"
+if ($helperProcess.ExitCode -ne 1 -or (Get-Content "$PWD/build/helper-load.txt" -Raw).Trim() -ne 'PQ Mail single-session signer failed at arguments; no retry') { throw 'Packaged signing helper load test failed' }
 $env:PKCS11_PROVIDER_MODULE="$stage/native/lib/ykcs11.dll"
 & "$stage/native/bin/openssl.exe" list -providers -provider default -provider "$stage/native/lib/pkcs11.dll"; Checked
 & "$stage/native/python/python.exe" -m py_compile adapters/pkcs11-mu.py adapters/pkcs11-kem.py adapters/pkcs11-presence.py; Checked

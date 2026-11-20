@@ -5,22 +5,26 @@ import jakarta.mail.internet.*;
 import java.io.*;
 import java.util.*;
 
-/** Extracts display text only after the caller authenticates the original MIME bytes. */
+/** Extracts MIME alternatives after authentication. HTML is data, not safe markup. */
 final class VerifiedMime {
  private static final int LIMIT=8*1024*1024;
  private final int[] count={0};
- static String display(byte[] bytes)throws Exception {
-  if(bytes.length>LIMIT)throw new IOException("Signed MIME exceeds reader limit");
-  String text=new VerifiedMime().read(new MimeBodyPart(new ByteArrayInputStream(bytes)),0);
-  return text==null?"No displayable text body. Attachments are not displayed.":text;
+ record Body(String plain,String html){
+  String text(){return plain!=null?plain:html!=null?"[HTML shown as text; remote content is not loaded]\n"+VerifiedMime.html(html):"No displayable text body. Attachments are not displayed.";}
  }
- private String read(Part part,int depth)throws Exception {
+ static String display(byte[] bytes)throws Exception {return body(bytes).text();}
+ static Body body(byte[] bytes)throws Exception {
+  if(bytes.length>LIMIT)throw new IOException("Signed MIME exceeds reader limit");
+  return body(new MimeBodyPart(new ByteArrayInputStream(bytes)));
+ }
+ static Body body(Part part)throws Exception {Body body=new VerifiedMime().read(part,0);return body==null?new Body(null,null):body;}
+ private Body read(Part part,int depth)throws Exception {
   if(depth>12||++count[0]>100)throw new IOException("Signed MIME nesting/part limit exceeded");
   if(Part.ATTACHMENT.equalsIgnoreCase(part.getDisposition())||part.getFileName()!=null)return null;
   if(part.isMimeType("text/plain")||part.isMimeType("text/html")){
    Object content=part.getContent();if(!(content instanceof String s))throw new IOException("Invalid text MIME body");
    if(s.length()>LIMIT)throw new IOException("Text body exceeds reader limit");
-   return part.isMimeType("text/html")?"[HTML shown as text; remote content is not loaded]\n"+html(s):s;
+   return part.isMimeType("text/html")?new Body(null,s):new Body(s,null);
   }
   if(part.isMimeType("multipart/alternative")||part.isMimeType("multipart/mixed")||part.isMimeType("multipart/related")){
    Multipart m=(Multipart)part.getContent();if(m.getCount()>100)throw new IOException("Too many MIME parts");
@@ -29,7 +33,15 @@ final class VerifiedMime {
     if(start!=null){for(int i=0;i<m.getCount();i++){BodyPart b=m.getBodyPart(i);String[] ids=b.getHeader("Content-ID");if(ids!=null&&Arrays.asList(ids).contains(start))return read(b,depth+1);}throw new IOException("Missing related MIME root");}
     return m.getCount()==0?null:read(m.getBodyPart(0),depth+1);
    }
-   String fallback=null;for(int i=0;i<m.getCount();i++){String s=read(m.getBodyPart(i),depth+1);if(s==null)continue;if(!part.isMimeType("multipart/alternative")||!s.startsWith("[HTML shown as text;"))return s;if(fallback==null)fallback=s;}return fallback;
+   // Keep both alternatives from the SAME MIME body. Never select HTML from
+   // an attachment or an unrelated part alongside a different plain body.
+   String plain=null,rich=null;
+   for(int i=0;i<m.getCount();i++){
+    Body b=read(m.getBodyPart(i),depth+1);if(b==null)continue;
+    if(!part.isMimeType("multipart/alternative"))return b;
+    if(b.plain()!=null)plain=b.plain();if(b.html()!=null)rich=b.html();
+   }
+   return plain==null&&rich==null?null:new Body(plain,rich);
   }
   return null;
  }

@@ -6,6 +6,59 @@ PQ Mail is an experimental post-quantum mail application supporting **S/MIME and
 
 New on-key certificate backups use lossless compression on desktop, Android and iOS. Existing uncompressed banks are read only for migration; signatures and fingerprints are unchanged. See [compressed storage and platform limits](docs/ON-KEY-CERTIFICATES.md#compressed-on-key-storage).
 
+
+## Experimental Google Chat
+
+The desktop app can connect to Google Chat, browse conversations, and send or open signed and optionally encrypted OpenPGP bundles. Enable **Experimental Google Chat** in Settings → Mail accounts, select the separate Desktop OAuth client bundled with your build, then use **Google Chat → Sign in or reconnect**. The feature remains off by default. A dedicated development Google Cloud project keeps Chat consent separate from Gmail; it requests `chat.spaces.readonly`, `chat.messages.readonly` and `chat.messages.create`, plus basic account email identification.
+
+For your own source build, download the Desktop client JSON from your separate Chat project and set `PQ_MAIL_CHAT_CLIENT_JSON=/absolute/path/to/client.json` when running `./build.sh`. The build script packages only client registration metadata, never user tokens. No Chat client JSON is committed; entering only a client ID in Settings does not replace the bundled configuration.
+
+Chat OAuth refresh tokens are stored exclusively in the **PRF-encrypted vault**, bound to the account and client. Unlock the vault to connect; access tokens stay in memory and are cleared on lock. There is no plaintext or Keychain fallback for Chat. Pin a hybrid v6 OpenPGP identity whose certified email matches the Chat account. Recipient selection shows saved certificates and trust bound to the email and full primary fingerprint; encryption requires a trusted hybrid v6 recipient or the pinned self identity.
+
+Each bundle uses two linked Chat messages: one public `pq-mail-sender-key.pgp` certificate, followed by one `message.pgp` payload referencing it. Google rejects multiple non-media attachments in a single message. The receiver checks that the certificate reference stays in the same conversation and has the same Google sender, then verifies the OpenPGP signature separately. Receiving a certificate never automatically saves or trusts it. Google and conversation members can see the public certificate and transport metadata; signed From, To, Subject, body and files are inside the bundle and encrypted when encryption is selected. Verified HTML is rendered locally without remote images or active content.
+
+### Successful two-way encrypted Google Chat test — 2026-11-20
+
+A live test exchanged synthetic messages between a personal Gmail account in the installed Mac app and a separate Workspace account using the independent [gws + Sequoia CLI](https://github.com/ve7jtb/gws-sequoia-chat). PQ Mail used a YubiKey 6 PIV Level 3 identity through PKCS#11; the standalone side used password-encrypted software OpenPGP keys and separate Google authorization.
+
+| Direction | Confirmed result |
+| --- | --- |
+| Standalone gws + Sequoia → PQ Mail | YubiKey decryption succeeded; the hybrid signature verified against the trusted sender certificate; the formatted HTML body displayed correctly. |
+| PQ Mail → standalone gws + Sequoia | The encrypted bundle and linked public certificate downloaded successfully; Sequoia decrypted and verified the expected signer. Signed sender, recipient, subject and recovered body matched. |
+
+Both directions used **ML-DSA-65 + Ed25519 signatures** and **ML-KEM-768 + X25519 encryption**. The return certificate matched an independently selected local certificate. These tests reused existing keys and policies. This is evidence for these accounts and this Level 3 setup, not universal personal-Gmail eligibility, Level 5 hardware Chat, or a group encryption test. Account identifiers, message IDs, certificates, private keys, OAuth configuration and raw test artifacts remain local.
+
+The portable core also passed earlier **software-only Level 3 and Level 5 Sequoia tests** for signed/encrypted ZIP/ZLIB bundles, text/HTML alternatives and binary attachments. See [format, limits and reproducible tests](docs/CHAT-BUNDLES.md). Android has the portable bundle core; the live Chat connector and UI described here are desktop features.
+
+## Desktop mail workflow
+
+The desktop app opens on **Connect your email**, using the same teal, lime and pale background as Android. Choose **Sign in or reconnect** for Gmail, Hotmail / Outlook, or another IMAP provider. A saved OAuth session is restored when available; first-time users sign in. If reconnection fails, the app offers an explicit sign-in option instead of automatically reopening the browser. The loading indicator explains when access to the Google/Microsoft OAuth refresh token or saved IMAP settings needs passkey-vault or authenticated Mac Keychain approval. Startup does not automatically unlock a software identity or restore a mail session.
+
+A successful connection opens **Inbox**. The sidebar provides **Compose**, **Inbox**, **Read message**, **Switch account** and **Lock vault**. **Settings** contains mail accounts and advanced OAuth configuration, Keys/passkey vault, Certificates/trust and OpenPGP. Offline identity management remains available before connecting.
+
+The inbox toolbar has **Search**, **Clear search**, **Refresh**, **Newer / Older** and a page indicator:
+
+- **Gmail:** server-side search within INBOX, including operators such as `from:` and `subject:`; 50 messages per page. The **Signed or encrypted only** filter covers S/MIME and OpenPGP and inspects the current page's MIME headers, so a filtered page may be empty while Older remains available.
+- **Hotmail / Outlook:** server-side subject search within the inbox; 50 messages per page.
+- **IMAP:** server-side sender-or-subject search and 10-message pages. If the mailbox changes while paging, refresh to establish a new page sequence.
+
+Headers and search results remain in memory; message bodies are fetched only when opened. Opening continues through PQ Mail's existing decryption and signature-verification flow. Search does not mark messages trusted or send mail. Automated checks cover all three provider searches, paging/clear/empty results, query escaping, header-only reads and navigation with synthetic data; this update does not claim a fresh live-account test.
+
+The desktop shows a large animated teal-and-lime spinner over the mail area
+while connecting, refreshing, searching, or paging. Its text identifies the
+current operation, including credential unlock when needed, and it clears on
+success or failure. PIN and passkey prompts remain separate dialogs.
+
+### Safe HTML reading and simple formatting
+
+Desktop **Read message** offers **Formatted HTML** and **Plain text**. It renders a small local subset (headings, emphasis, lists, tables, quotes and links). Signature verification uses the original MIME bytes before display processing. The app's verification, trust and sender information stays in a separate panel above the message body. Unsigned mail remains explicitly unverified.
+
+The viewer removes sender CSS, JavaScript, forms, frames and other active content. It loads no images, including remote tracking images and embedded `cid:` images, and no external styles or fonts. Images become placeholders; complex layouts may simplify. Clicking an HTTP/HTTPS link shows the actual destination and requires confirmation before opening the external browser. Oversized HTML falls back to plain text. Rendering does not save message content to disk.
+
+In **Compose**, enable **Use formatting** for bold, italic, underline, headings, bulleted/numbered lists and website links. Clipboard content is pasted as text. Formatted S/MIME and PGP/MIME messages include both UTF-8 plain text and HTML inside the signed MIME entity, and inside encryption when enabled. Switching back to plain text asks before discarding formatting. Outgoing file attachments remain S/MIME-only.
+
+Regression tests cover local rendering with zero resource requests, unsafe links/active markup, document clearing, original-MIME tamper rejection, and signed/encrypted round trips retaining both MIME alternatives and S/MIME attachments. These are synthetic software tests, not a new live Gmail/Proton interoperability result.
+
 ## Demonstration videos
 
 [Watch the Google OAuth and post-quantum S/MIME demonstration](https://youtu.be/RGiaAeGTCmc) (3:20). The desktop demo shows Gmail read/send consent, a YubiKey-signed message, and a signed-and-encrypted message decrypted locally with the YubiKey. It uses ML-DSA-87 + ECDSA P-384 signatures and ML-KEM-1024 + ECDH P-384 encryption. PIN prompts are included with their fields masked; unrelated inbox content and pauses are removed. Recorded November 17, 2026 using synthetic messages sent to the same account. The video is unlisted on YouTube and accessible through this link.
@@ -76,11 +129,11 @@ Select **OpenPGP** in Compose with a supported hybrid identity:
 
 Existing Level 5 OpenPGP reuses the classical keys in slots **83/82** for new YubiKey identities; its pure/hybrid S/MIME profiles remain unchanged. Pure-only and Level 2 identities do not support OpenPGP. Public OpenPGP identities have separate fingerprints from X.509 certificates. Create/import the same `.asc` identity on other installations, or restore it through a supported on-key bundle, to preserve those fingerprints.
 
-Desktop outgoing OpenPGP uses v6 hybrid signatures by default. For a selected v4 recipient only, the RFC 9980 YubiKey identity uses Ed25519 compatibility signing after confirmation; it attaches both v4 and v6 public certificates. This exception requires the existing Ed25519/X25519 keys in slots 84/85; identities without those keys cannot use this compatibility mode. Android retains hybrid-only outgoing signing. In desktop **Compose**, selecting OpenPGP looks up the complete **To** email address on **keys.openpgp.org** after a short typing delay. Android Compose provides the same lookup and recipient-key selection. Imported keys remain usable without a keyserver lookup. Encryption is enabled only for a matching, usable recipient certificate; its encryption choices come from that certificate, not the sender’s S/MIME profile. Changing To clears the selected recipient and turns encryption off. Lookup results never confer trust; review the fingerprint.
+Desktop outgoing OpenPGP uses v6 hybrid signatures by default. For a selected v4 recipient only, the RFC 9980 YubiKey identity uses Ed25519 compatibility signing after confirmation; it attaches both v4 and v6 public certificates. New Level 3 identities use the dedicated Ed25519/X25519 compatibility keys in slots 88/89; slots 84/85 remain exclusive hybrid components. Android retains hybrid-only outgoing signing. In desktop **Compose**, selecting OpenPGP looks up the complete **To** email address on **keys.openpgp.org** after a short typing delay. Android Compose provides the same lookup and recipient-key selection. Imported keys remain usable without a keyserver lookup. Encryption is enabled only for a matching, usable recipient certificate; its encryption choices come from that certificate, not the sender’s S/MIME profile. Changing To clears the selected recipient and turns encryption off. Lookup results never confer trust; review the fingerprint.
 
 V4 compatibility verifies RSA (2048+), ECDSA and legacy Ed25519 signatures with SHA-2, validates self-certifications and signing-subkey cross-certifications, and rejects revoked/expired keys and unsupported critical metadata. Encryption uses a current bound RSA/ECDH subkey, AES and integrity-protected v1 SEIPD with v3 PKESK. Desktop v4 compatibility messages use Ed25519 signatures, which are classical. V4 encryption can be hybrid when a valid algorithm-35 subkey is present; otherwise it is classical and requires confirmation. SHA-1 is used only for the mandated v4 fingerprint/MDC formats, not accepted for document or certification signatures.
 
-Signed and optionally encrypted PGP/MIME is supported. The desktop reader verifies signatures before extracting plain text or HTML from multipart bodies; HTML is displayed as text without loading remote content. Outgoing OpenPGP bodies remain plain-text; compatibility messages include the full v4, classical-only v4, and v6 public-key attachments automatically. User-added file attachments remain S/MIME-only. New supported YubiKey credentials default to creating an OpenPGP identity, with an opt-out. See the [OpenPGP guide](docs/OPENPGP.md) for setup, profile distinctions and validation limits.
+Signed and optionally encrypted PGP/MIME is supported. The desktop reader verifies signatures before extracting plain text or HTML from multipart bodies; desktop HTML is rendered through a restricted local formatting subset without loading remote content. Outgoing desktop OpenPGP supports plain text or signed plain-text/HTML alternatives; compatibility messages include the full v4, classical-only v4, and v6 public-key attachments automatically. User-added file attachments remain S/MIME-only. New supported YubiKey credentials default to creating an OpenPGP identity, with an opt-out. See the [OpenPGP guide](docs/OPENPGP.md) for setup, profile distinctions and validation limits.
 
 
 ### Sequoia OpenPGP v6 interoperability
@@ -93,7 +146,7 @@ PQ Mail now accepts the tested Sequoia v6 certificate structure: multiple certif
 
 The desktop reader successfully displayed and verified a real message sent from
 Proton Mail using a **classical OpenPGP v4 signature**. Multipart/HTML content is
-shown as text, without fetching remote images or executing HTML. The message was
+shown as text in that test, without fetching remote images or executing HTML. The message was
 **not encrypted**; the classical, non-post-quantum warning remained visible.
 
 A second test used the installed desktop reader with **empty temporary contacts,
@@ -160,7 +213,7 @@ This is an experimental interoperability application. Generated certificates are
 | Level 5 pure | ML-DSA-87 | ML-KEM-1024 |
 | Level 5 hybrid | MLDSA87-ECDSA-P384-SHA512 | MLKEM1024-ECDH-P384-SHA3-256 |
 
-Software creation offers the same Level 2, 3 and 5 choices as YubiKey creation. Each creates four software keys and stores both pure and hybrid identities in one password-protected `.p12` bundle; the PQ components are shared between the two views. Importing that bundle restores both selections. The empty-device provisioning flow offers levels 2, 3 and 5. Every option creates four keys and saves both pure and hybrid identities for selection when sending. Level labels refer to the ML-DSA NIST category; ML-KEM-768 is category 3 in both levels 2 and 3. These labels do not claim FIPS validation of the device or application.
+Software creation offers the same Level 2, 3 and 5 choices as YubiKey creation. Each creates four software keys and stores both pure and hybrid identities in one password-protected `.p12` bundle; the PQ components are shared between the two views. Importing that bundle restores both selections. The empty-device provisioning flow offers levels 2, 3 and 5. Every option saves both pure and hybrid S/MIME identities for selection when sending. Desktop initial provisioning creates four keys at Level 2, ten at Level 3 (including the complete OpenPGP layout), and eight at Level 5. Level labels refer to the ML-DSA NIST category; ML-KEM-768 is category 3 in both levels 2 and 3. These labels do not claim FIPS validation of the device or application.
 
 Software and YubiKey creation accept up to four additional comma-separated email addresses. All signing and encryption certificates, pure and hybrid, include the primary address plus these `rfc822Name` Subject Alternative Names. The subject CN remains the primary email. Duplicate or invalid addresses are rejected. Pending YubiKey setup metadata preserves the additional addresses for certificate issuance retries.
 
@@ -208,10 +261,18 @@ To test a saved YubiKey identity:
 | `83` signing (new identities) | ECDSA P-256 / SHA-256 | ECDSA P-384 / SHA-384 | ECDSA P-384 / SHA-384 |
 | `9d` decryption | ML-KEM-768 | ML-KEM-768 | ML-KEM-1024 |
 | `82` decryption | ECDH P-256 | ECDH P-384 | ECDH P-384 |
+| `84` OpenPGP hybrid component | — | Ed25519 signing | ML-KEM-768 encryption |
+| `85` OpenPGP hybrid encryption component | — | X25519 | X25519 |
+| `86` OpenPGP certification component | — | ML-DSA-65 | — |
+| `87` OpenPGP certification component | — | Ed25519 | — |
+| `88` OpenPGP classical signing | — | Ed25519 | ECDSA P-384 |
+| `89` OpenPGP classical encryption | — | X25519 | ECDH P-384 |
 
 Composite KEM identifiers follow [draft-ietf-lamps-cms-composite-kem-04](https://datatracker.ietf.org/doc/html/draft-ietf-lamps-cms-composite-kem-04), including MLKEM768-ECDH-P384-SHA3-256. ML-DSA categories are defined in [FIPS 204](https://csrc.nist.gov/pubs/fips/204/final); ML-KEM parameters in [FIPS 203](https://nvlpubs.nist.gov/nistpubs/fips/nist.fips.203.pdf).
 
-Keys are generated on the device with PIN policy **Always** for all four slots. Touch policy is **Always** for ML-DSA signing (9c) and ML-KEM decryption (9d), and **Never** for ECDH (82) and ECDSA (83). This applies to newly generated keys; existing keys and their policies are unchanged. Local identity records contain public certificates, serial and slot bindings, not token private keys. A missing or different device produces a connect/retry prompt. Generation is not atomic: a partial failure leaves generated keys in place and a subsequent creation attempt refuses the nonempty device. **Finish pending certificates…** can resume certificate issuance after successful key generation without generating keys again. Select the saved `setup.properties` file; the app checks the device serial and public keys before issuing certificates. It cannot resume partial key generation. The adjacent **ⓘ** button explains this recovery flow.
+Desktop provisioning generates all keys on-device with PIN policy **Always**. Touch is **Always** in 9c/9d, plus 86/88/89 at Level 3 and 84/88/89 at Level 5; the other provisioned slots use **Never**. Existing keys and their policies are unchanged. Local records contain public certificates, serial and slot bindings, not token private keys.
+
+**Resume interrupted setup…**, with adjacent **ⓘ** help, replaces **Finish pending certificates…**. Choose `setup.properties` under the app's `token-setups` directory (the error dialog gives its full path). New setup records are saved before generation. Recovery checks serial, public keys, algorithms and policies; it reuses completed certificates and their fingerprints. If key generation was interrupted, explicit provisioning authorization permits generating only unrecorded keys in confirmed empty slots. An occupied slot without a saved matching public key, a changed policy/key or an unreadable slot stops recovery for inspection. It never resets or overwrites a slot. Older certificate-only setup journals remain readable.
 
 **Update YubiKey certificate email…** issues new local signing and encryption certificates for saved token profiles using their existing keys. Enter the primary email and up to four additional comma-separated email SANs; duplicates and invalid addresses are rejected. Old identities are preserved, PIN prompts authorize certificate signing, and no email is sent. This changes certificate identity information, not your Google account.
 
@@ -283,7 +344,7 @@ RSA and ECDSA signatures can be received and explicitly trusted by certificate f
 
 Import a recipient certificate or use **Trust signer for encryption** on verified mail if the signer certificate also permits encryption. A separate encryption certificate must be imported when the signing certificate is signing-only. Conventional software `.p12` files with one unambiguous signing key and at most one encryption key can be imported, including arbitrary aliases. Classical decryption requires the matching software private key; PQ YubiKey profiles remain unchanged.
 
-The reader accepts signed messages inside AuthEnvelopedData or conventional EnvelopedData (including AES-CBC), and plain-text content in common mixed/alternative/related MIME layouts. HTML is not rendered. Encrypted messages without a signature are shown explicitly as unsigned and cannot be used to establish signer trust. Encryption to a conventional recipient does not provide post-quantum confidentiality, even when the message carries a PQ signature.
+The reader accepts signed messages inside AuthEnvelopedData or conventional EnvelopedData (including AES-CBC), and plain-text content in common mixed/alternative/related MIME layouts. Desktop HTML uses the safe local viewer described above. Encrypted messages without a signature are shown explicitly as unsigned and cannot be used to establish signer trust. Encryption to a conventional recipient does not provide post-quantum confidentiality, even when the message carries a PQ signature.
 
 
 ## Share certificates between instances
@@ -308,7 +369,7 @@ Validation covers public-only bundle round trips, malformed/oversized input, con
 - **Earlier hardware tests:** physical Beta0 hardware tests passed for pure ML-DSA-65 and composite MLDSA65-RSA3072-PSS-SHA512 signing through PKCS#11, and pure ML-KEM-768 / hybrid MLKEM768-ECDH-P256 decryption. Saved messages were independently reopened and verified. The earlier ykman external-μ signing demo also passed.
 - Automated tests cover software profiles, simulated external signing/decryption including all three provisioning levels in pure and hybrid modes, serialization, tampering, key matching, PIN cache cleanup, identity bindings, and provisioning refusal/partial failures. Simulators do not establish physical-device support. Level 2 physical hardware round trips remain unverified; Level 5 pure/hybrid macOS PKCS#11 round trips and compressed bundle restore passed on November 19, 2026 (see below); the normal provisioning UI requires an empty compatible key.
 - Gmail API OAuth with the shared client and read/send scopes was observed in the Mac app: 12 inbox messages loaded, with 3 matching the S/MIME-only filter. Mock API tests cover paging and pure/hybrid signed/encrypted MIME transfer for all three levels. On November 17, 2026, two synthetic self-addressed messages were sent and received through the live Gmail API: one signed and one signed-and-encrypted. MLDSA87-ECDSA-P384-SHA512 signatures verified, and MLKEM1024-ECDH-P384-SHA3-256 YubiKey decryption completed with authenticated AES-256-GCM decryption. Earlier full-mail OAuth, Keychain restoration after restart, and the ten-message IMAP inbox were also observed. Live SMTP delivery, third-party interoperability, Windows hardware use and a production security audit are not established by these tests.
-- The reader accepts opaque and detached signatures, AuthEnvelopedData and conventional EnvelopedData, common text MIME layouts, and attachments. Encrypted-only messages are explicitly labeled unsigned; signature or decryption failures are not downgraded. HTML rendering is not supported.
+- The reader accepts opaque and detached signatures, AuthEnvelopedData and conventional EnvelopedData, common text MIME layouts, and attachments. Encrypted-only messages are explicitly labeled unsigned; signature or decryption failures are not downgraded. Desktop HTML uses the safe local viewer described above.
 - **Attachment and conventional interoperability tests:** desktop regression tests and Android emulator tests passed for binary/Unicode-named attachments in all six PQ profiles, RSA/ECDSA signatures, RSA/ECDH encryption, arbitrary-alias software `.p12` import, detached signatures, AES-GCM and legacy AES-CBC envelopes, and unsigned encrypted messages. These are local generated-message tests, not independent third-party client or physical YubiKey validation of the new features.
 - Trust uses exact certificate fingerprints, validity and key-usage checks. There is no CA chain building or revocation checking. Outer mail headers are not signed or encrypted. The app distinguishes signature validity from trust and flags sender/certificate mismatches.
 
@@ -322,7 +383,7 @@ Desktop Java code is under `src/dev/hybridmail/`: `MailApp` is the Swing UI; `Ma
 
 Third-party components retain their own licenses; see [notices](docs/THIRD-PARTY.txt). No project license has been selected yet.
 
-Gmail **S/MIME only** filters each page using its top-level Content-Type (opaque S/MIME and multipart/signed with a PKCS#7 signature protocol). It does not fetch message bodies or establish signature validity. Pages cover 50 inbox entries before filtering, so a page may show fewer or no matches while **Older** remains available. S/MIME nested inside forwarded messages or ordinary attachments is not included.
+Gmail **Signed or encrypted only** filters each page using its top-level Content-Type: opaque S/MIME, multipart/signed with a PKCS#7 or OpenPGP signature protocol, or multipart/encrypted with the OpenPGP encryption protocol. It does not fetch message bodies or establish signature validity. Pages cover 50 inbox entries before filtering, so a page may show fewer or no matches while **Older** remains available. Inline OpenPGP and protected content nested inside forwarded messages or ordinary attachments are not included. The filter identifies message formats, not valid signatures or trusted senders.
 
 ### Bundled Java security baseline
 
@@ -344,7 +405,7 @@ Linux 1.2.1 validation (November 18, 2026): native Ubuntu 24.04 amd64 and ARM64 
 
 The ARM64 Debian package was also installed in the local **Codex Linux** UTM VM (Ubuntu 26.04.1 ARM64). Level 2/3/5 pure/hybrid software identity round trips passed in the installed bundled JVM, and the installed desktop window opened under Xvfb as the normal non-root user. No accounts, email or physical YubiKey were used.
 
-New Level 3 YubiKey provisioning offers **Also create OpenPGP public identity**, selected by default; uncheck it to opt out. The choice is saved for pending-certificate recovery. The public identity uses the existing Level 3 hybrid keys and is included when saving an on-key bundle. Level 5 offers classical P-384 OpenPGP, selected by default with an opt-out; Level 2 is unsupported. Existing credentials can use the OpenPGP creation action without generating new keys.
+New desktop Level 3 YubiKey provisioning creates all ten keys in one flow and offers **Also create v6 hybrid and both v4 compatibility certificates**, selected by default. Unchecking skips certificate issuance, not the full key layout; the ordinary OpenPGP creation action can issue them later from those existing keys. The choice is saved for interrupted-setup recovery. Level 5 retains its eight-key compatibility profile; Level 2 does not support OpenPGP.
 
 ### Existing Level 5 classical OpenPGP and certificate backups
 
@@ -352,7 +413,7 @@ New Level 3 YubiKey provisioning offers **Also create OpenPGP public identity**,
 
 Desktop and Android can use a Level 5 **hybrid identity's P-384 components** for RFC 9580 v6 OpenPGP: ECDSA in slot **83**, ECDH in **82** (explicit legacy mappings remain supported). This OpenPGP profile is **classical, not post-quantum**; Level 5 pure/hybrid S/MIME remains unchanged. Both P-384 slots use their existing PIN/touch policies. Level 5 pure-only certificates do not contain the classical public keys; select the hybrid identity for OpenPGP.
 
-New desktop YubiKey provisioning offers OpenPGP creation by default for Level 3 (hybrid PQ) and Level 5 (classical P-384), with an opt-out. Android offers the same choice when issuing certificates for existing keys. Creation and desktop email/SAN updates prompt **Back up now / Not now**. **Back up certificate bundle to YubiKey…** regenerates a signed bundle from the selected email/SAN profile set, including both S/MIME profiles, any saved OpenPGP public identity, serial and slot mappings. **Restore certificate bundle from YubiKey…** reviews and restores it without granting trust. This backs up public certificates, not private keys, PINs or account credentials. Adding SANs preserves a saved OpenPGP identity when its primary email remains unchanged; changing that email creates new OpenPGP certifications if enabled.
+New desktop YubiKey provisioning offers OpenPGP creation by default for Level 3 (separated v6 plus both v4 views) and Level 5 (its P-384 compatibility profiles), with an opt-out. Android offers the same choice when issuing certificates for existing keys. Creation and desktop email/SAN updates prompt **Back up now / Not now**. **Back up certificate bundle to YubiKey…** regenerates a signed bundle from the selected email/SAN profile set, including both S/MIME profiles, any saved OpenPGP public identity, serial and slot mappings. **Restore certificate bundle from YubiKey…** reviews and restores it without granting trust. This backs up public certificates, not private keys, PINs or account credentials. Adding SANs preserves a saved OpenPGP identity when its primary email remains unchanged; changing that email creates new OpenPGP certifications if enabled.
 
 Software and simulated-token P-384 round trips, independent Bouncy Castle OpenPGP signature checks and bidirectional ECDH/v2-SEIPD exchange are tested. Physical P-384 OpenPGP token testing remains pending. iOS currently supports the earlier Level 3 hybrid OpenPGP profile only and cannot restore a Level 5 bundle containing this new classical OpenPGP identity yet.
 
@@ -385,7 +446,7 @@ Read & verify reports the saved trust decision for the actual From mailbox only 
 
 ### Manual mail servers and sent confirmation
 
-Use **Mail servers…** in Compose or Inbox to save IMAP/SMTP hostnames, ports and usernames without starting a connection or sending mail. IMAP uses TLS (normally 993); SMTP requires STARTTLS (normally 587). Passwords/app passwords are requested in **Inbox → Connect IMAP…** and **Send… → Other host (SMTP)** and are not saved. Gmail API remains separate and uses Google sign-in. After Gmail or the SMTP server accepts a message, PQ Mail displays a **Message sent** confirmation with recipient, subject and sending service. This confirms submission, not delivery or reading; failed sends do not display it.
+Use **Settings → Mail accounts → Mail servers…** (also available in Compose) to save IMAP/SMTP hostnames, ports and usernames without starting a connection or sending mail. IMAP uses TLS (normally 993); SMTP requires STARTTLS (normally 587). Passwords/app passwords are requested in **Connect your email → Other mail provider** and **Send… → Other host (SMTP)** and are not saved. Gmail API remains separate and uses Google sign-in. After Gmail or the SMTP server accepts a message, PQ Mail displays a **Message sent** confirmation with recipient, subject and sending service. This confirms submission, not delivery or reading; failed sends do not display it.
 
 Incoming signed PGP/MIME can use attached OpenPGP public certificates for signature verification without saving them or granting trust. The reader provides separate **Save sender OpenPGP certificate…** and **Trust signer fingerprint…** actions; trust remains scoped to selected certified emails and the full primary-key fingerprint. Discovery is bounded and accepts only certificates whose self-signatures/key bindings validate. Certificates hidden inside encrypted payloads still require an available sender key before opening.
 
@@ -397,9 +458,13 @@ For v4 recipients, the desktop RFC 9980 YubiKey identity signs with its existing
 
 Local regression tests cover v6-first selection (including classical v6 over hybrid v4), hybrid subkey preference and revocation fallback, Ed25519 certificate/message validation, both attached certificates, v3 hybrid encryption/decryption and tamper rejection, and continued v6 hybrid signing for v6 or unknown recipients. Hardware calls were simulated in these tests; no email was sent.
 
-### YubiKey OpenPGP certification migration
+### Complete Level 3 OpenPGP setup and recovery
 
-The desktop OpenPGP tab now offers **Create / migrate v6 identity (86–89)…**. It creates separate hybrid certification keys in 86/87 and dedicated classical compatibility keys in 88/89, preserving existing signing and encryption keys. It updates certificates and existing email-specific trust after a verified on-key bundle backup. Migrated v4 messages attach v6, v4 hybrid-capable and v4 classical-only certificates; the signing-only workaround is removed. See [migration details, recovery and validation limits](docs/OPENPGP.md#separate-certification-key-migration-desktop). Physical provisioning of these new slots is pending testing.
+**Keys → Create identity on empty YubiKey… → Level 3** now creates the complete ten-key layout above, then pure/hybrid S/MIME certificates, a v6 OpenPGP certificate with a separate certification primary, and two v4 compatibility views. The v6 primary uses 86/87, hybrid signing uses 9c/84, hybrid encryption uses 9d/85, and standalone classical compatibility uses 88/89. All supplied email addresses are certified in the new v6 and v4 views. Completed certificate issuance is journaled so resuming does not replace fingerprints.
+
+The separate **Create / migrate v6 identity (86–89)…** button is removed. **Resume interrupted setup…** also detects an unfinished older OpenPGP migration for the selected identity and offers certificate/trust/bundle recovery, without generating keys. Incomplete older key journals require inspection. See [setup and recovery details](docs/OPENPGP.md#complete-level-3-setup-and-recovery-desktop).
+
+Creation offers **Back up now / Not now** for the signed, compressed on-key bundle. It includes v6 and full v4 certificates; the classical-only v4 view is derived from the latter on restore. Tests use simulated keys/cards to cover initial issuance, email aliases, v6/v4 signing/decryption, interrupted issuance with stable fingerprints, compressed bundle restore, refusal of mismatched/unrecorded occupied slots, and recovery of interrupted older migrations. No physical key was provisioned for this desktop update.
 
 ### Level 5 v4 OpenPGP compatibility
 

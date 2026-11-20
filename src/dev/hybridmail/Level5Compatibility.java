@@ -39,8 +39,11 @@ final class Level5Compatibility {
   }finally{op.clearSecrets();}
  }
  static byte[] compose(Identity id,PublicIdentity own,PublicIdentity recipient,boolean encrypted,String from,String to,String subject,String text,ExternalMu.Backend backend)throws Exception{
+        return compose(id,own,recipient,encrypted,from,to,subject,text,null,backend);
+    }
+    static byte[] compose(Identity id,PublicIdentity own,PublicIdentity recipient,boolean encrypted,String from,String to,String subject,String text,String html,ExternalMu.Backend backend)throws Exception{
   check(own.compatibility!=null&&backend!=null,"Create the Level 5 v4 compatibility certificates first");var full=own.compatibility;checkPair(own,full);var op=backend.newOperation();try{
-   byte[] plain=withPublicCertificate(cat(bytes("Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"),bytes(Base64.getMimeEncoder(64,b(13,10)).encodeToString(bytes(text)))),full,own);
+   byte[] plain=withPublicCertificate(MailEngine.messageBody(text,html),full,own);
    byte[] sig=signature(plain,0,full.primary,b(),d->op.signCompatibilityEcdsa(key(full.legacy.primary),d));full.legacy.verify(frame(2,sig),plain);
    if(encrypted){byte[] fp=fingerprint(full.primary),signed=cat(frame(4,cat(b(3,0,9,19),slice(fp,12,20),b(1))),frame(11,cat(b(98,0),n(0,4),plain)),frame(2,sig));return mimeWrap(bytes("Content-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n"),cat(bytes("Content-Type: application/octet-stream\r\n\r\n"),armor(encrypt(signed,recipient),"MESSAGE")),true,from,to,subject);}
    return mimeWrap(plain,cat(bytes("Content-Type: application/pgp-signature; name=\"signature.asc\"\r\nContent-Disposition: attachment; filename=\"signature.asc\"\r\n\r\n"),armor(frame(2,sig),"SIGNATURE")),false,from,to,subject);

@@ -14,6 +14,7 @@ fi
 javac -encoding UTF-8 -cp 'lib/*' -d build/classes src/dev/hybridmail/*.java
 # Optional shared installed-app client. Keep configuration out of source control.
 python3 scripts/bundle-google-client.py
+python3 scripts/bundle-chat-client.py
 jar --create --file build/hybrid-mail.jar --main-class dev.hybridmail.MailApp -C build/classes .
 if [[ "${1:-}" == test ]]; then
   java scripts/CheckJava.java --test
@@ -30,8 +31,13 @@ if [[ "${1:-}" == test ]]; then
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.TokenKemTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.Token87Test
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.DesktopStateTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.DesktopInboxSearchTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.MailAccountTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.GmailApiTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.GoogleChatExperimentTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.GoogleChatVaultTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.GoogleChatTransportTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.ChatBundleTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.MicrosoftMailTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.HotmailWrapperTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.OnKeyBundleTest
@@ -40,9 +46,14 @@ if [[ "${1:-}" == test ]]; then
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.SoftwareProfilesTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.OpenPgpTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.Rfc9980Test tests/fixtures
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.Level3OpenPgpSetupTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.OpenPgpMigrationTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.LegacyOpenPgpPolicyTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.OpenPgpContactsTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.PgpTrustSelectionTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.VerifiedMimeTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.SafeMailHtmlTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.FormattedComposeTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.Level5CompatibilityTest
   python3 -m unittest discover -s tests -v
 fi

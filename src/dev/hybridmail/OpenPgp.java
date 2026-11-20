@@ -226,7 +226,7 @@ public final class OpenPgp {
         ExternalMu.Backend op=backend==null?null:backend.newOperation();
         try {
             Signer sign=signer(id,op,signKeys);byte[] primary=keyBody(signKeys,true,now()),subkey=keyBody(encKeys,false,now()),fp=fingerprint(primary),uid=bytes(email(id));
-            byte[] prefs=cat(sub(27,b(3)),sub(11,b(9)),sub(21,b(9)),sub(22,b(0)),sub(30,b(8)),sub(39,b(9,3,9,2)));
+            byte[] prefs=cat(sub(27,b(3)),sub(11,b(9)),sub(21,b(9)),sub(22,modern(signKeys)?b(2,1,0):b(0)),sub(30,b(8)),sub(39,b(9,3,9,2)));
             Request direct=request(keyHash(primary),31,fp,prefs,primary[5]&255),cert=request(cat(keyHash(primary),b(0xb4),n(uid.length,4),uid),19,fp,b(),primary[5]&255),bind=request(cat(keyHash(primary),keyHash(subkey)),24,fp,sub(27,b(12)),primary[5]&255);
             return new PublicIdentity(cat(frame(6,primary),frame(2,direct.finish(sign.sign(direct.digest))),frame(13,uid),frame(2,cert.finish(sign.sign(cert.digest))),frame(14,subkey),frame(2,bind.finish(sign.sign(bind.digest)))));
         }finally{if(op!=null)op.clearSecrets();}
@@ -234,14 +234,24 @@ public final class OpenPgp {
     static PublicIdentity createSeparated(Identity id,PublicIdentity previous,Keys certification,ExternalMu.Backend certBackend,ExternalMu.Backend messageBackend,PublicKey classicalEd,PublicKey classicalX)throws Exception {
         match(previous,id);check(rfc9980(previous),"Migrate an RFC 9980 Level 3 identity first");
         check(modern(certification)&&!Arrays.equals(raw(certification.pq),raw(previous.signing.pq))&&!Arrays.equals(raw(certification.ec),raw(previous.signing.ec)),"Certification keys must be distinct");
+        return createSeparatedKeys(id,previous.signing,previous.signingBody(),previous.subkey,previous.certifiedEmails(),certification,certBackend,messageBackend,classicalEd,classicalX);
+    }
+    static PublicIdentity createInitialSeparated(Identity id,Map<String,PublicKey> keys,ExternalMu.Backend certBackend,ExternalMu.Backend messageBackend)throws Exception {
+        check(Identity.HYBRID_65_P384_SIGN.equals(id.signatureAlgorithm()),"Full OpenPGP setup requires a Level 3 hybrid identity");
+        Keys signing=new Keys(identityKeys(id,true).pq,keys.get("84")),encryption=new Keys(identityKeys(id,false).pq,keys.get("85")),certification=new Keys(keys.get("86"),keys.get("87"));
+        check(modern(signing)&&modern(certification),"Missing Level 3 signing/certification keys");
+        check(!Arrays.equals(raw(signing.pq),raw(certification.pq))&&!Arrays.equals(raw(signing.ec),raw(certification.ec))&&!Arrays.equals(raw(keys.get("88")),raw(signing.ec))&&!Arrays.equals(raw(keys.get("88")),raw(certification.ec))&&!Arrays.equals(raw(keys.get("89")),raw(encryption.ec)),"OpenPGP key roles must use distinct keys");
+        return createSeparatedKeys(id,signing,keyBody(signing,true,now()),keyBody(encryption,false,now()),CertificateBundle.emails(id.signingCert()),certification,certBackend,messageBackend,keys.get("88"),keys.get("89"));
+    }
+    private static PublicIdentity createSeparatedKeys(Identity id,Keys signingKeys,byte[] signingBody,byte[] encryptionBody,List<String> emails,Keys certification,ExternalMu.Backend certBackend,ExternalMu.Backend messageBackend,PublicKey classicalEd,PublicKey classicalX)throws Exception {
         var certOp=certBackend.newOperation();var signOp=messageBackend.newOperation();
         try {
-            Signer certify=signer(id,certOp,certification),sign=signer(id,signOp,previous.signing);
-            byte[] primary=keyBody(certification,true,now()),signing=previous.signingBody(),encryption=previous.subkey,fp=fingerprint(primary);
+            Signer certify=signer(id,certOp,certification),sign=signer(id,signOp,signingKeys);
+            byte[] primary=keyBody(certification,true,now()),signing=signingBody,encryption=encryptionBody,fp=fingerprint(primary);
             var out=new Buffer();out.put(frame(6,primary));
-            byte[] prefs=cat(sub(27,b(1)),sub(11,b(9)),sub(21,b(9)),sub(22,b(0)),sub(30,b(8)),sub(39,b(9,3,9,2)));
+            byte[] prefs=cat(sub(27,b(1)),sub(11,b(9)),sub(21,b(9)),sub(22,b(2,1,0)),sub(30,b(8)),sub(39,b(9,3,9,2)));
             Request direct=request(keyHash(primary),31,fp,prefs,30);out.put(frame(2,direct.finish(certify.sign(direct.digest))));
-            for(String email:previous.certifiedEmails()){byte[] uid=bytes(email);Request cert=request(cat(keyHash(primary),b(0xb4),n(uid.length,4),uid),19,fp,b(),30);out.put(frame(13,uid));out.put(frame(2,cert.finish(certify.sign(cert.digest))));}
+            for(String email:emails){byte[] uid=bytes(email);Request cert=request(cat(keyHash(primary),b(0xb4),n(uid.length,4),uid),19,fp,b(),30);out.put(frame(13,uid));out.put(frame(2,cert.finish(certify.sign(cert.digest))));}
             byte[] pair=cat(keyHash(primary),keyHash(signing));Request cross=request(pair,25,fingerprint(signing),b(),30);byte[] embedded=cross.finish(sign.sign(cross.digest));
             Request binding=request(pair,24,fp,cat(sub(27,b(2)),sub(32,embedded)),30);out.put(frame(14,signing));out.put(frame(2,binding.finish(certify.sign(binding.digest))));
             Request enc=request(cat(keyHash(primary),keyHash(encryption)),24,fp,sub(27,b(12)),30);out.put(frame(14,encryption));out.put(frame(2,enc.finish(certify.sign(enc.digest))));
@@ -353,18 +363,18 @@ public final class OpenPgp {
         // Reuse the v6 creation timestamps so primary/subkey fingerprints remain stable.
         byte[] compatBody=own.classicalBody(true);PublicKey compatEd=compatBody==null?own.signing.ec:own.classicalKey(true);
         byte[] primary=cat(b(4),slice(compatBody==null?own.signingBody():compatBody,1,5),b(22,9,0x2b,6,1,4,1,0xda,0x47,0xf,1),mpi(cat(b(0x40),raw(compatEd))));
-        byte[] subkey=cat(b(4),slice(own.subkey,1,5),b(35),raw(own.encryption.ec),raw(own.encryption.pq)),uid=bytes(own.email);
+        byte[] subkey=cat(b(4),slice(own.subkey,1,5),b(35),raw(own.encryption.ec),raw(own.encryption.pq));
         byte[] prefs=cat(sub(27,b(3)),sub(11,b(9,7)),sub(21,b(10,9,8)),sub(22,b(0)),sub(30,b(1)));
-        byte[] cert=v4Signature(cat(v4KeyHash(primary),b(0xb4),n(uid.length,4),uid),19,primary,prefs,signer);
+        var certifications=new Buffer();for(String email:own.certifiedEmails()){byte[] uid=bytes(email);byte[] cert=v4Signature(cat(v4KeyHash(primary),b(0xb4),n(uid.length,4),uid),19,primary,prefs,signer);certifications.put(frame(13,uid));certifications.put(frame(2,cert));}
         byte[] bind=v4Signature(cat(v4KeyHash(primary),v4KeyHash(subkey)),24,primary,sub(27,b(12)),signer);
         byte[] extra=b();if(own.classicalBody(false)!=null){byte[] x=cat(b(4),slice(own.classicalBody(false),1,5),b(18),X25519_OID,mpi(cat(b(0x40),raw(own.classicalKey(false)))),b(3,1,8,7));byte[] xb=v4Signature(cat(v4KeyHash(primary),v4KeyHash(x)),24,primary,sub(27,b(12)),signer);extra=cat(frame(14,x),frame(2,xb));}
-        return new PublicIdentity(cat(frame(6,primary),frame(13,uid),frame(2,cert),frame(14,subkey),frame(2,bind),extra));
+        return new PublicIdentity(cat(frame(6,primary),certifications.toByteArray(),frame(14,subkey),frame(2,bind),extra));
     }
     static String oldCompatibilityFingerprint(PublicIdentity own)throws Exception{return hex(fingerprint(cat(b(4),slice(own.signingBody(),1,5),b(22,9,0x2b,6,1,4,1,0xda,0x47,0xf,1),mpi(cat(b(0x40),raw(own.signing.ec))))));}
     static void checkCompatibility(PublicIdentity own,PublicIdentity compat)throws Exception{
         if(Level5Compatibility.supports(own)){Level5Compatibility.checkPair(own,compat);return;}
         check(own.separated()&&compat.version()==4,"Expected migrated v6/v4 pair");byte[] primary=cat(b(4),slice(own.classicalBody(true),1,5),b(22,9,0x2b,6,1,4,1,0xda,0x47,0xf,1),mpi(cat(b(0x40),raw(own.classicalKey(true)))));
-        check(Arrays.equals(primary,compat.primary)&&compat.certifiedEmails().equals(List.of(own.email.toLowerCase(Locale.ROOT))),"Compatibility primary/email mismatch");byte[] hybrid=cat(b(4),slice(own.subkey,1,5),b(35),raw(own.encryption.ec),raw(own.encryption.pq));check(Arrays.equals(compat.subkey,hybrid),"Compatibility hybrid encryption mismatch");var classical=classicalOnlyCompatibility(compat);check(classical.canEncrypt()&&Arrays.equals(classical.subkey,classicalV4Body(own)),"Compatibility classical encryption mismatch");
+        check(Arrays.equals(primary,compat.primary)&&compat.certifiedEmails().contains(own.email.toLowerCase(Locale.ROOT))&&own.certifiedEmails().containsAll(compat.certifiedEmails()),"Compatibility primary/email mismatch");byte[] hybrid=cat(b(4),slice(own.subkey,1,5),b(35),raw(own.encryption.ec),raw(own.encryption.pq));check(Arrays.equals(compat.subkey,hybrid),"Compatibility hybrid encryption mismatch");var classical=classicalOnlyCompatibility(compat);check(classical.canEncrypt()&&Arrays.equals(classical.subkey,classicalV4Body(own)),"Compatibility classical encryption mismatch");
     }
     static PublicIdentity classicalOnlyCompatibility(PublicIdentity certificate)throws Exception{
         var ring=(org.bouncycastle.openpgp.PGPPublicKeyRing)LegacyOpenPgp.objects(certificate.encoded).nextObject();var keys=new ArrayList<org.bouncycastle.openpgp.PGPPublicKey>();for(var it=ring.getPublicKeys();it.hasNext();){var key=it.next();if(key.isMasterKey()||key.getAlgorithm()==18)keys.add(key);}return new PublicIdentity(new org.bouncycastle.openpgp.PGPPublicKeyRing(keys).getEncoded());
@@ -380,11 +390,14 @@ public final class OpenPgp {
             bytes("\r\n--"+boundary+"\r\nContent-Type: application/pgp-keys\r\nContent-Disposition: attachment; filename=\"public-key-v4.asc\"\r\n\r\n"),certificate.export(),modern.classicalBody(false)==null&&!Level5Compatibility.supports(modern)&&modern.primary[5]!=31?b():cat(bytes("\r\n--"+boundary+"\r\nContent-Type: application/pgp-keys\r\nContent-Disposition: attachment; filename=\"public-key-v4-classical.asc\"\r\n\r\n"),classicalOnlyCompatibility(certificate).export()),bytes("\r\n--"+boundary+"\r\nContent-Type: application/pgp-keys\r\nContent-Disposition: attachment; filename=\"public-key-v6.asc\"\r\n\r\n"),modern.export(),bytes("\r\n--"+boundary+"--\r\n"));
     }
     public static byte[] composeForRecipient(Identity id,PublicIdentity own,PublicIdentity selected,boolean encrypted,String from,String to,String subject,String text,ExternalMu.Backend backend)throws Exception {
-        if(id.softwareOpenPgp()!=null)return id.softwareOpenPgp().compose(own,selected,encrypted,from,to,subject,text);
+        return composeForRecipient(id,own,selected,encrypted,from,to,subject,text,null,backend);
+    }
+    public static byte[] composeForRecipient(Identity id,PublicIdentity own,PublicIdentity selected,boolean encrypted,String from,String to,String subject,String text,String html,ExternalMu.Backend backend)throws Exception {
+        if(id.softwareOpenPgp()!=null)return id.softwareOpenPgp().compose(own,selected,encrypted,from,to,subject,text,html);
         check(!encrypted||selected!=null,"Select a recipient certificate before encrypting");validateEmail(to);validateEmail(from);check(subject.length()<=500&&!subject.contains("\r")&&!subject.contains("\n"),"Invalid subject");
-        if(selected==null||selected.version()!=4)return compose(id,own,encrypted?selected:null,from,to,subject,text,backend);
+        if(selected==null||selected.version()!=4)return compose(id,own,encrypted?selected:null,from,to,subject,text,html,backend);
         match(own,id);check(selected.matchesEmail(to),"Recipient address mismatch");check(own.email.equalsIgnoreCase(from),"Sender address mismatch");
-        if(classical(id))return Level5Compatibility.compose(id,own,selected,encrypted,from,to,subject,text,backend);
+        if(classical(id))return Level5Compatibility.compose(id,own,selected,encrypted,from,to,subject,text,html,backend);
         check(rfc9980(own)&&backend!=null,"Ed25519 compatibility signing requires your RFC 9980 YubiKey identity (Ed25519 slot 84). Select that identity before sending to a v4 recipient.");
         check(text.length()<LIMIT/4,"Message too large");
         ExternalMu.Backend op=backend.newOperation();
@@ -392,7 +405,7 @@ public final class OpenPgp {
             PublicKey compatKey=own.classicalBody(true)==null?own.signing.ec:own.classicalKey(true);
             Signer signer=digest->{byte[] sig=own.classicalBody(true)==null?op.signEd25519(compatKey,digest):op.signCompatibilityEd25519(compatKey,digest);Signature verify=Signature.getInstance("Ed25519","BC");verify.initVerify(compatKey);verify.update(digest);check(verify.verify(sig),"Invalid compatibility signature");return sig;};
             PublicIdentity compat=compatibilityCertificate(own,signer);
-            byte[] plain=withPublicCertificate(cat(bytes("Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"),bytes(Base64.getMimeEncoder(64,b(13,10)).encodeToString(bytes(text)))),compat,own);
+            byte[] plain=withPublicCertificate(MailEngine.messageBody(text,html),compat,own);
             byte[] sig=v4Signature(plain,0,compat.primary,b(),signer);compat.legacy.verify(frame(2,sig),plain);
             if(encrypted){byte[] fp=fingerprint(compat.primary),signed=cat(frame(4,cat(b(3,0,10,22),slice(fp,12,20),b(1))),frame(11,cat(b(98,0),n(0,4),plain)),frame(2,sig));
                 return mimeWrap(bytes("Content-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n"),cat(bytes("Content-Type: application/octet-stream\r\n\r\n"),armor(encrypt(signed,selected),"MESSAGE")),true,from,to,subject);
@@ -401,16 +414,21 @@ public final class OpenPgp {
         }finally{op.clearSecrets();}
     }
     public static byte[] compose(Identity id,PublicIdentity own,PublicIdentity recipient,String from,String to,String subject,String text,ExternalMu.Backend backend)throws Exception {
-        if(id.softwareOpenPgp()!=null)return id.softwareOpenPgp().compose(own,recipient,recipient!=null,from,to,subject,text);
+        return compose(id,own,recipient,from,to,subject,text,null,backend);
+    }
+    public static byte[] compose(Identity id,PublicIdentity own,PublicIdentity recipient,String from,String to,String subject,String text,String html,ExternalMu.Backend backend)throws Exception {
+        if(id.softwareOpenPgp()!=null)return id.softwareOpenPgp().compose(own,recipient,recipient!=null,from,to,subject,text,html);
         match(own,id);check(own.signing.pq!=null,"Outgoing OpenPGP signing requires a post-quantum hybrid profile");check(from.equalsIgnoreCase(own.email),"Sender address mismatch");validateEmail(to);check(subject.length()<=500&&!subject.contains("\r")&&!subject.contains("\n"),"Invalid subject");check(text.length()<LIMIT/4,"Message too large");if(recipient!=null)check(recipient.matchesEmail(to),"Recipient address mismatch");
-        byte[] plain=cat(bytes("Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"),bytes(Base64.getMimeEncoder(64,b(13,10)).encodeToString(bytes(text))));
+        byte[] plain=MailEngine.messageBody(text,html);
         ExternalMu.Backend op=backend==null?null:backend.newOperation();
         try{Signer signer=signer(id,op,own.signing);if(recipient!=null)return mimeWrap(bytes("Content-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n"),cat(bytes("Content-Type: application/octet-stream\r\n\r\n"),armor(encrypt(signed(plain,own,signer),recipient),"MESSAGE")),true,from,to,subject);
             Request req=request(plain,0,fingerprint(own.signingBody()),b(),own.signingBody()[5]&255);return mimeWrap(plain,cat(bytes("Content-Type: application/pgp-signature; name=\"signature.asc\"\r\nContent-Disposition: attachment; filename=\"signature.asc\"\r\nContent-Transfer-Encoding: 7bit\r\n\r\n"),armor(frame(2,req.finish(signer.sign(req.digest))),"SIGNATURE")),false,from,to,subject);
         }finally{if(op!=null)op.clearSecrets();}
     }
-    public record Opened(String text,String email,String fingerprint,boolean encrypted,boolean fromMatches,String profile,boolean postQuantum) {
-        public String display(){return (postQuantum?"":CryptoWarnings.SIGNATURE)+profile+"\nSignature valid; trust not established\nSigner: "+email+"\nFingerprint: "+fingerprint+"\nEncrypted: "+encrypted+"\nUnsigned From matches: "+fromMatches+"\n\n"+text;}
+    public record Opened(String text,String email,String fingerprint,boolean encrypted,boolean fromMatches,String profile,boolean postQuantum,String html) {
+        public Opened(String text,String email,String fingerprint,boolean encrypted,boolean fromMatches,String profile,boolean postQuantum){this(text,email,fingerprint,encrypted,fromMatches,profile,postQuantum,null);}
+        public String securityDisplay(){return (postQuantum?"":CryptoWarnings.SIGNATURE)+profile+"\nSignature valid; trust not established\nSigner: "+email+"\nFingerprint: "+fingerprint+"\nEncrypted: "+encrypted+"\nUnsigned From matches: "+fromMatches;}
+        public String display(){return securityDisplay()+"\n\n"+text;}
     }
     static byte[] classicalV4Body(PublicIdentity own)throws Exception{return cat(b(4),slice(own.classicalBody(false),1,5),b(18),X25519_OID,mpi(cat(b(0x40),raw(own.classicalKey(false)))),b(3,1,8,7));}
     static boolean classicalEnvelope(byte[] encoded)throws Exception{var p=packets(encoded);if(p.isEmpty()||p.get(0).tag!=1)return false;byte[] b=p.get(0).body;return b.length>10&&b[0]==3&&b[9]==18||b.length>36&&b[0]==6&&b[35]==25;}
@@ -452,6 +470,7 @@ public final class OpenPgp {
         else if(signer.v6!=null){byte[] signature=unarmor(decoded(mime(p.second)),"SIGNATURE");new LegacyOpenPgp(signer.encoded,6).verify(signature,p.first);int alg=((org.bouncycastle.openpgp.PGPSignatureList)LegacyOpenPgp.objects(signature).nextObject()).get(0).getKeyAlgorithm();quantum[0]=alg==30||alg==31;plain=p.first;}
         else if(signer.legacy!=null){new LegacyOpenPgp(signer.encoded).verify(unarmor(decoded(mime(p.second)),"SIGNATURE"),p.first);plain=p.first;}
         else{List<Packet> sig=packets(unarmor(decoded(mime(p.second)),"SIGNATURE"));check(sig.size()==1&&sig.get(0).tag==2,"Expected one detached signature");verify(sig.get(0).body,p.first,0,signer.primary);plain=p.first;}
-        return new Opened(VerifiedMime.display(plain),signer.email,signer.fingerprint(),p.encrypted,signer.matchesEmail(p.root.headers.get("from")),signer.profile(),quantum[0]);
+        var body=VerifiedMime.body(plain);
+        return new Opened(body.text(),signer.email,signer.fingerprint(),p.encrypted,signer.matchesEmail(p.root.headers.get("from")),signer.profile(),quantum[0],body.html());
     }
 }

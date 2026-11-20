@@ -26,7 +26,8 @@ public final class MailApp extends JFrame {
     private final DefaultListModel<Path> attachmentModel=new DefaultListModel<>();
     private final JList<Path> attachmentList=new JList<>(attachmentModel);
     private final JButton saveAttachment=new JButton("Save attachment…");
-    private record ReadResult(String plain,MailEngine.Opened verified,String subject,OpenPgp.Opened pgp,String pgpMailbox,OpenPgp.PublicIdentity pgpCertificate){
+    private record ReadResult(String plain,MailEngine.Opened verified,String subject,OpenPgp.Opened pgp,String pgpMailbox,OpenPgp.PublicIdentity pgpCertificate,String html,String ordinarySecurity){
+        ReadResult(String plain,MailEngine.Opened verified,String subject,OpenPgp.Opened pgp,String pgpMailbox,OpenPgp.PublicIdentity pgpCertificate){this(plain,verified,subject,pgp,pgpMailbox,pgpCertificate,null,null);}
         ReadResult(String plain,MailEngine.Opened verified,String subject,OpenPgp.Opened pgp,String pgpMailbox){this(plain,verified,subject,pgp,pgpMailbox,null);}
         ReadResult(String plain,MailEngine.Opened verified,String subject){this(plain,verified,subject,null,null);}
     }
@@ -45,7 +46,7 @@ public final class MailApp extends JFrame {
     private boolean adjustingComposeFormat;
     private boolean usePgp(){return mailFormat.getSelectedIndex()==1;}
     private MailInbox inbox;
-    private final JCheckBox smimeInboxOnly=new JCheckBox("S/MIME only");
+    private final JCheckBox protectedInboxOnly=new JCheckBox("Signed or encrypted only");
     private final JButton newerMail=new JButton("Newer"),olderMail=new JButton("Older");
     private MicrosoftOAuth.Token microsoftToken;
     private final JLabel microsoftLabel=new JLabel("Microsoft: signed out");
@@ -54,7 +55,7 @@ public final class MailApp extends JFrame {
     private java.util.List<ImapInbox.Entry> inboxEntries=java.util.List.of();
     private final javax.swing.table.DefaultTableModel inboxModel=new javax.swing.table.DefaultTableModel(new String[]{"From","Subject","Received"},0){public boolean isCellEditable(int row,int column){return false;}};
     private final JTable inboxTable=new JTable(inboxModel);
-    private final JLabel inboxLabel=new JLabel("Not connected · shows the 10 most recent arrivals");
+    private final JLabel inboxLabel=new JLabel("Not connected");
     private final JLabel googleLabel=new JLabel("Google: signed out");
     private DesktopState desktopState;
     private final JComboBox<DesktopState.SavedIdentity> savedIdentities=new JComboBox<>();
@@ -62,21 +63,25 @@ public final class MailApp extends JFrame {
     private X509Certificate recipient, pinnedSigner;
     private String adapter,kemAdapter;
     private final JTextField from = new JTextField("alice@example.test"), to = new JTextField("bob@example.test"), subject = new JTextField("A private conversation");
-    private final JTextArea body = new JTextArea("Hello,\n\nThis message is signed using post-quantum cryptography.\n"), reader = new JTextArea();
+    private final DesktopMessageView messageView=new DesktopMessageView();
+    private final JTextArea body = new JTextArea("Hello,\n\nThis message is signed using post-quantum cryptography.\n");
+    private final DesktopComposeBody composeBody=new DesktopComposeBody(body);
     private final JCheckBox encrypt = new JCheckBox("Also encrypt for recipient (optional)", false);
     private final JLabel identityLabel = new JLabel("No identity loaded"), recipientLabel = new JLabel("No recipient certificate");
     private final JLabel status = new JLabel("Create or load an identity to begin. No network connection is made on startup.");
     private final JTabbedPane tabs = new JTabbedPane();
+    private DesktopMailShell shell;
+    private GoogleChatPanel chatPanel;
+    private final JTextField inboxSearch=new JTextField(28);
+    private final JLabel searchScope=new JLabel("Connect a provider to search"),pageLabel=new JLabel(" ");
     public MailApp() {
-        super("PQ Mail · S/MIME & OpenPGP lab");
-        setDefaultCloseOperation(EXIT_ON_CLOSE); setSize(1060, 800); setMinimumSize(new Dimension(850,650)); setLocationRelativeTo(null);
-        JPanel root = new JPanel(new BorderLayout(0,18)); root.setBorder(new EmptyBorder(22,28,18,28)); setContentPane(root);
-        JPanel heading = new JPanel(new BorderLayout()); JLabel title = new JLabel("PQ Mail"); title.setFont(title.getFont().deriveFont(Font.BOLD, 30f));
-        heading.add(title, BorderLayout.NORTH); heading.add(new JLabel("S/MIME & OpenPGP  /  local development build"), BorderLayout.SOUTH); root.add(heading,BorderLayout.NORTH);
-        tabs.addTab("Compose", composePanel()); tabs.addTab("Read & verify", readPanel()); tabs.addTab("Keys", keysPanel()); tabs.addTab("Inbox",inboxPanel()); tabs.addTab("Certificates",certificatesPanel()); tabs.addTab("OpenPGP",openPgpPanel()); root.add(tabs);
-        status.setBorder(new EmptyBorder(10,0,0,0)); root.add(status, BorderLayout.SOUTH);
+        super("PQ Mail");
+        setDefaultCloseOperation(EXIT_ON_CLOSE); setSize(1200, 840); setMinimumSize(new Dimension(1020,720)); setLocationRelativeTo(null);
+        tabs.addTab("Compose",composePanel());tabs.addTab("Read & verify",readPanel());tabs.addTab("Keys",keysPanel());tabs.addTab("Inbox",inboxPanel());tabs.addTab("Certificates",certificatesPanel());tabs.addTab("OpenPGP",openPgpPanel());tabs.addTab("Mail accounts",accountsPanel());
+        chatPanel=new GoogleChatPanel(this);tabs.addTab("Google Chat (experimental)",chatPanel);
+        shell=new DesktopMailShell(tabs,status,()->startProvider(true),()->startProvider(false),()->connectInbox(false),this::lockVault);setContentPane(shell);tabs.addChangeListener(e->{if(tabs.getSelectedIndex()==0)recipientAddressChanged();else pgpLookupTimer.stop();});
+        status.setText("Choose a mail provider. Settings contains keys, certificates and account configuration.");
         body.setLineWrap(true); body.setWrapStyleWord(true); body.setFont(new Font(Font.SANS_SERIF,Font.PLAIN,16)); body.setMargin(new Insets(16,16,16,16));
-        reader.setEditable(false); reader.setLineWrap(true); reader.setWrapStyleWord(true); reader.setFont(new Font(Font.MONOSPACED,Font.PLAIN,13)); reader.setMargin(new Insets(16,16,16,16));
     }
     private JPanel composePanel() {
         mailFormat.setSelectedIndex(1); // Prefer OpenPGP unless only S/MIME is known.
@@ -94,7 +99,7 @@ public final class MailApp extends JFrame {
         outgoingIdentity.addActionListener(e->{if(!syncingOutgoing){var chosen=(DesktopState.SavedIdentity)outgoingIdentity.getSelectedItem();if(chosen!=null)openSaved(chosen);}});
         outgoingEncryption.setEnabled(!usePgp()&&encrypt.isSelected());encrypt.addActionListener(e->outgoingEncryption.setEnabled(!usePgp()&&encrypt.isSelected()));
         outgoingEncryption.addActionListener(e->{if(!syncingOutgoing){var chosen=(EncryptionChoice)outgoingEncryption.getSelectedItem();if(chosen!=null){recipient=chosen.certificate();to.setText(chosen.email());recipientLabel.setText(chosen.email()+" · "+recipient.getPublicKey().getAlgorithm());try{state().saveCertificate("recipient",recipient);}catch(Exception error){error(error);}}}}); fields.add(new JLabel("Prefer v6: hybrid signing. V4 recipients: classical compatibility signing. Lookup never grants trust.")); for(Component item:fields.getComponents())if(item instanceof JComponent c){c.setAlignmentX(Component.LEFT_ALIGNMENT);c.setMaximumSize(new Dimension(Integer.MAX_VALUE,c.getPreferredSize().height));}p.add(fields,BorderLayout.NORTH);
-        JPanel content=new JPanel(new BorderLayout(0,6));content.add(new JScrollPane(body));
+        JPanel content=new JPanel(new BorderLayout(0,6));content.add(composeBody);
         JPanel attachments=new JPanel(new BorderLayout());attachmentList.setVisibleRowCount(2);
         attachments.add(new JScrollPane(attachmentList));JPanel fileActions=new JPanel(new FlowLayout(FlowLayout.LEFT));
         fileActions.add(button("Add attachments…",()->{JFileChooser c=new JFileChooser();c.setMultiSelectionEnabled(true);if(c.showOpenDialog(this)==JFileChooser.APPROVE_OPTION){for(File file:c.getSelectedFiles()){if(attachmentModel.size()>=20){error(new IOException("At most 20 attachments"));break;}attachmentModel.addElement(file.toPath());}}}));
@@ -132,7 +137,7 @@ public final class MailApp extends JFrame {
         updateComposeFormat();
         pgpLookupTimer.stop();pgpLookupTicket=pgpRecipients.change(to.getText());pgpRecipient=null;
         if(usePgp()){encrypt.setSelected(false);encrypt.setEnabled(false);refreshPgpChoices();
-            try{OpenPgp.validateEmail(to.getText().trim());if(pgpRecipient==null){pgpLookupStatus.setText("Looking up To on keys.openpgp.org…");pgpLookupTimer.restart();}}catch(Exception e){pgpLookupStatus.setText("Enter one complete recipient email address.");}
+            try{OpenPgp.validateEmail(to.getText().trim());if(pgpRecipient==null){pgpLookupStatus.setText("No saved recipient key. Open Compose to look it up.");if(shell!=null&&!shell.isWelcome()&&tabs.getSelectedIndex()==0)pgpLookupTimer.restart();}}catch(Exception e){pgpLookupStatus.setText("Enter one complete recipient email address.");}
         }
     }
     private void refreshPgpChoices(){
@@ -144,7 +149,7 @@ public final class MailApp extends JFrame {
         }finally{syncingPgp=false;}
     }
     private void lookupPgpRecipient(){
-        pgpLookupTimer.stop();if(!usePgp())return;final String address=to.getText().trim();
+        pgpLookupTimer.stop();if(!usePgp()||shell!=null&&shell.isWelcome())return;final String address=to.getText().trim();
         try{OpenPgp.validateEmail(address);}catch(Exception e){pgpLookupStatus.setText("Enter one complete recipient email address.");return;}
         final var ticket=pgpLookupTicket;pgpLookupStatus.setText("Looking up "+address+" on keys.openpgp.org…");
         new SwingWorker<OpenPgp.PublicIdentity,Void>(){
@@ -156,7 +161,7 @@ public final class MailApp extends JFrame {
         }.execute();
     }
     private JPanel readPanel() {
-        JPanel p = panel(); p.add(new JScrollPane(reader)); JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel p = panel(); p.add(messageView); JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT));
         actions.add(button("Open .eml…", () -> {
             Path file = choose(false,"Open S/MIME message"); if(file == null)return;
             clearReadTrust();Identity id = identity; X509Certificate pin = pinnedSigner;
@@ -172,9 +177,8 @@ public final class MailApp extends JFrame {
         JPanel actions=new JPanel(new GridLayout(0,2,8,8));
         actions.add(button("Create OpenPGP public identity",()->{
             Identity id=identity;String path=adapter;
-            job("Creating OpenPGP bindings (one PIN operation; three signatures)…",()->OpenPgp.createOwn(state().directory(),id,path==null?null:ExternalMu.executable(path)).description(),detail->{pgpStatus.setText(detail);offerBundleBackup();});
+            job("Creating OpenPGP certificates; enter PINs and touch when requested…",()->createSelectedOpenPgp(id,path).description(),detail->{pgpStatus.setText(detail);offerBundleBackup();});
         }));
-        actions.add(button("Create / migrate v6 identity (86–89)…",this::migratePgpCertification));
         actions.add(button("Create Level 5 v4 compatibility certificates",()->{
             Identity id=identity;String path=adapter;
             job("Reading Level 5 compatibility keys and signing public certificates…",()->{
@@ -252,56 +256,141 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         settings.add(left(button("Close",dialog::dispose)),BorderLayout.SOUTH);
         dialog.setContentPane(settings);dialog.pack();dialog.setLocationRelativeTo(this);dialog.setVisible(true);
     }
+    // Chat delegates long-running work to the existing spinner/worker and uses
+    // the same loaded software/YubiKey backend; it never provisions token keys.
+    DesktopState chatState()throws Exception{return state();}
+    Identity chatIdentity(){return identity;}
+    String chatGmailClient(){try{return GoogleOAuth.bundledClient().id();}catch(Exception e){return "";}}
+    ExternalMu.Backend chatSigning(){return adapter==null?null:ExternalMu.executable(adapter);}
+    ExternalKem.Backend chatDecryption(){return kemAdapter==null?null:ExternalKem.executable(kemAdapter);}
+    void chatConfigure(){googleChatExperimentalSettings();}
+    void chatContacts(){shell.showPage(4);refreshContacts();}
+    void chatError(Throwable e){error(e);}
+    <T>void chatJob(String label,Callable<T> task,java.util.function.Consumer<T> success){job(label,task,success);}
+    private void googleChatExperimentalSettings(){
+        try{
+            var saved=state();String gmailClient="";
+            try{gmailClient=GoogleOAuth.bundledClient().id();}catch(IOException unavailable){/* A custom-only build still validates the Chat client format. */}
+            JCheckBox enabled=new JCheckBox("Enable experimental Google Chat development",GoogleChatExperiment.enabled(saved));
+            String bundled=GoogleChatSession.client().id();
+            JTextField client=new JTextField(bundled,48);client.setEditable(false);
+            JTextArea explanation=new JTextArea("Experimental Chat uses a separate test OAuth client. Sign in or reconnect on the Google Chat page.\n\nPermissions: identify your verified Google email, list conversations, read messages/attachments, and send messages/attachments.\n\nChat refresh tokens are stored only in the PRF vault. Unlock is required before connecting. Access tokens and message content stay in memory and are cleared on lock.\n\nUse an existing Chat conversation; creating spaces is not requested. Sender certificates are public separate attachments, never automatically saved or trusted.",10,55);explanation.setEditable(false);explanation.setLineWrap(true);explanation.setWrapStyleWord(true);explanation.setOpaque(false);
+            JPanel form=new JPanel();form.setLayout(new BoxLayout(form,BoxLayout.Y_AXIS));form.add(explanation);form.add(enabled);form.add(new JLabel("Google Chat development client ID (public)"));form.add(client);
+            if(JOptionPane.showConfirmDialog(this,form,"Experimental Google Chat",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)!=JOptionPane.OK_OPTION)return;
+            GoogleChatExperiment.configure(saved,enabled.isSelected(),client.getText(),gmailClient);
+            if(!enabled.isSelected()&&chatPanel!=null)chatPanel.locked();
+            status.setText(enabled.isSelected()?"Chat enabled. Open Google Chat from the navigation or Settings.":"Experimental Google Chat disabled.");
+        }catch(Exception e){error(e);}
+    }
+    private void chatIdentitySettings(){
+        final DesktopState saved;final String account;
+        try{saved=state();account=GoogleChatVault.email(saved.get("google.email",""));}catch(Exception e){error(new IOException("Connect Gmail first to choose the account whose v6 Chat identity you want to pin."));return;}
+        job("Unlocking passkey vault for the default Chat identity…",()->new GoogleChatVault(DesktopVault.vault()).pinned(account),pin->{
+            var identities=saved.selectableIdentities();JComboBox<DesktopState.SavedIdentity> choice=new JComboBox<>(identities.toArray(DesktopState.SavedIdentity[]::new));
+            if(pin!=null)identities.stream().filter(i->i.id().equals(pin.identityId())).findFirst().ifPresent(choice::setSelectedItem);
+            JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("Chat account: "+account));form.add(new JLabel("Default v6 identity for signing and decryption"));form.add(choice);
+            JTextArea current=new JTextArea(pin==null?"No default pinned.":"Pinned fingerprint: "+pin.fingerprint());current.setEditable(false);current.setLineWrap(true);current.setWrapStyleWord(true);form.add(current);form.add(new JLabel("Requires hybrid v6 keys and a certified email matching this account."));
+            int action=JOptionPane.showOptionDialog(this,form,"Default Google Chat identity",JOptionPane.DEFAULT_OPTION,JOptionPane.PLAIN_MESSAGE,null,new Object[]{"Pin selected identity","Remove pin","Cancel"},"Cancel");
+            if(action==1){job("Removing the Chat identity pin…",()->{new GoogleChatVault(DesktopVault.vault()).unpin(account);return true;},ok->status.setText("Chat identity pin removed; keys and certificates retained."));return;}
+            if(action!=0)return;var selected=(DesktopState.SavedIdentity)choice.getSelectedItem();if(selected==null){error(new IOException("Create or restore a saved v6 identity first."));return;}
+            char[] password=new char[0];
+            if(selected.passwordRequired()&&!saved.vaultIdentity(selected.id())){JPasswordField input=new JPasswordField();if(JOptionPane.showConfirmDialog(this,input,"Software identity password",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){input.setText("");return;}password=input.getPassword();input.setText("");}
+            char[] secret=password;
+            job("Checking v6 keys and saving the Chat identity pin in the vault…",()->{try{Identity chosen=saved.loadIdentity(selected.id(),secret);return new GoogleChatVault(DesktopVault.vault()).pin(saved,account,chosen);}finally{Arrays.fill(secret,'\0');}},result->status.setText("Default Chat identity pinned for "+result.email()+" · "+result.fingerprint()));
+        });
+    }
+    private void chatContactPreview(){
+        job("Checking saved certificates and per-email trust for Chat…",()->{
+            var saved=state();var emails=new java.util.TreeSet<String>();for(var contact:saved.contacts())emails.add(contact.email());
+            for(var contact:saved.pgpContacts()){emails.add(contact.email());try{emails.addAll(saved.pgpCertificate(contact).certifiedEmails());}catch(Exception invalid){/* The row will show the unusable certificate state. */}}
+            var rows=new java.util.ArrayList<GoogleChatContacts.Status>();for(String email:emails)rows.add(GoogleChatContacts.inspect(saved,email));return rows;
+        },rows->{
+            var model=new javax.swing.table.DefaultTableModel(new String[]{"Email","Certificate and trust status","Full fingerprints"},0){public boolean isCellEditable(int row,int column){return false;}};
+            for(var row:rows)model.addRow(new Object[]{row.email(),row.summary(),row.certificates().stream().map(GoogleChatContacts.Certificate::fingerprint).distinct().collect(java.util.stream.Collectors.joining("; "))});
+            JTable table=new JTable(model);table.setAutoCreateRowSorter(true);table.setRowHeight(28);table.setDefaultRenderer(Object.class,new javax.swing.table.DefaultTableCellRenderer(){public Component getTableCellRendererComponent(JTable t,Object value,boolean selected,boolean focus,int row,int column){super.getTableCellRendererComponent(t,value,selected,focus,row,column);putClientProperty("html.disable",Boolean.TRUE);setText(String.valueOf(value));return this;}});
+            JScrollPane scroll=new JScrollPane(table);scroll.setPreferredSize(new Dimension(1050,360));JPanel panel=new JPanel(new BorderLayout(0,8));panel.add(new JLabel("Local certificate contacts preview — not a Google Chat directory. Manage trust in Certificates."),BorderLayout.NORTH);panel.add(scroll);
+            JOptionPane.showMessageDialog(this,panel,"Chat contacts: certificates and trust",JOptionPane.PLAIN_MESSAGE);
+        });
+    }
+    private JPanel accountsPanel(){
+        JPanel p=panel();JPanel options=new JPanel();options.setLayout(new BoxLayout(options,BoxLayout.Y_AXIS));
+        options.add(section("Mail connections",new JLabel("Use the start screen to sign in or reconnect. Credentials are unlocked only when needed.")));
+        options.add(left(button("Choose mail provider",()->shell.showWelcome()),button("Disconnect inbox",this::disconnectInbox)));
+        options.add(section("Gmail",googleLabel));options.add(left(button("Sign in again with Google…",this::signInGoogle),button("Sign out of Google",this::signOutGoogle),button("Google advanced settings…",this::googleAdvancedSettings)));
+        options.add(left(button("Experimental Google Chat…",this::googleChatExperimentalSettings),button("Default Chat identity…",this::chatIdentitySettings),button("Chat certificate contacts…",this::chatContactPreview)));
+        options.add(section("Hotmail / Outlook",microsoftLabel));options.add(left(button("Sign in again with Microsoft…",this::signInMicrosoft),button("Sign out of Microsoft",this::signOutMicrosoft),button("Microsoft advanced settings…",this::microsoftSettings)));
+        options.add(section("Other mail provider",new JLabel("IMAP over TLS and SMTP with STARTTLS. Saved settings are protected by the passkey vault.")));options.add(left(button("Mail servers…",this::mailServerSettings)));
+        p.add(new JScrollPane(options));return p;
+    }
+    private void startProvider(boolean google){
+        try{String email=state().get(google?"google.email":"microsoft.email","");
+            if(email.isBlank()){if(google)signInGoogle(true);else signInMicrosoft(true);}
+            else if(google)connectGoogleProvider(true);else connectMicrosoft();
+        }catch(Exception e){error(e);}
+    }
+    private void reconnectFailed(boolean google,Throwable failure){
+        String provider=google?"Google":"Microsoft";String message=failure.getMessage()==null?"Connection was not completed.":failure.getMessage();
+        status.setText("Not connected. Your saved credentials have not been removed.");
+        if(JOptionPane.showOptionDialog(this,"Could not reconnect to "+provider+".\n"+message+"\n\nFor a network error or cancelled unlock, return and try again.\nIf authorization has expired, choose Sign in again.","Reconnect "+provider,JOptionPane.DEFAULT_OPTION,JOptionPane.WARNING_MESSAGE,null,new Object[]{"Return","Sign in again"},"Return")==1){if(google)signInGoogle(true);else signInMicrosoft(true);}
+    }
+    private void connectGoogleProvider(boolean restoring){
+        job(restoring?"Unlocking the Google OAuth refresh token if needed, then loading Gmail…":"Loading your Gmail inbox…",()->{
+            String email=state().get("google.email","");googleEmail=email;var api=new GmailApi(this::googleCredential);
+            try{api.verifyAccount(email);var entries=api.latest();if(inbox!=null)try{inbox.close();}catch(Exception ignored){}inbox=api;return entries;}catch(Exception e){api.close();throw e;}
+        },entries->{try{connectedInbox("Gmail",state().get("google.email",""),entries);}catch(Exception e){error(e);}},e->reconnectFailed(true,e));
+    }
+    private void connectedInbox(String provider,String email,java.util.List<ImapInbox.Entry> entries){
+        inboxSearch.setText("");protectedInboxOnly.setSelected(false);shell.account(email+" · "+provider);from.setText(email);showInbox(entries);inboxLabel.setText(email+" · "+provider+(inbox instanceof ImapInbox?" · 10 messages per page":" · 50 messages per page"));shell.showPage(3);
+    }
+    private void searchInbox(){
+        if(inbox==null){shell.showWelcome();status.setText("Connect a provider before searching.");return;}
+        String query=inboxSearch.getText().trim();if(query.length()>1000){error(new IOException("Search is limited to 1,000 characters"));return;}
+        inboxEntries=java.util.List.of();inboxModel.setRowCount(0);
+        job(query.isEmpty()?"Loading inbox…":"Searching your inbox…",()->{if(inbox instanceof GmailApi api)api.setSearch(query);else if(inbox instanceof MicrosoftGraph api)api.setSearch(query);else if(inbox instanceof ImapInbox api)api.setSearch(query);return inbox.latest();},this::showInbox);
+    }
     private JPanel inboxPanel(){
-        JPanel p=panel();JPanel top=new JPanel(new GridLayout(0,1,0,6));
-        top.add(inboxLabel);top.add(googleLabel);top.add(microsoftLabel);
-        JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT));
-        actions.add(button("Connect IMAP…",()->connectInbox(false)));
-        actions.add(button("Connect Gmail",()->connectInbox(true)));actions.add(button("Connect Hotmail / Outlook",this::connectMicrosoft));
-        actions.add(button("Refresh",this::refreshInbox));
-        newerMail.setEnabled(false);olderMail.setEnabled(false);newerMail.addActionListener(e->gmailPage(false));olderMail.addActionListener(e->gmailPage(true));actions.add(newerMail);actions.add(olderMail);
-        smimeInboxOnly.setEnabled(false);smimeInboxOnly.addActionListener(e->{if(inbox instanceof GmailApi api){api.setSmimeOnly(smimeInboxOnly.isSelected());refreshInbox();}});actions.add(smimeInboxOnly);
-        actions.add(button("Disconnect",this::disconnectInbox));top.add(actions);
-        JPanel google=new JPanel(new FlowLayout(FlowLayout.LEFT));
-        google.add(button("Sign in with Google…",this::signInGoogle));
-        google.add(button("Sign out of Google",this::signOutGoogle));
-        google.add(button("Advanced settings…",this::googleAdvancedSettings));
-        top.add(google);top.add(left(button("Sign in with Microsoft…",this::signInMicrosoft),button("Sign out of Microsoft",this::signOutMicrosoft),button("Microsoft advanced settings…",this::microsoftSettings)));top.add(left(button("Mail servers…",this::mailServerSettings),new JLabel("Manual IMAP / SMTP settings · passwords requested at connection")));p.add(top,BorderLayout.NORTH);
-        inboxTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);inboxTable.setRowHeight(30);inboxTable.setAutoCreateRowSorter(true);
+        JPanel p=panel();JPanel top=new JPanel(new BorderLayout(12,10));
+        JPanel search=new JPanel(new BorderLayout(8,6));inboxSearch.setToolTipText("Search the connected inbox");inboxSearch.getAccessibleContext().setAccessibleName("Search inbox");inboxSearch.addActionListener(e->searchInbox());search.add(inboxSearch);search.add(button("Search",this::searchInbox),BorderLayout.EAST);search.add(searchScope,BorderLayout.SOUTH);top.add(search);
+        JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT,8,6));actions.add(button("Refresh",this::refreshInbox));actions.add(button("Clear search",()->{inboxSearch.setText("");searchInbox();}));
+        newerMail.setEnabled(false);olderMail.setEnabled(false);newerMail.addActionListener(e->gmailPage(false));olderMail.addActionListener(e->gmailPage(true));actions.add(newerMail);actions.add(pageLabel);actions.add(olderMail);
+        protectedInboxOnly.setToolTipText("S/MIME or OpenPGP MIME headers on this page; signatures are checked when opened.");protectedInboxOnly.setEnabled(false);protectedInboxOnly.addActionListener(e->{if(inbox instanceof GmailApi api){api.setProtectedOnly(protectedInboxOnly.isSelected());refreshInbox();}});actions.add(protectedInboxOnly);top.add(actions,BorderLayout.SOUTH);p.add(top,BorderLayout.NORTH);
+        inboxTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);inboxTable.setRowHeight(48);inboxTable.setShowGrid(false);inboxTable.setIntercellSpacing(new Dimension(0,1));inboxTable.setSelectionBackground(new Color(0xDCEAE5));inboxTable.setSelectionForeground(DesktopMailShell.INK);inboxTable.setFillsViewportHeight(true);inboxTable.setAutoCreateRowSorter(true);
         // Mail headers are untrusted; disable Swing's implicit HTML renderer.
         inboxTable.setDefaultRenderer(Object.class,new javax.swing.table.DefaultTableCellRenderer(){
             public Component getTableCellRendererComponent(JTable table,Object value,boolean selected,boolean focus,int row,int column){
-                putClientProperty("html.disable",Boolean.TRUE);return super.getTableCellRendererComponent(table,value,selected,focus,row,column);
+                putClientProperty("html.disable",Boolean.TRUE);super.getTableCellRendererComponent(table,value,selected,focus,row,column);setBorder(new EmptyBorder(8,12,8,12));if(!selected)setBackground(row%2==0?Color.WHITE:DesktopMailShell.SURFACE);return this;
             }
         });
         inboxTable.getColumnModel().getColumn(1).setPreferredWidth(420);
         inboxTable.addMouseListener(new java.awt.event.MouseAdapter(){public void mouseClicked(java.awt.event.MouseEvent e){if(e.getClickCount()==2)openInboxMessage();}});
         inboxTable.getInputMap().put(KeyStroke.getKeyStroke("ENTER"),"open-message");inboxTable.getActionMap().put("open-message",new AbstractAction(){public void actionPerformed(java.awt.event.ActionEvent e){openInboxMessage();}});
-        p.add(new JScrollPane(inboxTable));JPanel bottom=new JPanel(new BorderLayout());bottom.add(new JLabel("Read-only · headers are unverified · message bodies load only when opened"),BorderLayout.NORTH);
+        p.add(new JScrollPane(inboxTable));JPanel bottom=new JPanel(new BorderLayout());bottom.add(inboxLabel,BorderLayout.NORTH);bottom.add(new JLabel("Headers are unverified · message bodies load only when opened · no disk cache"),BorderLayout.CENTER);
         bottom.add(left(button("Open selected message",this::openInboxMessage)),BorderLayout.SOUTH);p.add(bottom,BorderLayout.SOUTH);return p;
     }
     private void connectInbox(boolean gmail){
-        Account a=gmail?googleAccount(false):account(false);if(a==null)return;
+        if(gmail){startProvider(true);return;}
+        shell.busy("Unlocking saved IMAP settings from the passkey vault if needed…");Account a;try{a=account(false);}catch(Exception e){error(e);return;}finally{shell.idle();}if(a==null)return;
         job("Connecting to inbox…",()->{try{
-            MailInbox next;
-            if(gmail){var api=new GmailApi(this::googleCredential);api.verifyAccount(a.user);api.setSmimeOnly(smimeInboxOnly.isSelected());next=api;}else next=ImapInbox.connect(a.host,a.port,a.user,new String(a.password),false);
+            MailInbox next=ImapInbox.connect(a.host,a.port,a.user,new String(a.password),false);
             try{var entries=next.latest();if(inbox!=null)try{inbox.close();}catch(Exception ignored){}inbox=next;return entries;}
             catch(Exception e){next.close();throw e;}
-        }finally{Arrays.fill(a.password,'\0');}},entries->{showInbox(entries);inboxLabel.setText(a.user+" · "+(gmail?"Gmail API · 50 per page · no disk cache":"IMAP · 10 most recent")+" · read-only");tabs.setSelectedIndex(3);});
+        }finally{Arrays.fill(a.password,'\0');}},entries->connectedInbox("IMAP",a.user,entries));
     }
     private void showInbox(java.util.List<ImapInbox.Entry> entries){
         inboxEntries=entries;inboxModel.setRowCount(0);
         var format=java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(java.time.ZoneId.systemDefault());
         for(var entry:entries)inboxModel.addRow(new Object[]{entry.sender(),entry.subject(),entry.received()==null?"":format.format(entry.received())});
-        smimeInboxOnly.setEnabled(inbox instanceof GmailApi);
-        newerMail.setEnabled(inbox instanceof GmailApi g&&g.hasNewer()||inbox instanceof MicrosoftGraph m&&m.hasNewer());olderMail.setEnabled(inbox instanceof GmailApi g&&g.hasOlder()||inbox instanceof MicrosoftGraph m&&m.hasOlder());
+        protectedInboxOnly.setEnabled(inbox instanceof GmailApi);
+        newerMail.setEnabled(inbox instanceof GmailApi g&&g.hasNewer()||inbox instanceof MicrosoftGraph m&&m.hasNewer()||inbox instanceof ImapInbox i&&i.hasNewer());olderMail.setEnabled(inbox instanceof GmailApi g&&g.hasOlder()||inbox instanceof MicrosoftGraph m&&m.hasOlder()||inbox instanceof ImapInbox i&&i.hasOlder());
+        pageLabel.setText(inbox==null?" ":"Page "+(inbox instanceof GmailApi g?g.pageNumber():inbox instanceof MicrosoftGraph m?m.pageNumber():((ImapInbox)inbox).pageNumber()));
+        searchScope.setText(inbox instanceof GmailApi?"Search this Gmail inbox · operators such as from: and subject: are supported":inbox instanceof MicrosoftGraph?"Search this Hotmail / Outlook inbox by subject":inbox instanceof ImapInbox?"Search this IMAP inbox by sender or subject":"Connect a provider to search");inboxSearch.setEnabled(inbox!=null);
         status.setText(entries.isEmpty()?"No matching messages on this page; use Older if available":"Showing "+entries.size()+" messages, newest first"+(inbox instanceof GmailApi?" · use Older/Newer for the entire inbox":""));
     }
-    private void gmailPage(boolean older){if(inbox instanceof MicrosoftGraph api){job("Loading Microsoft headers…",()->older?api.older():api.newer(),this::showInbox);return;}if(!(inbox instanceof GmailApi api))return;job("Loading Gmail headers…",()->older?api.older():api.newer(),this::showInbox);}
+    private void gmailPage(boolean older){if(inbox instanceof ImapInbox api){job("Loading IMAP headers…",()->older?api.older():api.newer(),this::showInbox);return;}if(inbox instanceof MicrosoftGraph api){job("Loading Microsoft headers…",()->older?api.older():api.newer(),this::showInbox);return;}if(!(inbox instanceof GmailApi api))return;job("Loading Gmail headers…",()->older?api.older():api.newer(),this::showInbox);}
     private void refreshInbox(){if(inbox==null){error(new IOException("Connect to an inbox first"));return;}job("Refreshing inbox…",()->inbox.latest(),this::showInbox);}
     private void disconnectInbox(){
-        MailInbox previous=inbox;inbox=null;smimeInboxOnly.setEnabled(false);newerMail.setEnabled(false);olderMail.setEnabled(false);inboxEntries=java.util.List.of();inboxModel.setRowCount(0);inboxLabel.setText("Not connected");
-        if(previous!=null)job("Disconnecting…",()->{previous.close();return "Disconnected";},status::setText);
+        MailInbox previous=inbox;inbox=null;protectedInboxOnly.setEnabled(false);newerMail.setEnabled(false);olderMail.setEnabled(false);inboxEntries=java.util.List.of();inboxModel.setRowCount(0);inboxLabel.setText("Not connected");
+        showInbox(java.util.List.of());shell.account("Choose a provider to sign in or reconnect");shell.showWelcome();if(previous!=null)job("Disconnecting…",()->{previous.close();return "Disconnected";},status::setText);
     }
     private void openInboxMessage(){
         int selected=inboxTable.getSelectedRow();if(selected<0||inbox==null)return;
@@ -323,7 +412,8 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         catch(Exception e){error(e);}finally{Arrays.fill(value,'\0');}
     }
     private static String credentialStore(){return "passkey vault (or authenticated Mac Keychain for Google)";}
-    private void signInGoogle(){
+    private void signInGoogle(){signInGoogle(false);}
+    private void signInGoogle(boolean connectAfter){
         try{
             GoogleOAuth.Client client=GoogleSession.client(state());
             JTextField email=new JTextField(state().get("google.email",""),30);
@@ -337,13 +427,13 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             job("Waiting for Google sign-in…",()->{
                 try{GoogleOAuth.Token token=GoogleOAuth.authorize(client,address,uri->{try{Desktop.getDesktop().browse(uri);}catch(Exception e){throw new IllegalStateException("Could not open the system browser");}},cancelled::get);try{GoogleSession.save(client,address,token);return token;}catch(Exception e){token.close();throw e;}}
                 finally{SwingUtilities.invokeLater(progress::dispose);}
-            },token->{if(googleToken!=null)googleToken.close();googleToken=token;googleEmail=address;googleLabel.setText("Google: "+address+" · saved in "+credentialStore()+"");try{state().set("google.email",address);state().save();}catch(Exception e){error(e);}status.setText("Google sign-in ready. Connect Gmail or send with Google OAuth.");});
+            },token->{if(googleToken!=null)googleToken.close();googleToken=token;googleEmail=address;googleLabel.setText("Google: "+address+" · saved in "+credentialStore()+"");try{state().set("google.email",address);state().save();}catch(Exception e){error(e);}status.setText("Google sign-in ready.");if(connectAfter)connectGoogleProvider(false);});
         }catch(NoSuchFileException e){error(new IOException("Import your Google Desktop OAuth client JSON first"));}catch(Exception e){error(e);}
     }
     private void signOutGoogle(){
         if(googleToken!=null)googleToken.close();googleToken=null;googleEmail=null;disconnectInbox();
         googleLabel.setText("Google: signed out locally · removing saved session…");
-        job("Removing Google session from "+credentialStore()+"…",()->{MacKeychain.deleteProtectedSession();MacKeychain.delete("google-session");return true;},ok->{googleLabel.setText("Google: signed out");status.setText("Google refresh token removed from Keychain. Client configuration retained; access can also be revoked at Google.");});
+        job("Removing Google session from "+credentialStore()+"…",()->{MacKeychain.deleteProtectedSession();MacKeychain.delete("google-session");return true;},ok->{try{state().set("google.email",null);state().save();}catch(Exception e){error(e);}googleLabel.setText("Google: signed out");status.setText("Google refresh token removed from Keychain. Client configuration retained; access can also be revoked at Google.");});
     }
     private GoogleOAuth.Token restoreGoogleSession()throws Exception{
         JDialog progress=new JDialog(this,"Google session",true);progress.add(new JLabel("  Restoring Google sign-in from "+credentialStore()+"…  "));progress.pack();progress.setLocationRelativeTo(this);progress.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
@@ -370,7 +460,8 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         try{String value=id.getText().trim();if(!value.isEmpty())new MicrosoftOAuth.Client(value);state().set("microsoft.client.id",value);state().save();if(microsoftToken!=null)microsoftToken.close();microsoftToken=null;status.setText("Microsoft client updated. Sign in again.");}catch(Exception e){error(e);}
         }catch(Exception e){error(e);}
     }
-    private void signInMicrosoft(){
+    private void signInMicrosoft(){signInMicrosoft(false);}
+    private void signInMicrosoft(boolean connectAfter){
         try{
             var client=MicrosoftSession.client(state());
             String hint=state().get("microsoft.email","");
@@ -381,7 +472,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
                 try{var token=MicrosoftOAuth.authorize(client,hint,uri->{try{Desktop.getDesktop().browse(uri);}catch(Exception e){throw new IllegalStateException("Cannot open browser");}},cancelled::get);
                     try(var api=new MicrosoftGraph(token::credential)){String email=api.account();if(cancelled.get())throw new IOException("Microsoft sign-in cancelled");MicrosoftSession.save(client,email,token);state().set("microsoft.email",email);state().save();return token;}catch(Exception e){token.close();throw e;}
                 }finally{SwingUtilities.invokeLater(progress::dispose);}
-            },token->{try{if(microsoftToken!=null)microsoftToken.close();microsoftToken=token;microsoftLabel.setText("Microsoft: "+state().get("microsoft.email","")+" · saved in "+credentialStore());status.setText("Microsoft sign-in ready. Connect Hotmail / Outlook to read mail.");}catch(Exception e){error(e);}});
+            },token->{try{if(microsoftToken!=null)microsoftToken.close();microsoftToken=token;microsoftLabel.setText("Microsoft: "+state().get("microsoft.email","")+" · saved in "+credentialStore());status.setText("Microsoft sign-in ready.");if(connectAfter)connectMicrosoft();}catch(Exception e){error(e);}});
         }catch(Exception e){error(e);}
     }
     private synchronized char[] microsoftCredential()throws Exception{
@@ -389,10 +480,10 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         return microsoftToken.credential();
     }
     private void connectMicrosoft(){
-        job("Connecting to Hotmail / Outlook…",()->{
+        job("Unlocking the Microsoft OAuth refresh token from the passkey vault if needed, then loading mail…",()->{
             var api=new MicrosoftGraph(this::microsoftCredential);
-            try{api.verifyAccount(state().get("microsoft.email",""));var entries=api.latest();if(inbox!=null)inbox.close();inbox=api;return entries;}catch(Exception e){api.close();throw e;}
-        },entries->{try{showInbox(entries);microsoftLabel.setText("Microsoft: "+state().get("microsoft.email",""));inboxLabel.setText(state().get("microsoft.email","")+" · Microsoft Graph · 50 per page · no disk cache");tabs.setSelectedIndex(3);}catch(Exception e){error(e);}});
+            try{api.verifyAccount(state().get("microsoft.email",""));var entries=api.latest();if(inbox!=null)try{inbox.close();}catch(Exception ignored){}inbox=api;return entries;}catch(Exception e){api.close();throw e;}
+        },entries->{try{microsoftLabel.setText("Microsoft: "+state().get("microsoft.email",""));connectedInbox("Hotmail / Outlook",state().get("microsoft.email",""),entries);}catch(Exception e){error(e);}},e->reconnectFailed(false,e));
     }
     private Account microsoftAccount(){
         try{
@@ -403,7 +494,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     }
     private void signOutMicrosoft(){
         if(inbox instanceof MicrosoftGraph)disconnectInbox();
-        job("Removing Microsoft OAuth refresh token…",()->{synchronized(this){if(microsoftToken!=null)microsoftToken.close();microsoftToken=null;MacKeychain.delete("microsoft-session");}return true;},ok->{microsoftLabel.setText("Microsoft: signed out");status.setText("Microsoft OAuth refresh token removed locally. Access can also be revoked in your Microsoft account.");});
+        job("Removing Microsoft OAuth refresh token…",()->{synchronized(this){if(microsoftToken!=null)microsoftToken.close();microsoftToken=null;MacKeychain.delete("microsoft-session");}return true;},ok->{try{state().set("microsoft.email",null);state().save();}catch(Exception e){error(e);}microsoftLabel.setText("Microsoft: signed out");status.setText("Microsoft OAuth refresh token removed locally. Access can also be revoked in your Microsoft account.");});
     }
     private JPanel certificatesPanel(){
         JPanel p=panel();JPanel actions=new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -493,17 +584,19 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         hardware.add(button("Select YubiKey identity",()->openSaved((DesktopState.SavedIdentity)yubikeyIdentities.getSelectedItem())));
         hardware.add(button("Forget YubiKey identity…",this::forgetYubiKeyIdentity));p.add(hardware);
         JButton pendingHelp=button("ⓘ",()->JOptionPane.showMessageDialog(this,
-            "Use this if YubiKey key generation completed, but certificate creation was interrupted\n"
-            +"(for example, you cancelled a PIN dialog).\n\n"
-            +"Choose setup.properties from the saved token-setups folder. PQ Mail checks the\n"
-            +"YubiKey serial and public keys, then creates the pure and hybrid signing and\n"
-            +"encryption certificates and saves the identities. You may be asked for your PIN.\n\n"
-            +"This does not generate, replace, or delete keys. It cannot resume partial key generation.\n"
-            +"You do not need it after a successful identity creation.",
-            "About finishing pending certificates",JOptionPane.INFORMATION_MESSAGE));
-        pendingHelp.setToolTipText("Help: when to finish pending certificates");
-        pendingHelp.getAccessibleContext().setAccessibleName("Help about finishing pending certificates");
-        p.add(left(button("Create identity on empty YubiKey…",this::provisionYubiKey),button("Finish pending certificates…",this::finishTokenCertificates),pendingHelp));
+            "Use this after initial key or certificate creation was interrupted.\n\n"
+            +"Choose setup.properties in the saved token-setups folder. The serial, public keys,\n"
+            +"algorithms and policies are checked. Recorded keys are preserved. Only missing\n"
+            +"keys in empty slots may be generated, after explicit provisioning authorization.\n"
+            +"An occupied slot with no recorded public key requires inspection; it is never overwritten.\n\n"
+            +"Completed certificates are reused, including the v6 fingerprint and v4 compatibility\n"
+            +"certificates. You are offered a certificate-bundle backup afterward.\n"
+            +"Older certificate-only setups and interrupted OpenPGP migrations remain recoverable.\n"
+            +"You do not need this after successful creation.",
+            "About resuming interrupted setup",JOptionPane.INFORMATION_MESSAGE));
+        pendingHelp.setToolTipText("Help: resume interrupted YubiKey setup");
+        pendingHelp.getAccessibleContext().setAccessibleName("Help about resuming interrupted YubiKey setup");
+        p.add(left(button("Create identity on empty YubiKey…",this::provisionYubiKey),button("Resume interrupted setup…",this::finishTokenCertificates),pendingHelp));
         p.add(left(button("Export selected signing certificate…",()->export(true)),button("Export selected encryption certificate…",()->export(false))));
         p.add(left(button("Share certificates…",this::shareCertificates),button("Import certificate bundle from file…",()->{Path file=choose(false,"Import certificate bundle from file (.pqcert)");if(file!=null)importCertificateBundle(file);})));
         p.add(left(button("Back up certificate bundle to YubiKey…",()->onKeyAction(false)),button("Restore certificate bundle from YubiKey…",this::importOnKey)));
@@ -581,8 +674,8 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             recipient=desktopState.certificate("recipient");pinnedSigner=desktopState.certificate("pinned");refreshOutgoingEncryption();
             if(recipient!=null)recipientLabel.setText(recipient.getPublicKey().getAlgorithm()+" · "+recipient.getSubjectX500Principal());
             from.setText(desktopState.get("mail.from",from.getText()));to.setText(desktopState.get("mail.to",to.getText()));
-            if(savedIdentities.getSelectedItem()!=null)openSaved((DesktopState.SavedIdentity)savedIdentities.getSelectedItem());
-            else status.setText("Configure your YubiKey and import an identity to begin.");
+            if(savedIdentities.getSelectedItem() instanceof DesktopState.SavedIdentity saved&&!saved.passwordRequired()&&!desktopState.vaultIdentity(saved.id()))openSaved(saved);
+            else status.setText("Choose a mail provider to connect. Software identities unlock when selected.");
         }catch(Exception e){error(e);}
     }
     private void configureYubiKey(){
@@ -655,7 +748,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         try{
             JTextField email=new JTextField(from.getText()),extraEmails=new JTextField();
             JComboBox<TokenProfile> profile=new JComboBox<>(TokenProfile.values());profile.setSelectedItem(TokenProfile.LEVEL5);
-            JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("Inserted YubiKey serial: "+number+" (all user PIV slots empty)"));form.add(new JLabel("Certificate email address"));form.add(email);form.add(new JLabel("Additional email addresses (up to 4, comma-separated)"));form.add(extraEmails);form.add(new JLabel("Security profile (Level 2/3: four keys; Level 5: eight keys; pure/hybrid identities)"));form.add(profile);
+            JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("Inserted YubiKey serial: "+number+" (all user PIV slots empty)"));form.add(new JLabel("Certificate email address"));form.add(email);form.add(new JLabel("Additional email addresses (up to 4, comma-separated)"));form.add(extraEmails);form.add(new JLabel("Security profile (Level 2: four keys; Level 3: ten keys; Level 5: eight keys; pure/hybrid identities)"));form.add(profile);
             form.add(new JLabel("Requires all 24 user PIV slots empty. Factory attestation is excluded."));
             form.add(new JLabel("No reset, import, deletion or replacement of existing keys is performed."));
             if(JOptionPane.showConfirmDialog(this,form,"Create YubiKey identity",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
@@ -667,11 +760,12 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         JPasswordField pin=new JPasswordField(),management=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default management key",true);
         JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("YubiKey "+serial+" passed the empty-slot check."));
         form.add(new JLabel("Generate "+profile.ml+" in 9c; "+profile.kem+" in 9d."));form.add(new JLabel("Also generate ECDSA and ECDH "+(profile.category==2?"P-256":"P-384")+" in 83 and 82."));
-        form.add(new JLabel("All keys: PIN Always. Touch: 9c / 9d; Level 5 also 84 / 88 / 89. No touch: 82 / 83 / 85."));
-        JCheckBox createPgp=new JCheckBox(profile==TokenProfile.LEVEL5?"Also create OpenPGP v4 hybrid + classical compatibility certificates":"Also create hybrid OpenPGP public identity",profile!=TokenProfile.LEVEL2);createPgp.setEnabled(profile!=TokenProfile.LEVEL2);form.add(createPgp);
-        form.add(new JLabel(profile!=TokenProfile.LEVEL2?"Uncheck to opt out. OpenPGP adds signing operations; Level 5 adds ML-KEM-768/X25519 (84/85) and P-384 signing/ECDH (88/89).":"OpenPGP is not supported for Level 2."));
+        form.add(new JLabel("All keys: PIN Always. Touch: 9c / 9d, plus Level 3: 86 / 88 / 89; Level 5: 84 / 88 / 89."));
+        if(profile==TokenProfile.LEVEL3)form.add(new JLabel("<html>OpenPGP: 84/85 hybrid Ed25519/X25519; 86/87 ML-DSA-65/Ed25519 certification.<br>88/89 classical Ed25519/X25519. No touch on 82/83/84/85/87.</html>"));
+        JCheckBox createPgp=new JCheckBox(profile==TokenProfile.LEVEL5?"Also create OpenPGP v4 hybrid + classical compatibility certificates":"Also create v6 hybrid and both v4 compatibility certificates",profile!=TokenProfile.LEVEL2);createPgp.setEnabled(profile!=TokenProfile.LEVEL2);form.add(createPgp);
+        form.add(new JLabel(profile!=TokenProfile.LEVEL2?"Uncheck to skip OpenPGP certificates; the full key layout is still provisioned. Level 5 adds ML-KEM-768/X25519 (84/85), P-384 (88/89).":"OpenPGP is not supported for Level 2."));
         form.add(new JLabel("YubiKey PIN"));form.add(pin);form.add(factory);form.add(new JLabel("Management key (hex, only if not factory default)"));form.add(management);
-        form.add(new JLabel("Creating keys is not atomic: a failure can leave some slots provisioned. No automatic retry."));
+        form.add(new JLabel("Interrupted setup is journaled. Resume checks saved keys and only generates missing keys in empty slots; no automatic retry."));
         if(JOptionPane.showConfirmDialog(this,form,"Generate keys on empty YubiKey",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){pin.setText("");management.setText("");return;}
         char[] secret=pin.getPassword(),admin=factory.isSelected()?"010203040506070801020304050607080102030405060708".toCharArray():management.getPassword();pin.setText("");management.setText("");
         if(secret.length<6||secret.length>8||!new String(secret).matches("[ -~]+")||!new String(admin).matches("(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{48}|[a-fA-F0-9]{64})")){Arrays.fill(secret,'\0');Arrays.fill(admin,'\0');error(new IOException("Use a 6–8 character ASCII PIN and a valid hexadecimal management key"));return;}
@@ -679,39 +773,67 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         job("Generating keys on YubiKey "+serial+"…",()->{
             Path parent=state().directory().resolve("token-setups");Files.createDirectories(parent);Path folder=parent.resolve(java.util.UUID.randomUUID().toString());
             try{
-                var keys=TokenProvision.create(serial,profile,folder,secret,admin);
-                var manifest=new java.util.Properties();manifest.setProperty("serial",serial);manifest.setProperty("email",email);manifest.setProperty("hybrid","true");manifest.setProperty("preferHybrid","true");manifest.setProperty("profile",profile.code);manifest.setProperty("additionalEmails",String.join(",",extra));manifest.setProperty("createOpenPgp",Boolean.toString(pgpRequested));
+                Files.createDirectory(folder);
+                var manifest=new java.util.Properties();manifest.setProperty("serial",serial);manifest.setProperty("email",email);manifest.setProperty("hybrid","true");manifest.setProperty("preferHybrid","true");manifest.setProperty("profile",profile.code);manifest.setProperty("additionalEmails",String.join(",",extra));manifest.setProperty("createOpenPgp",Boolean.toString(pgpRequested));manifest.setProperty("setupVersion","2");
                 try(var out=Files.newOutputStream(folder.resolve("setup.properties"),StandardOpenOption.CREATE_NEW)){manifest.store(out,"Public setup metadata; keys remain on YubiKey");}
-                return issueTokenIdentities(serial,email,true,keys,true,profile,extra,pgpRequested);
-            }finally{Arrays.fill(secret,'\0');Arrays.fill(admin,'\0');if(identity!=null)state().activateIdentity(identity);}
+                var keys=TokenProvision.create(serial,profile,folder.resolve("keys"),secret,admin);
+                return issueTokenIdentities(serial,email,true,keys,true,profile,extra,pgpRequested,folder);
+            }catch(Exception failure){throw new IOException("Setup interrupted. Use Keys → Resume interrupted setup with "+folder.resolve("setup.properties")+". Do not reset or repeat initial creation. "+failure.getMessage(),failure);}finally{Arrays.fill(secret,'\0');Arrays.fill(admin,'\0');if(identity!=null)state().activateIdentity(identity);}
         },created->{setIdentity(created);refreshSaved();from.setText(email);status.setText("YubiKey identities saved. Keys generated on serial "+serial+"; no private keys stored on this Mac.");offerBundleBackup();});
     }
-    private Identity issueTokenIdentities(String serial,String email,boolean hybrid,java.util.Map<String,java.security.PublicKey> keys,boolean preferHybrid,TokenProfile profile,java.util.List<String> extra,boolean createPgp)throws Exception{
+    private Identity issueTokenIdentities(String serial,String email,boolean hybrid,java.util.Map<String,java.security.PublicKey> keys,boolean preferHybrid,TokenProfile profile,java.util.List<String> extra,boolean createPgp,Path journal)throws Exception{
                 String traditional=keys.containsKey("83")?"83":"9a";state().set("token.serial",serial);state().set("token.rsaSlot",traditional);state().set("token.kemSlot","9d");state().set("token.ecdhSlot","82");state().activate();
                 String signer=DesktopState.resources().resolve("adapters/pkcs11-mu.py").toString();Identity selected=null;
                 for(boolean composite:hybrid?new boolean[]{!preferHybrid,preferHybrid}:new boolean[]{false}){
-                    selected=Identity.forTokenProfile(email,profile,keys.get("9c"),composite?keys.get(traditional):null,keys.get("9d"),composite?keys.get("82"):null,ExternalMu.executable(signer),extra);
+                    Path savedCertificate=journal.resolve(composite?"hybrid.pqcert":"pure.pqcert");
+                    if(Files.exists(savedCertificate)){
+                        var entry=CertificateBundle.decode(Files.readAllBytes(savedCertificate)).getFirst();selected=entry.identity();
+                        OpenPgp.check(entry.serial()==Integer.parseInt(serial)&&CertificateBundle.emails(selected.signingCert()).equals(java.util.stream.Stream.concat(java.util.stream.Stream.of(email),extra.stream()).toList()),"Pending certificate setup metadata changed");
+                        OpenPgp.check(CertificateBundle.emails(selected.encryptionCert()).equals(CertificateBundle.emails(selected.signingCert())),"Pending encryption certificate email addresses differ");
+                        OpenPgp.check((selected.signingCert().getPublicKey() instanceof org.bouncycastle.jcajce.CompositePublicKey)==composite,"Pending pure/hybrid certificate mismatch");
+                        for(var binding:OnKeyBundle.bindings(java.util.List.of(entry)).entrySet())OpenPgp.check(keys.containsKey(binding.getKey())&&Arrays.equals(binding.getValue(),keys.get(binding.getKey()).getEncoded()),"Pending certificate does not match the generated keys");
+                        selected.signingCert().verify(selected.signingCert().getPublicKey(),"BC");selected.encryptionCert().verify(selected.signingCert().getPublicKey(),"BC");
+                    }else{
+                        selected=Identity.forTokenProfile(email,profile,keys.get("9c"),composite?keys.get(traditional):null,keys.get("9d"),composite?keys.get("82"):null,ExternalMu.executable(signer),extra);
+                        OpenPgpMigration.put(savedCertificate,CertificateBundle.encode(java.util.List.of(new CertificateBundle.Entry(selected,Integer.parseInt(serial),"9c",traditional,"9d","82"))));
+                    }
                     String id=state().remember(selected,email+" · "+selected.signatureAlgorithm(),null);state().bindToken(id,serial,traditional,"9d","82");
-                    if(createPgp&&OpenPgp.supported(selected)){state().activateIdentity(selected);if(profile==TokenProfile.LEVEL5)Level5Compatibility.issue(state().directory(),selected,keys,ExternalMu.executable(signer));else OpenPgp.createOwn(state().directory(),selected,ExternalMu.executable(signer));}
+                    if(createPgp&&OpenPgp.supported(selected)){state().activateIdentity(selected);if(profile==TokenProfile.LEVEL5)Level5Compatibility.issue(state().directory(),selected,keys,ExternalMu.executable(signer));else if(profile==TokenProfile.LEVEL3&&keys.containsKey("86"))Level3OpenPgpSetup.issue(state().directory(),journal,selected,keys,ExternalMu.executable(signer),ExternalMu.certification(signer));else OpenPgp.createOwn(state().directory(),selected,ExternalMu.executable(signer));}
                 }return selected;
     }
     private void finishTokenCertificates(){
-        Path manifest=choose(false,"Choose setup.properties from a pending YubiKey setup (certificate creation only)");if(manifest==null)return;
-        job("Checking pending setup keys; no key generation…",()->{
+        try{
+            if(identity!=null&&identity.signingKey()==null&&OpenPgpMigration.recoverable(state(),identity)){
+                int choice=JOptionPane.showOptionDialog(this,"An interrupted OpenPGP certificate migration exists for the selected identity.","Resume interrupted setup",JOptionPane.DEFAULT_OPTION,JOptionPane.QUESTION_MESSAGE,null,new String[]{"Recover existing OpenPGP certificates","Choose initial setup file","Cancel"},"Recover existing OpenPGP certificates");
+                if(choice==0){recoverPgpCertification();return;}if(choice!=1)return;
+            }
+            JFileChooser setupChooser=new JFileChooser(state().directory().resolve("token-setups").toFile());setupChooser.setDialogTitle("Choose setup.properties from an interrupted YubiKey setup");if(setupChooser.showOpenDialog(this)!=JFileChooser.APPROVE_OPTION)return;Path manifest=setupChooser.getSelectedFile().toPath();
             var values=new java.util.Properties();try(var input=Files.newInputStream(manifest)){values.load(input);}
             String serial=values.getProperty("serial",""),email=values.getProperty("email","");boolean hybrid=Boolean.parseBoolean(values.getProperty("hybrid","false"));
-            new jakarta.mail.internet.InternetAddress(email,true).validate();
-            TokenProfile profile=TokenProfile.parse(values.getProperty("profile","level5"));
-            var keys=values.containsKey("profile")?TokenProvision.read(serial,profile,manifest.getParent()):TokenProvision.read(serial,hybrid,manifest.getParent());
-            try{return issueTokenIdentities(serial,email,hybrid,keys,Boolean.parseBoolean(values.getProperty("preferHybrid",Boolean.toString(hybrid))),profile,Identity.additionalEmails(email,values.getProperty("additionalEmails","")),Boolean.parseBoolean(values.getProperty("createOpenPgp","false")));}finally{if(identity!=null)state().activateIdentity(identity);}
-        },created->{setIdentity(created);refreshSaved();status.setText("Pending public certificates completed for the existing YubiKey keys");offerBundleBackup();});
+            new jakarta.mail.internet.InternetAddress(email,true).validate();TokenProfile profile=TokenProfile.parse(values.getProperty("profile","level5"));
+            Path keysFolder=values.getProperty("setupVersion","").equals("2")?manifest.getParent().resolve("keys"):manifest.getParent();
+            boolean missing=values.getProperty("setupVersion","").equals("2")&&!TokenProvision.allKeysSaved(profile,keysFolder);
+            char[][] credentials=missing?provisioningRecoveryCredentials(serial):new char[][]{null,null};if(credentials==null)return;
+            job(missing?"Checking setup journal and resuming empty slots…":"Checking pending setup keys; no key generation…",()->{
+                try{
+                    var keys=missing?TokenProvision.resume(serial,profile,keysFolder,credentials[0],credentials[1]):values.containsKey("profile")?TokenProvision.read(serial,profile,keysFolder):TokenProvision.read(serial,hybrid,keysFolder);
+                    return issueTokenIdentities(serial,email,hybrid,keys,Boolean.parseBoolean(values.getProperty("preferHybrid",Boolean.toString(hybrid))),profile,Identity.additionalEmails(email,values.getProperty("additionalEmails","")),Boolean.parseBoolean(values.getProperty("createOpenPgp","false")),manifest.getParent());
+                }finally{for(char[] secret:credentials)if(secret!=null)Arrays.fill(secret,'\0');if(identity!=null)state().activateIdentity(identity);}
+            },created->{setIdentity(created);refreshSaved();status.setText("YubiKey setup completed; existing keys preserved. Back up the updated certificate bundle.");offerBundleBackup();});
+        }catch(Exception e){error(e);}
+    }
+    private char[][] provisioningRecoveryCredentials(String serial){
+        JPasswordField pin=new JPasswordField(),management=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default management key",true);
+        JPanel p=new JPanel(new GridLayout(0,1));p.add(new JLabel("Resume initial setup on YubiKey "+serial+". Verify existing keys; generate only missing keys in empty slots."));p.add(new JLabel("An occupied slot without a recorded public key stops recovery. Never reset or repeat initial creation."));p.add(new JLabel("YubiKey PIN"));p.add(pin);p.add(factory);p.add(new JLabel("Management key (hex if not factory default)"));p.add(management);
+        try{if(JOptionPane.showConfirmDialog(this,p,"Resume interrupted key provisioning",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return null;return new char[][]{pin.getPassword(),factory.isSelected()?"010203040506070801020304050607080102030405060708".toCharArray():management.getPassword()};}finally{pin.setText("");management.setText("");}
     }
     private void lockVault(){
         if(!isEnabled())return;
+        if(chatPanel!=null)chatPanel.locked();
         if(googleToken!=null){googleToken.close();googleToken=null;}if(microsoftToken!=null){microsoftToken.close();microsoftToken=null;}
         if(inbox!=null)try{inbox.close();}catch(Exception ignored){}inbox=null;inboxEntries=java.util.List.of();inboxModel.setRowCount(0);
         if(identity!=null&&identity.signingKey()!=null){identity=null;identityLabel.setText("Software identity locked");}
-        currentRead=null;reader.setText("");DesktopVault.lock();status.setText("Vault locked; software keys and mail sessions released. Draft retained.");
+        clearReadTrust();DesktopVault.lock();showInbox(java.util.List.of());shell.account("Credential store locked · sign in or reconnect to continue");shell.showWelcome();status.setText("Vault locked; software keys and mail sessions released. Draft retained.");
     }
     private void generate() {
         JTextField email=new JTextField(from.getText()),extraEmails=new JTextField();JComboBox<TokenProfile> mode=new JComboBox<>(TokenProfile.values());mode.setSelectedItem(TokenProfile.LEVEL5);
@@ -783,13 +905,28 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         try{if(OpenPgp.supported(id))pgpRecipients.remember(OpenPgp.loadOwn(state().directory(),id));}catch(Exception ignored){}
         identityLabel.setText(id.signatureAlgorithm()+" · "+id.signingCert().getSubjectX500Principal());status.setText("Identity ready. Import a recipient certificate to encrypt.");}
 
-    private void migratePgpCertification(){try{
+    private OpenPgp.PublicIdentity createSelectedOpenPgp(Identity id,String path)throws Exception{
+        if(id==null)throw new IOException("Select an identity first");
+        if(id.signingKey()!=null||!Identity.HYBRID_65_P384_SIGN.equals(id.signatureAlgorithm())||Files.exists(OpenPgp.ownPath(state().directory(),id)))return OpenPgp.createOwn(state().directory(),id,path==null?null:ExternalMu.executable(path));
+        var entries=state().certificateBundle(id);int serial=entries.getFirst().serial();var keys=new java.util.HashMap<String,java.security.PublicKey>();
+        try(var card=new OnKeyDesktop(serial)){
+            OnKeyBundle.check(card,entries);
+            for(String slot:java.util.List.of("9c","9d","84","85","86","87","88","89")){
+                byte[] der=card.publicKey(slot);OpenPgp.check(der!=null,"The selected YubiKey lacks the complete Level 3 layout. Restore its existing certificate bundle or provision an empty key.");
+                String alg=switch(slot){case "9c","86"->"ML-DSA";case "9d"->"ML-KEM";case "85","89"->"X25519";default->"Ed25519";};
+                keys.put(slot,java.security.KeyFactory.getInstance(alg,"BC").generatePublic(new java.security.spec.X509EncodedKeySpec(der)));
+            }
+        }
+        Path journal=state().directory().resolve("token-openpgp").resolve(serial+"-"+OpenPgp.hex(OpenPgp.hash("SHA-256",id.signingCert().getEncoded())));
+        return Level3OpenPgpSetup.issue(state().directory(),journal,id,keys,ExternalMu.executable(path),ExternalMu.certification(path));
+    }
+    private void recoverPgpCertification(){try{
         Identity id=identity;if(id==null||id.signingKey()!=null||!Identity.HYBRID_65_P384_SIGN.equals(id.signatureAlgorithm()))throw new IOException("Select a Level 3 hybrid YubiKey identity with RFC 9980 Ed25519/X25519 keys in 84/85.");
         var entries=state().certificateBundle(id);int serial=entries.get(0).serial();
-        String message="YubiKey "+serial+"\nGenerate ML-DSA-65 in empty 86 (PIN + touch) and Ed25519 in empty 87 (PIN; no touch).\nAlso generate separate Ed25519 in empty 88 and X25519 in empty 89 (PIN + touch).\nPreserve existing signing 9c/84 and encryption 9d/85 keys.\nCreate a certification-only primary and cross-certified signing subkey.\nThe primary fingerprint changes. Transfer only previously trusted certified email addresses; remove old contact trust.\nBack up and restore-check the new bundle before activating it locally.\nIf interrupted, use this same action to finish recorded certificates/bundle without generating keys again.\nIf generation was partial, stop and inspect the key; occupied slots are never overwritten.";
-        if(JOptionPane.showConfirmDialog(this,message,"Migrate OpenPGP identity — new fingerprint",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+        OpenPgp.check(OpenPgpMigration.recoverable(state(),id),"No interrupted OpenPGP setup exists for this identity");
+        if(JOptionPane.showConfirmDialog(this,"Resume certificate issuance, trust updates and on-key backup for YubiKey "+serial+"? Existing keys are checked; no key generation or replacement is allowed.","Recover interrupted OpenPGP setup",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
         char[] admin=managementKey();if(admin==null)return;
-        String path=tokenAdapter(false);job("Migrating certification keys and backing up bundle…",()->OpenPgpMigration.run(state(),id,entries,ExternalMu.executable(path),ExternalMu.certification(path),OnKeyDesktop::new,admin),result->{pgpRecipient=null;pgpSigner=null;refreshContacts();refreshSaved();pgpStatus.setText(result);status.setText("OpenPGP migration and on-key backup completed.");});
+        String path=tokenAdapter(false);job("Recovering certificates and backing up bundle…",()->OpenPgpMigration.recover(state(),id,entries,ExternalMu.executable(path),ExternalMu.certification(path),OnKeyDesktop::new,admin),result->{pgpRecipient=null;pgpSigner=null;refreshContacts();refreshSaved();pgpStatus.setText(result);status.setText("OpenPGP certificate recovery and on-key backup completed.");});
     }catch(Exception e){error(e);}}
     private char[] managementKey(){
         JPasswordField field=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default AES-192 management key");
@@ -885,12 +1022,13 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         Account a=send?account(true):null;if(send&&a==null)return;
         Identity id=identity; X509Certificate r=encrypt.isSelected()?recipient:null; ExternalMu.Backend backend=adapter==null?null:ExternalMu.executable(adapter);
         var files=java.util.Collections.list(attachmentModel.elements());
-        String f=from.getText().trim(),t=to.getText().trim(),s=subject.getText(),b=body.getText();
+        String f=from.getText().trim(),t=to.getText().trim(),s=subject.getText(),b=composeBody.text();
+        final String html;try{html=composeBody.html();}catch(Exception invalid){if(a!=null)Arrays.fill(a.password,'\0');error(invalid);return;}
         try{state().set("mail.from",f);state().set("mail.to",t);state().save();}catch(Exception e){error(e);return;}
         if(send&&JOptionPane.showConfirmDialog(this,"Send this "+((pgp?pgpEncrypt:r!=null)?"signed and encrypted":"signed, unencrypted")+" message with "+files.size()+" attachment(s) to "+t+"?","Send message",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){Arrays.fill(a.password,'\0');return;}
         job(send?"Signing and sending…":"Signing and saving…",()->{
             try {
-                MimeMessage m=pgp?MailEngine.parse(OpenPgp.composeForRecipient(id,OpenPgp.loadOwn(state().directory(),id),pgpTo,pgpEncrypt,f,t,s,b,backend)):MailEngine.compose(id,f,t,s,b,r,backend,files);
+                MimeMessage m=pgp?MailEngine.parse(OpenPgp.composeForRecipient(id,OpenPgp.loadOwn(state().directory(),id),pgpTo,pgpEncrypt,f,t,s,b,html,backend)):MailEngine.composeFormatted(id,f,t,s,b,html,r,backend,files);
                 if(send){if(a.host.equals("graph.microsoft.com")){try(var api=new MicrosoftGraph(this::microsoftCredential)){api.verifyAccount(a.user);api.send(m);}}else if(a.oauth){try(var api=new GmailApi(this::googleCredential)){api.verifyAccount(a.user);api.send(m);}}else MailEngine.send(m,a.host,a.port,a.user,new String(a.password),false);}
                 else Files.write(file,MailEngine.encode(m),StandardOpenOption.CREATE_NEW);
                 return send?"Message sent":"Saved "+file.getFileName();
@@ -913,30 +1051,30 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             // Decryption is performed once; selecting among saved signer certificates must not repeat a PIN operation.
             if(encrypted&&candidates.size()>1)throw new IOException("Multiple OpenPGP signer certificates match From. Select the sender under Certificates before decrypting.");
             Exception failure=null;
-            for(var signer:candidates)try{var opened=OpenPgp.open(encoded,signer,own,id,kemAdapter==null?null:ExternalKem.executable(kemAdapter));opened=new OpenPgp.Opened(opened.text(),opened.email(),opened.fingerprint(),opened.encrypted(),signer.matchesEmail(mailbox),opened.profile(),opened.postQuantum());return new ReadResult(opened.display(),null,message.getSubject(),opened,signer.matchesEmail(mailbox)?mailbox:null,signer);}catch(Exception e){failure=e;}
+            for(var signer:candidates)try{var opened=OpenPgp.open(encoded,signer,own,id,kemAdapter==null?null:ExternalKem.executable(kemAdapter));opened=new OpenPgp.Opened(opened.text(),opened.email(),opened.fingerprint(),opened.encrypted(),signer.matchesEmail(mailbox),opened.profile(),opened.postQuantum(),opened.html());return new ReadResult(opened.display(),null,message.getSubject(),opened,signer.matchesEmail(mailbox)?mailbox:null,signer);}catch(Exception e){failure=e;}
             throw failure==null?new IOException("No matching OpenPGP signer certificate"):failure;
         }
         message=MailEngine.normalizeSmime(message);
-        if(MailPreview.isOrdinary(message))return new ReadResult(MailPreview.display(message),null,message.getSubject());
+        if(MailPreview.isOrdinary(message)){var content=VerifiedMime.body(message);return new ReadResult(content.text(),null,message.getSubject(),null,null,null,content.html(),MailPreview.security(message));}
         var opened=MailEngine.open(message,id,pin,kemAdapter==null?null:ExternalKem.executable(kemAdapter));
         return new ReadResult(null,opened,message.getSubject());
     }
-    private String formatRead(ReadResult result)throws Exception{
+    private String securityRead(ReadResult result)throws Exception{
         if(result.pgp()!=null){boolean trusted=false;try{trusted=result.pgpMailbox()!=null&&state().isPgpTrusted(result.pgpMailbox(),result.pgp().fingerprint());}catch(Exception ignored){}
-            return result.pgp().display().replace("Signature valid; trust not established",trusted?"Signature valid; TRUSTED email / primary-key fingerprint: "+result.pgpMailbox():"Signature valid; NOT TRUSTED for this sender email / primary-key fingerprint");}
-        if(result.verified()==null)return result.plain();var o=result.verified();
-        if(o.signerCertificate()==null)return "DECRYPTED · UNSIGNED MESSAGE\nSender and content are not signature-verified. Do not infer signer trust from encryption.\n\nOuter subject (unprotected): "+result.subject()+"\n\n"+o.text()+"\n\nAttachments: "+o.attachments();
+            return result.pgp().securityDisplay().replace("Signature valid; trust not established",trusted?"Signature valid; TRUSTED email / primary-key fingerprint: "+result.pgpMailbox():"Signature valid; NOT TRUSTED for this sender email / primary-key fingerprint");}
+        if(result.verified()==null)return result.ordinarySecurity();var o=result.verified();
+        if(o.signerCertificate()==null)return "DECRYPTED · UNSIGNED MESSAGE\nSender and content are not signature-verified. Do not infer signer trust from encryption.\n\nOuter subject (unprotected): "+MailPreview.header(result.subject())+"\nAttachments: "+o.attachments().size();
         boolean trusted=state().isTrusted(o.signerCertificate(),"signing");
         return (CryptoWarnings.pq(o.signerCertificate().getPublicKey(),true)?"":CryptoWarnings.SIGNATURE)+"SIGNATURE VALID · "+o.signatureAlgorithm()+"\n"+(o.encrypted()?"Decryption succeeded; signed content verified":"Not encrypted")+"\n"+
             (trusted?"SIGNER TRUSTED: SHA-256 certificate fingerprint matches your saved trust":"SIGNER NOT TRUSTED: fingerprint has not been marked trusted")+"\n"+
             (o.fromMatches()?"Outer From matches certificate email (header itself is unsigned)":"WARNING: outer From does not match signing certificate")+
-            "\nSHA-256: "+o.fingerprint()+"\n\nOuter subject (unprotected): "+result.subject()+"\n\n──────── Signed body ────────\n\n"+o.text()+"\n\nAttachments: "+o.attachments();
+            "\nSHA-256: "+o.fingerprint()+"\n\nOuter subject (unprotected): "+MailPreview.header(result.subject())+"\nAttachments: "+o.attachments().size();
     }
-    private void clearReadTrust(){currentRead=null;saveIncomingPgp.setEnabled(false);trustIncoming.setEnabled(false);saveAttachment.setEnabled(false);}
+    private void clearReadTrust(){currentRead=null;messageView.clear();saveIncomingPgp.setEnabled(false);trustIncoming.setEnabled(false);saveAttachment.setEnabled(false);}
     private void showMessage(ReadResult result){
-        try{showMessage(formatRead(result));currentRead=result;saveIncomingPgp.setEnabled(result.pgpCertificate()!=null);trustIncoming.setEnabled(result.pgpCertificate()!=null||(result.verified()!=null&&result.verified().signerCertificate()!=null));saveAttachment.setEnabled(result.verified()!=null&&!result.verified().attachments().isEmpty());}catch(Exception e){clearReadTrust();error(e);}
+        try{clearReadTrust();messageView.showMessage(securityRead(result),result.pgp()!=null?result.pgp().text():result.verified()!=null?result.verified().text():result.plain(),result.pgp()!=null?result.pgp().html():result.verified()!=null?result.verified().html():result.html());tabs.setSelectedIndex(1);status.setText("Message opened. Review the security status above.");currentRead=result;saveIncomingPgp.setEnabled(result.pgpCertificate()!=null);trustIncoming.setEnabled(result.pgpCertificate()!=null||(result.verified()!=null&&result.verified().signerCertificate()!=null));saveAttachment.setEnabled(result.verified()!=null&&!result.verified().attachments().isEmpty());}catch(Exception e){clearReadTrust();error(e);}
     }
-    private void showMessage(String text){clearReadTrust();reader.setText(text);reader.setCaretPosition(0);tabs.setSelectedIndex(1);status.setText("Message opened. Review the security status above.");}
+    private void showMessage(String text){clearReadTrust();messageView.showMessage("Local information — no message verification result",text,null);tabs.setSelectedIndex(1);status.setText("Message opened. Review the security status above.");}
     private void saveReadAttachment(){
         if(currentRead==null||currentRead.verified()==null)return;
         var files=currentRead.verified().attachments();if(files.isEmpty())return;
@@ -945,7 +1083,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         if(chooser.showSaveDialog(this)!=JFileChooser.APPROVE_OPTION)return;
         try{Files.write(chooser.getSelectedFile().toPath(),file.data(),StandardOpenOption.CREATE_NEW);status.setText("Attachment saved; existing files are never overwritten.");}catch(Exception e){error(e);}
     }
-    private void refreshReadTrust(){if(currentRead!=null)try{reader.setText(formatRead(currentRead));reader.setCaretPosition(0);}catch(Exception e){error(e);}}
+    private void refreshReadTrust(){if(currentRead!=null)try{messageView.updateSecurity(securityRead(currentRead));}catch(Exception e){error(e);}}
     private boolean confirmTrust(X509Certificate certificate,String role,String warning)throws Exception{
         JTextArea detail=new JTextArea("Trust this exact "+role+" certificate fingerprint?\n\nSubject: "+certificate.getSubjectX500Principal()+"\nEmail SANs: "+certificate.getSubjectAlternativeNames()+"\nAlgorithm: "+certificate.getPublicKey().getAlgorithm()+"\n\nSHA-256:\n"+Identity.fingerprint(certificate)+"\n\n"+warning+"\nCompare the fingerprint with the owner through a trusted channel before accepting. Trust is not a CA-chain validation.",12,65);detail.setEditable(false);detail.setLineWrap(true);detail.setWrapStyleWord(true);
         return JOptionPane.showConfirmDialog(this,new JScrollPane(detail),"Mark certificate trusted",JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE)==JOptionPane.OK_OPTION;
@@ -998,7 +1136,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             JTextField smtpHost=new JTextField(settings.get("smtp.host","")),smtpPort=new JTextField(settings.get("smtp.port","587")),smtpUser=new JTextField(settings.get("smtp.user",from.getText()));
             form.add(new JLabel("IMAP — TLS connection (normally port 993)"));form.add(row("Host",imapHost));form.add(row("Port",imapPort));form.add(row("Username",imapUser));
             form.add(new JLabel("SMTP — required STARTTLS (normally port 587)"));form.add(row("Host",smtpHost));form.add(row("Port",smtpPort));form.add(row("Username",smtpUser));
-            form.add(new JLabel("Passwords/app passwords are requested when connecting or sending; they are not saved."));
+            form.add(new JLabel("Passwords/app passwords are protected by the passkey vault; unlock is requested when needed."));
             form.add(new JLabel("Save does not connect or send. Gmail API continues to use Google sign-in."));
             while(JOptionPane.showOptionDialog(this,form,"Manual mail servers",JOptionPane.DEFAULT_OPTION,JOptionPane.PLAIN_MESSAGE,null,new Object[]{"Save settings","Cancel"},"Save settings")==0){
                 try{int ip=Integer.parseInt(imapPort.getText().trim()),sp=Integer.parseInt(smtpPort.getText().trim());if(ip<1||ip>65535||sp<1||sp>65535)throw new IllegalArgumentException("Ports must be between 1 and 65535");
@@ -1017,12 +1155,13 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         DesktopState settings;try{settings=state();}catch(Exception e){error(e);return null;}
         JTextField host=new JTextField(settings.get(prefix+"host","")),port=new JTextField(settings.get(prefix+"port",smtp?"587":"993")),user=new JTextField(settings.get(prefix+"user",from.getText()));JPasswordField pass=new JPasswordField(settings.get(prefix+"password",""));
         JPanel p=new JPanel(new GridLayout(0,1,0,6));p.add(new JLabel(smtp?"SMTP with required STARTTLS":"IMAP over TLS"));p.add(row("Host",host));p.add(row("Port",port));p.add(row("User",user));p.add(row("Password",pass));
-        if(JOptionPane.showConfirmDialog(this,p,smtp?"SMTP account":"IMAP account",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return null;
+        if(JOptionPane.showConfirmDialog(this,p,smtp?"SMTP account":"IMAP account",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){pass.setText("");return null;}
         try {int n=Integer.parseInt(port.getText());if(n<1||n>65535||host.getText().isBlank())throw new IllegalArgumentException("Invalid host or port");settings.set(prefix+"host",host.getText().trim());settings.set(prefix+"port",Integer.toString(n));settings.set(prefix+"user",user.getText().trim());settings.save();char[] credential=pass.getPassword();settings.set(prefix+"password",new String(credential));pass.setText("");return new Account(host.getText().trim(),n,user.getText().trim(),credential,false);}catch(Exception e){error(e);return null;}
     }
-    private <T> void job(String label,Callable<T> task,java.util.function.Consumer<T> success){
-        status.setText(label);setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));setEnabled(false);
-        new SwingWorker<T,Void>(){protected T doInBackground()throws Exception{return task.call();}protected void done(){setEnabled(true);setCursor(Cursor.getDefaultCursor());try{T result=get();status.setText("Ready");success.accept(result);}catch(Exception e){error(e.getCause()==null?e:e.getCause());}}}.execute();
+    private <T> void job(String label,Callable<T> task,java.util.function.Consumer<T> success){job(label,task,success,this::error);}
+    private <T> void job(String label,Callable<T> task,java.util.function.Consumer<T> success,java.util.function.Consumer<Throwable> failure){
+        status.setText(label);if(shell!=null)shell.busy(label);setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));setEnabled(false);
+        new SwingWorker<T,Void>(){protected T doInBackground()throws Exception{return task.call();}protected void done(){setEnabled(true);setCursor(Cursor.getDefaultCursor());if(shell!=null)shell.idle();try{T result=get();status.setText("Ready");success.accept(result);}catch(Exception e){failure.accept(e.getCause()==null?e:e.getCause());}}}.execute();
     }
     private void error(Throwable e){String message=e.getMessage();status.setText("Operation failed");JOptionPane.showMessageDialog(this,message==null?e.getClass().getSimpleName():message,"PQ Mail",JOptionPane.ERROR_MESSAGE);}
     private Path chooseSave(String title,String filename,String... extensions){

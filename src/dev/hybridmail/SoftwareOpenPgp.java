@@ -33,7 +33,7 @@ public final class SoftwareOpenPgp {
    case "v4-ec" -> new JcaPGPKeyPair(version,algorithm,new PGPKdfParameters(10,9),k.get(role),date);
    default -> new JcaPGPKeyPair(version,algorithm,k.get(role),date);};
  }
- private static PGPSignatureSubpacketVector prefs(int flags){var s=new PGPSignatureSubpacketGenerator();s.setKeyFlags(false,flags);s.setPreferredSymmetricAlgorithms(false,new int[]{9});s.setPreferredHashAlgorithms(false,new int[]{10,9,8});s.setPreferredCompressionAlgorithms(false,new int[]{0});s.setFeature(false,(byte)9);return s.generate();}
+ private static PGPSignatureSubpacketVector prefs(int flags){var s=new PGPSignatureSubpacketGenerator();s.setKeyFlags(false,flags);s.setPreferredSymmetricAlgorithms(false,new int[]{9});s.setPreferredHashAlgorithms(false,new int[]{10,9,8});s.setPreferredCompressionAlgorithms(false,new int[]{2,1,0});s.setFeature(false,(byte)9);return s.generate();}
  public static SoftwareOpenPgp generate(List<String> emails)throws Exception{
   var keys=new LinkedHashMap<String,KeyPair>();String[] alg={"ML-DSA-87","Ed448","ML-DSA-87","Ed448","ML-KEM-1024","X448","P521","ML-KEM-768","X25519","P521"};for(int i=0;i<NAMES.size();i++)keys.put(NAMES.get(i),generate(alg[i]));Date date=new Date(now()*1000);
   var primary=pair(keys,"cert",6,31,date);var signer=new BcPGPContentSignerBuilder(31,10);var digest=new BcPGPDigestCalculatorProvider().get(2);
@@ -67,10 +67,23 @@ public final class SoftwareOpenPgp {
   byte[] ext=((X509Certificate)ks.getCertificate("pgp5-cert-ed")).getExtensionValue(METADATA.getId());check(ext!=null&&ext.length<256*1024,"Missing/oversized OpenPGP certificates");var outer=ASN1OctetString.getInstance(ext).getOctets();var seq=ASN1Sequence.getInstance(ASN1OctetString.getInstance(outer).getOctets());check(seq.size()==2,"Invalid OpenPGP metadata");var result=new SoftwareOpenPgp(keys,ASN1OctetString.getInstance(seq.getObjectAt(0)).getOctets(),ASN1OctetString.getInstance(seq.getObjectAt(1)).getOctets());result.own();for(byte[] encoded:List.of(result.modern,result.compat)){var it=ring(encoded).getPublicKeys();while(it.hasNext())result.privateKey(it.next());}return result;
  }
  void match(PublicIdentity own)throws Exception{check(Arrays.equals(modern,own.encoded),"OpenPGP certificate does not match software identity");}
+ /** Binary signed packets for transport-independent bundles. Keep private keys
+  * inside this identity; never export a secret OpenPGP key to sign a file. */
+ byte[] signPackets(PublicIdentity own,byte[] plain)throws Exception{
+  match(own);check(plain.length<=LIMIT,"Message too large");
+  var pub=own.v6.signers.values().stream().filter(k->k.getAlgorithm()==31).findFirst().orElseThrow(()->new IOException("No hybrid signing subkey"));
+  var gen=new PGPSignatureGenerator(new BcPGPContentSignerBuilder(pub.getAlgorithm(),10),pub);gen.init(PGPSignature.BINARY_DOCUMENT,privateKey(pub));
+  var out=new ByteArrayOutputStream();gen.generateOnePassVersion(false).encode(out);
+  var literal=new PGPLiteralDataGenerator();try(var stream=literal.open(out,PGPLiteralData.BINARY,"",plain.length,new Date(0))){stream.write(plain);}
+  gen.update(plain);gen.generate().encode(out);return out.toByteArray();
+ }
  byte[] compose(PublicIdentity own,PublicIdentity recipient,boolean encrypted,String from,String to,String subject,String text)throws Exception{
+        return compose(own,recipient,encrypted,from,to,subject,text,null);
+    }
+    byte[] compose(PublicIdentity own,PublicIdentity recipient,boolean encrypted,String from,String to,String subject,String text,String html)throws Exception{
   match(own);check(own.matchesEmail(from),"Sender address mismatch");validateEmail(to);check(recipient==null||recipient.matchesEmail(to),"Recipient address mismatch");check(!encrypted||recipient!=null,"Select recipient");check(text.length()<LIMIT/4,"Message too large");boolean v4=recipient!=null&&recipient.version()==4;
   var certificate=v4?own.compatibility:own;var pub=v4?ring(compat).getPublicKey():own.v6.signers.values().iterator().next();
-  byte[] plain=cat(bytes("Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"),bytes(Base64.getMimeEncoder(64,b(13,10)).encodeToString(bytes(text))));
+  byte[] plain=MailEngine.messageBody(text,html);
   plain=withPublicCertificate(plain,own.compatibility,own);
   var gen=new PGPSignatureGenerator(new BcPGPContentSignerBuilder(pub.getAlgorithm(),10),pub);gen.init(0,privateKey(pub));
   var packets=new ByteArrayOutputStream();if(encrypted){gen.generateOnePassVersion(false).encode(packets);var literal=new PGPLiteralDataGenerator();try(var stream=literal.open(packets,PGPLiteralData.BINARY,"",plain.length,new Date(0))){stream.write(plain);}}

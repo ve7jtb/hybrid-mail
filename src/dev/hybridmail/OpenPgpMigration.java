@@ -5,8 +5,12 @@ final class OpenPgpMigration {
  interface Card extends OnKeyBundle.Card {void checkCertificationEmpty()throws Exception;void generateCertification()throws Exception;}
  interface Cards {Card open(int serial)throws Exception;}
  static void put(Path path,byte[] data)throws Exception{Files.createDirectories(path.getParent());Path temp=Files.createTempFile(path.getParent(),"migration-",".tmp");try{Files.write(temp,data);Files.move(temp,path,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}finally{Files.deleteIfExists(temp);}}
- static String run(DesktopState state,Identity id,List<CertificateBundle.Entry> entries,ExternalMu.Backend signing,ExternalMu.Backend certification,Cards cards,char[] admin)throws Exception {
-  int serial=entries.get(0).serial();Path journal=state.directory().resolve("pgp-migration-"+serial+"-"+OpenPgp.hex(OpenPgp.hash("SHA-256",id.signingCert().getEncoded())));
+ static Path journal(DesktopState state,Identity id,int serial)throws Exception{return state.directory().resolve("pgp-migration-"+serial+"-"+OpenPgp.hex(OpenPgp.hash("SHA-256",id.signingCert().getEncoded())));}
+ static boolean recoverable(DesktopState state,Identity id)throws Exception{if(id==null||id.signingKey()!=null||state.get("identity."+state.identityId(id)+".token.serial","").isBlank())return false;var entries=state.certificateBundle(id);if(entries.isEmpty())return false;Path p=journal(state,id,entries.getFirst().serial());return Files.exists(p.resolve("previous.asc"))&&!Files.exists(p.resolve("complete"));}
+ static String run(DesktopState state,Identity id,List<CertificateBundle.Entry> entries,ExternalMu.Backend signing,ExternalMu.Backend certification,Cards cards,char[] admin)throws Exception {return runInternal(state,id,entries,signing,certification,cards,admin,true);}
+ static String recover(DesktopState state,Identity id,List<CertificateBundle.Entry> entries,ExternalMu.Backend signing,ExternalMu.Backend certification,Cards cards,char[] admin)throws Exception {try{OpenPgp.check(recoverable(state,id),"No interrupted OpenPGP setup found");return runInternal(state,id,entries,signing,certification,cards,admin,false);}finally{Arrays.fill(admin,'\0');}}
+ static String runInternal(DesktopState state,Identity id,List<CertificateBundle.Entry> entries,ExternalMu.Backend signing,ExternalMu.Backend certification,Cards cards,char[] admin,boolean allowGeneration)throws Exception {
+  int serial=entries.get(0).serial();Path journal=journal(state,id,serial);
   try{
    Files.createDirectories(journal);Path oldFile=journal.resolve("previous.asc"),newFile=journal.resolve("replacement.asc");
    OpenPgp.PublicIdentity previous;
@@ -20,6 +24,7 @@ final class OpenPgpMigration {
    try(var card=cards.open(serial)){
     OnKeyBundle.check(card,entries);OnKeyBundle.checkPgp(card,List.of(new OnKeyBundle.Profile(entries.stream().filter(e->Arrays.equals(e.identity().signingCert().getPublicKey().getEncoded(),id.signingCert().getPublicKey().getEncoded())).findFirst().orElseThrow(),previous.encoded)));
     if(!Files.exists(mlFile)||!Files.exists(edFile)||!Files.exists(journal.resolve("88.der"))||!Files.exists(journal.resolve("89.der"))){
+     OpenPgp.check(allowGeneration,"Recorded certification public keys are incomplete; inspect the interrupted setup. Recovery cannot generate or replace keys.");
      OpenPgp.check(!Files.exists(started),"Earlier generation did not finish recording all four public keys. Do not retry generation: inspect slots 86–89 and recover the public-key journal first. Existing keys are preserved.");
      card.checkCertificationEmpty();card.authenticate(admin.clone());put(started,new byte[]{1});card.generateCertification();
      put(mlFile,Objects.requireNonNull(card.publicKey("86")));put(edFile,Objects.requireNonNull(card.publicKey("87")));for(String slot:List.of("88","89"))put(journal.resolve(slot+".der"),Objects.requireNonNull(card.publicKey(slot)));

@@ -17,8 +17,8 @@ public class Level5CompatibilityTest {
   var full=Level5Compatibility.issue(root,id,keys,backend);var own=OpenPgp.loadOwn(root,id);var classic=Level5Compatibility.classical(full);
   OpenPgp.check(full.quantumEncryption()&&!classic.quantumEncryption()&&classic.canEncrypt()&&full.primary[5]==19&&classic.primary[5]==19,"Wrong recipient policy");
   for(var target:List.of(full,classic))for(boolean encrypt:new boolean[]{false,true}){
-   byte[] message=OpenPgp.composeForRecipient(id,own,target,encrypt,own.email,own.email,"Compatibility test","Synthetic Level 5 compatibility test",backend);
-   var opened=OpenPgp.open(message,full,own,id,backend);OpenPgp.check(opened.encrypted()==encrypt&&!opened.postQuantum()&&opened.text().contains("Synthetic Level 5 compatibility test"),"Round trip failed");
+   byte[] message=OpenPgp.composeForRecipient(id,own,target,encrypt,own.email,own.email,"Compatibility test","Synthetic Level 5 compatibility test","<b>Synthetic Level 5 compatibility test</b>",backend);
+   var opened=OpenPgp.open(message,full,own,id,backend);OpenPgp.check(opened.encrypted()==encrypt&&!opened.postQuantum()&&opened.text().contains("Synthetic Level 5 compatibility test")&&opened.html().equals("<b>Synthetic Level 5 compatibility test</b>"),"Round trip failed");
   }
   OpenPgp.check(backend.ml==1&&backend.x==1&&backend.ec==1,"Wrong component routing");
   var profiles=List.of(new OnKeyBundle.Profile(new CertificateBundle.Entry(ids.get(0),123456,"9c","83","9d","82"),new byte[0]),new OnKeyBundle.Profile(new CertificateBundle.Entry(id,123456,"9c","83","9d","82"),own.encoded,full.encoded));

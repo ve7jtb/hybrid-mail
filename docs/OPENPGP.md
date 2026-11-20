@@ -40,7 +40,7 @@ After creating an OpenPGP identity, choose **Back up certificate bundle to YubiK
 
 On another installation use **Restore certificate bundle from YubiKey…** (Android adds **— no PIN**). File-based `.pqcert` import is separately named **Import certificate bundle from file…**. That older file-sharing format carries X.509 certificates and mappings; use the on-key bundle or transfer `.asc` separately for OpenPGP.
 
-When the primary email stays the same, desktop SAN updates preserve the existing OpenPGP public identity and its fingerprints. Changing the primary email creates new OpenPGP certifications if enabled. Additional S/MIME SAN addresses are not automatically added as OpenPGP user IDs; this preview uses one email user ID.
+When the primary email stays the same, desktop SAN updates preserve the existing OpenPGP public identity and its fingerprints. Changing the primary email creates new OpenPGP certifications if enabled. Complete initial Level 3 desktop setup includes all supplied email addresses as certified user IDs in its v6 and v4 views. Updating SANs on an existing identity does not automatically rewrite its OpenPGP certificates.
 
 An iOS build cannot currently restore a Level 5 bundle containing classical P-384 OpenPGP. Level 3 hybrid bundles remain supported. See [on-key storage and recovery](ON-KEY-CERTIFICATES.md).
 
@@ -60,7 +60,7 @@ does not automatically transfer to OpenPGP identities.
 
 ## Current limits and validation
 
-Only plain-text mail, one recipient, one email user ID and the profiles above are supported. Attachments remain available through S/MIME. There is
+Desktop composition supports plain text or signed plain-text/HTML alternatives, with one recipient and the profiles above. The safe desktop viewer blocks images and active content. Attachments remain available through S/MIME. There is
 no OpenPGP secret-key import/export, compression, general legacy-key support or
 general-purpose OpenPGP keyring/trust-management implementation.
 
@@ -104,7 +104,7 @@ with wrong/missing extra-slot rejection. Desktop hardware certificate signing, e
 
 ## V4 recipients and incoming signatures
 
-Desktop Compose uses v6 hybrid signing unless the preferred recipient certificate is v4. That explicit compatibility mode uses the RFC 9980 identity’s Ed25519 key in slot 84, prompts about classical signing, and includes both public certificates. Other identities must first provision the required Ed25519/X25519 keys; no empty primary or substitute key is created. Selecting OpenPGP uses the To mailbox to find recipient certificates on keys.openpgp.org. The lookup is visible in Compose, is read-only, and does not mark a key trusted. Encryption stays unavailable without a matching current encryption key; the recipient-key selector shows only that mailbox’s usable keys and their actual classical algorithm or hybrid KEM. Changing To invalidates in-flight results and disables encryption until a new key is available and the user enables it. Imported keys can be used offline.
+Desktop Compose uses v6 hybrid signing unless the preferred recipient certificate is v4. That explicit compatibility mode uses the separated Level 3 identity’s dedicated Ed25519 key in slot 88, prompts about classical signing, and includes both public certificates. Other identities must first provision the required Ed25519/X25519 keys; no empty primary or substitute key is created. Selecting OpenPGP uses the To mailbox to find recipient certificates on keys.openpgp.org. The lookup is visible in Compose, is read-only, and does not mark a key trusted. Encryption stays unavailable without a matching current encryption key; the recipient-key selector shows only that mailbox’s usable keys and their actual classical algorithm or hybrid KEM. Changing To invalidates in-flight results and disables encryption until a new key is available and the user enables it. Imported keys can be used offline.
 
 Imported v4 certificates remain public recipient/verification credentials. Desktop compatibility signing creates a separate v4 public certificate from the existing RFC 9980 Ed25519 and ML-KEM-768 + X25519 keys. Supported verification algorithms are legacy Ed25519, ECDSA and RSA 2048+ with SHA-2. Multiple self-certified email UIDs and subkeys are supported; revoked, expired, unbound, future-dated and unsupported critical signatures are rejected. Signing subkeys require a valid back-signature. Designated revocation keys are currently unsupported and such certificates are rejected. SHA-1 document/certification signatures, cleartext-signed messages and DSA/ElGamal are unsupported. Key validity is checked at use; historical signatures under an expired key are conservatively rejected.
 
@@ -140,24 +140,25 @@ The desktop parser accepts RFC 9980 v6 ML-DSA-65 + Ed25519 certificates with mul
 
 Local tests against Sequoia sq 1.5.0 / sequoia-openpgp 2.4.1 verified detached signatures and signed/encrypted payloads in both directions using disposable software keys. Sequoia default encrypted-message padding is accepted. RFC 9980 PQ certificates use the implicit AES-256/OCB preference when no explicit AEAD preferences are present. This tests OpenPGP cryptography and MIME payload handling, not delivery through another mail service or a new hardware run. Public regression fixtures are in `tests/fixtures/sequoia`; no private test keys are included.
 
-### Separate certification-key migration (desktop)
+### Complete Level 3 setup and recovery (desktop)
 
-Choose **OpenPGP → Create / migrate v6 identity (86–89)…** for an existing Level 3 RFC 9980 YubiKey identity. The selected token serial and all existing public-key bindings are checked. Slots 86–89 must contain neither keys nor certificates before generation; unknown slot status fails closed. Existing 9c/84 hybrid signing, 9d/85 hybrid encryption, and S/MIME keys/certificates are preserved.
+Choose **Keys → Create identity on empty YubiKey… → Level 3**. The app checks every user PIV slot and creates all ten keys in one operation. It then issues pure/hybrid S/MIME certificates and, by default, the separated v6 OpenPGP certificate plus v4 hybrid-capable and classical-only views. Uncheck the OpenPGP certificate option to defer issuance; the complete key layout is still generated. The regular OpenPGP creation action can issue the certificates later without generating keys.
 
 | Purpose | Slots | Algorithms |
 |---|---|---|
 | Certification-only v6 primary | 86 / 87 | ML-DSA-65 + Ed25519 |
-| Hybrid signing subkey | 9c / 84 | Existing ML-DSA-65 + Ed25519 |
-| Hybrid encryption subkey | 9d / 85 | Existing ML-KEM-768 + X25519 |
-| Classical compatibility signing | 88 | New Ed25519 |
-| Classical compatibility encryption | 89 | New X25519 |
+| Hybrid signing subkey | 9c / 84 | ML-DSA-65 + Ed25519 |
+| Hybrid encryption subkey | 9d / 85 | ML-KEM-768 + X25519 |
+| Classical compatibility signing | 88 | Ed25519 |
+| Classical compatibility encryption | 89 | X25519 |
+| Additional S/MIME hybrid components | 83 / 82 | ECDSA P-384 / ECDH P-384 |
 
-New keys require the PIN for use. Slots 86, 88 and 89 additionally require touch for newly generated keys; 87 does not. Existing keys retain their policies. The signing subkeys are cross-certified. The new v6 primary binds both hybrid and classical subkeys. Outgoing v6 signatures remain hybrid; v4 compatibility signatures use only slot 88. V4 classical encryption uses slot 89, never the hybrid X25519 component in 85.
+All keys require PIN verification. Slots 9c, 9d, 86, 88 and 89 require touch; 82, 83, 84, 85 and 87 do not. The signing subkeys are cross-certified. The certification primary binds hybrid and classical subkeys. Outgoing v6 signatures remain hybrid; v4 compatibility signatures use only slot 88. V4 classical encryption uses slot 89, never the hybrid X25519 component in 85. New certificates include the primary email and additional email addresses.
 
-The migration changes fingerprints. It transfers only already-trusted certified email addresses to the corresponding new v6/v4 fingerprints; it removes the old contact trust and grants no additional trust. Local journal files contain public certificates, public keys and trust choices only. Public rollback files may remain locally, but old identities are not kept active for message reading.
+After creation, choose **Back up now** to save the signed compressed certificate bundle, or **Not now** to defer. It contains the pure/hybrid S/MIME certificates, v6 and full v4 OpenPGP certificates, serial and slot mappings. The classical-only v4 view is derived without private-key access. No PINs, management keys, private keys or trust decisions are written to the bundle. Restoring does not grant trust.
 
-The signed on-key bundle is committed and read-back restored before local identity/trust changes. The new PQMAILB2 payload stores the v6 and full v4 public certificate; the classical-only v4 view is derived without private-key access. Older B1 bundles remain readable. Older applications that understand only B1 need updating before restoring B2. No PINs, management keys, private keys or trust decisions are written to the token bundle.
+**Resume interrupted setup…** replaces the old pending-certificates action. Select `setup.properties` from the saved `token-setups` directory; the failure dialog shows its path. The manifest is written before key generation, and each generated public key is saved. Recovery verifies device serial, key material, algorithms and PIN/touch policies. It reuses completed certificates, preserving fingerprints. If keys are missing, explicit provisioning authorization allows only empty target slots to be generated; an occupied slot without a recorded public key, a changed key/policy, or an unreadable slot stops recovery for inspection. Initial creation never overwrites a nonempty key.
 
-After an interrupted certificate/bundle phase, repeat the migration action to use the public journal; it does not regenerate recorded keys. A partial/uncertain key-generation outcome stops and requires inspection rather than automatically retrying or overwriting a slot. The previous bundle bank is retained by the two-bank writer.
+The separate **Create / migrate v6 identity** button is removed. An unfinished older OpenPGP migration is still detected for the selected saved identity by **Resume interrupted setup…**. This recovery path checks its existing public-key journal, completes certificates/trust changes and backs up/restores the bundle without generating keys. An incomplete old key-generation journal requires inspection. Only previously trusted email/fingerprint pairs are transferred; no additional trust is granted. The previous bundle bank is retained on a failed write.
 
-Validation uses software token simulators: key preservation, signing/encryption, v4/v6 trust transfer, interrupted-write resume, B2 restoration and rejection of wrong keys/occupied slots. Sequoia validates the separated primary/signing subkey and its signatures; classical X25519 decryption was independently checked with Sequoia v4 and v6 ciphertexts. Physical 86–89 provisioning remains to be tested.
+Automated tests use software keys and simulated cards: complete ten-key provisioning plans, partial-generation recovery, stable fingerprints across interrupted issuance, multiple email user IDs, v6/v4 signing and encryption, compressed bundle restoration, existing migration recovery, and rejection of unknown occupied slots and mismatched public keys. No physical provisioning was performed for this update. Earlier Sequoia tests validate the separated primary/signing structure and classical X25519 exchange.

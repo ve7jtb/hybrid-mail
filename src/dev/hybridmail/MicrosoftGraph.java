@@ -16,6 +16,10 @@ final class MicrosoftGraph implements MailInbox {
  private static final String FIRST=BASE+"me/mailFolders/inbox/messages?$top=50&$select=id,subject,from,receivedDateTime&$orderby=receivedDateTime%20desc";
  private final Credentials credentials;private final Transport transport;
  private final Map<Long,String> ids=new HashMap<>();private long nextId;private boolean closed;
+ private String search="";
+ int pageNumber(){return previous.size()+1;}
+ synchronized void setSearch(String q){q=q.trim();if(!search.equals(q)){search=q;previous.clear();ids.clear();next="";}}
+ private String first(){return search.isEmpty()?FIRST:BASE+"me/mailFolders/inbox/messages?$top=50&$select=id,subject,from,receivedDateTime&$filter="+URLEncoder.encode("contains(subject,'"+search.replace("'","''")+"')",StandardCharsets.UTF_8).replace("+","%20");}
  private String page=FIRST,next="";private final Deque<String> previous=new ArrayDeque<>();
  MicrosoftGraph(Credentials credentials){this(credentials,network());}
  MicrosoftGraph(Credentials credentials,Transport transport){this.credentials=credentials;this.transport=transport;}
@@ -41,7 +45,7 @@ final class MicrosoftGraph implements MailInbox {
  }
  void verifyAccount(String email)throws Exception{if(!account().equalsIgnoreCase(email))throw new IOException("Microsoft authorized a different mailbox. Sign in again.");}
  boolean hasOlder(){return !next.isEmpty();}boolean hasNewer(){return !previous.isEmpty();}
- public synchronized List<ImapInbox.Entry> latest()throws Exception{var r=load(FIRST);previous.clear();return r;}
+ public synchronized List<ImapInbox.Entry> latest()throws Exception{var r=load(first());previous.clear();return r;}
  synchronized List<ImapInbox.Entry> older()throws Exception{if(!hasOlder())return List.of();String old=page;var r=load(next);previous.push(old);return r;}
  synchronized List<ImapInbox.Entry> newer()throws Exception{if(!hasNewer())return List.of();var r=load(previous.peek());previous.pop();return r;}
  private List<ImapInbox.Entry> load(String url)throws Exception {

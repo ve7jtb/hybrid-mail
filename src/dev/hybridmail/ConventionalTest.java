@@ -29,7 +29,7 @@ public class ConventionalTest {
    var signer=new SMIMESignedGenerator();signer.addSignerInfoGenerator(new JcaSignerInfoGeneratorBuilder(new JcaDigestCalculatorProviderBuilder().setProvider("BC").build()).build(new JcaContentSignerBuilder(sig).setProvider("BC").build(pair.getPrivate()),cert));signer.addCertificates(new JcaCertStore(List.of(cert)));
    var alternatives=new MimeMultipart("alternative");var plain=new MimeBodyPart();plain.setText("conventional plain","UTF-8");alternatives.addBodyPart(plain);var html=new MimeBodyPart();html.setContent("<b>ignored HTML</b>","text/html");alternatives.addBodyPart(html);var body=new MimeBodyPart();body.setContent(alternatives);
    var detached=new MimeMessage(MailEngine.session());detached.setFrom("test@example.test");detached.setContent(signer.generate(body));detached.saveChanges();
-   if(!MailEngine.open(MailEngine.parse(MailEngine.encode(detached)),null,cert).text().equals("conventional plain"))throw new AssertionError("Detached multipart alternative");
+   var rich=MailEngine.open(MailEngine.parse(MailEngine.encode(detached)),null,cert);if(!rich.text().equals("conventional plain")||!rich.html().equals("<b>ignored HTML</b>"))throw new AssertionError("Detached multipart alternative");
    var envelope=new SMIMEEnvelopedGenerator();
    if(alg.equals("RSA"))envelope.addRecipientInfoGenerator(new JceKeyTransRecipientInfoGenerator(cert).setProvider("BC"));
    else {var eph=g.generateKeyPair();envelope.addRecipientInfoGenerator(new JceKeyAgreeRecipientInfoGenerator(CMSAlgorithm.ECDH_SHA256KDF,eph.getPrivate(),eph.getPublic(),CMSAlgorithm.AES256_WRAP).setProvider("BC").addRecipient(cert));}

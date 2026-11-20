@@ -43,6 +43,11 @@ public final class MailEngine {
     }
     public static MimeMessage compose(Identity id,String from,String to,String subject,String text,
             X509Certificate recipient,ExternalMu.Backend external,List<Path> files)throws Exception {
+        return composeFormatted(id,from,to,subject,text,null,recipient,external,files);
+    }
+    /** Formatting lives inside the signed MIME entity, alongside its text alternative. */
+    public static MimeMessage composeFormatted(Identity id,String from,String to,String subject,String text,String html,
+            X509Certificate recipient,ExternalMu.Backend external,List<Path> files)throws Exception {
         if(files.size()>20)throw new IOException("At most 20 attachments per message");
         List<Attachment> attachments=new ArrayList<>();long total=0;
         for(Path file:files){
@@ -51,15 +56,21 @@ public final class MailEngine {
             total+=data.length;if(total>MAX_MESSAGE/2)throw new IOException("Attachments exceed 10 MiB");
             attachments.add(new Attachment(file.getFileName().toString(),data));
         }
-        return composeAttachments(id,from,to,subject,text,recipient,external,attachments);
+        return composeAttachments(id,from,to,subject,text,recipient,external,attachments,html);
     }
     public static MimeMessage composeAttachments(Identity id,String from,String to,String subject,String text,
             X509Certificate recipient,ExternalMu.Backend external,List<Attachment> files)throws Exception {
+        return composeAttachments(id,from,to,subject,text,recipient,external,files,null);
+    }
+    public static MimeMessage composeAttachments(Identity id,String from,String to,String subject,String text,
+            X509Certificate recipient,ExternalMu.Backend external,List<Attachment> files,String html)throws Exception {
         InternetAddress sender = new InternetAddress(from, true); sender.validate();
         InternetAddress receiver = new InternetAddress(to, true); receiver.validate();
         if (!Identity.matchesEmail(id.signingCert(), sender.getAddress())) throw new GeneralSecurityException("From address does not match signing certificate");
         if (text.length() > MAX_MESSAGE / 4) throw new IOException("Message too large");
-        MimeBodyPart plain = new MimeBodyPart(); plain.setText(text, "UTF-8");
+        MimeBodyPart plain;
+        if(html==null){plain=new MimeBodyPart();plain.setText(text,"UTF-8");}
+        else plain=new MimeBodyPart(new ByteArrayInputStream(messageBody(text,html)));
         if(files.size()>20)throw new IOException("At most 20 attachments per message");
         if(!files.isEmpty()){
             MimeMultipart mixed=new MimeMultipart("mixed");mixed.addBodyPart(plain);
@@ -109,6 +120,15 @@ public final class MailEngine {
         // Force lazy S/MIME generation now so token errors surface before save/send.
         return parse(encode(m));
     }
+    /** Base64 keeps UTF-8 and CRLF canonicalization identical across both mail formats.
+     * The random boundary cannot collide with base64 part data (it includes '-'). */
+    static byte[] messageBody(String text,String html)throws IOException {
+        if(text.length()>MAX_MESSAGE/4||(html!=null&&html.length()>1024*1024))throw new IOException("Message body is too large");
+        String plain=mimeText("plain",text),encoded=plain;
+        if(html!=null){String boundary="pqmail-body-"+UUID.randomUUID();encoded="Content-Type: multipart/alternative; boundary=\""+boundary+"\"\r\n\r\n--"+boundary+"\r\n"+plain+"\r\n--"+boundary+"\r\n"+mimeText("html",html)+"\r\n--"+boundary+"--\r\n";}
+        return encoded.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+    private static String mimeText(String type,String text){return "Content-Type: text/"+type+"; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"+Base64.getMimeEncoder(64,new byte[]{13,10}).encodeToString(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
     public static byte[] encode(MimeMessage message) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream(); message.writeTo(out);
         if (out.size() > MAX_MESSAGE) throw new IOException("Message exceeds 20 MiB limit");
@@ -144,8 +164,9 @@ public final class MailEngine {
         copy.setHeader("Content-Type","application/pkcs7-mime; smime-type="+type);
         copy.setHeader("Content-Transfer-Encoding","base64");return copy;
     }
-    public record Opened(String text, boolean encrypted, String signatureAlgorithm, String fingerprint, boolean pinned, boolean fromMatches, X509Certificate signerCertificate, List<Attachment> attachments) {
+    public record Opened(String text, boolean encrypted, String signatureAlgorithm, String fingerprint, boolean pinned, boolean fromMatches, X509Certificate signerCertificate, List<Attachment> attachments, String html) {
         public Opened { attachments=List.copyOf(attachments); }
+        public Opened(String text,boolean encrypted,String signatureAlgorithm,String fingerprint,boolean pinned,boolean fromMatches,X509Certificate signerCertificate,List<Attachment> attachments){this(text,encrypted,signatureAlgorithm,fingerprint,pinned,fromMatches,signerCertificate,attachments,null);}
     }
     public static Opened open(MimeMessage message, Identity id, X509Certificate pinned) throws Exception {
         return open(message,id,pinned,null);
@@ -181,7 +202,8 @@ public final class MailEngine {
         else {
             if(!encrypted)throw new GeneralSecurityException("Expected S/MIME signed content; unsigned messages are not verified");
             List<Attachment> files=new ArrayList<>();StringBuilder content=new StringBuilder();collectContent(part,content,files,0,new int[]{0});
-            return new Opened(content.length()==0?"No plain-text body. HTML is not rendered.":content.toString(),true,"Unsigned","",false,false,null,files);
+            var body=VerifiedMime.body(part);
+            return new Opened(body.text(),true,"Unsigned","",false,false,null,files,body.html());
         }
         var signers = signed.getSignerInfos().getSigners();
         if (signers.size() != 1) throw new GeneralSecurityException("Expected exactly one signer");
@@ -198,8 +220,10 @@ public final class MailEngine {
         boolean matches = from != null && from.length == 1 && from[0] instanceof InternetAddress a && Identity.matchesEmail(cert, a.getAddress());
         List<Attachment> attachments=new ArrayList<>();StringBuilder content=new StringBuilder();
         collectContent(signed.getContent(),content,attachments,0,new int[]{0});
-        if(content.length()==0)content.append("No plain-text body. HTML is not rendered.");
-        return new Opened(content.toString(),encrypted,cert.getPublicKey().getAlgorithm(),fp,trusted,matches,cert,attachments);
+        // Extract the display alternatives only AFTER the original signed MIME
+        // bytes verify. Sanitizing or rendering must never change what we verify.
+        var body=VerifiedMime.body(signed.getContent());
+        return new Opened(body.text(),encrypted,cert.getPublicKey().getAlgorithm(),fp,trusted,matches,cert,attachments,body.html());
     }
     private static void collectContent(Part part,StringBuilder text,List<Attachment> files,int depth,int[] count)throws Exception{
         if(depth>12||++count[0]>100)throw new IOException("Signed MIME nesting or part count exceeds limit");

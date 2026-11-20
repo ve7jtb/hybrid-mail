@@ -30,7 +30,7 @@ Signature validity and signer trust are displayed separately. Trust is local exa
 
 Select **Inbox → Connect IMAP** for a TLS server (usually port 993). The app opens `INBOX` read-only and lists up to ten newest arrivals by IMAP sequence, newest first. This is arrival order, not a global sort by the sender-controlled Date header. Only headers are initially loaded. Double-click or select **Open selected message** to retrieve the selected body (20 MiB limit). Refresh updates the list. A disconnected/stale session requires reconnecting. No delete, move, flag changes, or background polling is implemented.
 
-Plain-text unsigned mail is explicitly marked unverified. HTML is not rendered and attachments are not displayed. Supported S/MIME mail goes through the existing signature verification and authenticated decryption pipeline; the YubiKey PIN is requested when needed. Outer headers are unprotected. Select the matching saved encryption identity before opening encrypted mail.
+Unsigned mail is explicitly marked unverified. The reader offers Formatted HTML and Plain text, with verification/trust in a separate panel. HTML is sanitized to basic local formatting: no remote resources, images (including inline images), sender CSS, scripts or forms. Website links require confirmation before opening your browser. Verified S/MIME attachments can be saved separately. Supported S/MIME mail goes through the existing signature verification and authenticated decryption pipeline; the YubiKey PIN is requested when needed. Outer headers are unprotected. Select the matching saved encryption identity before opening encrypted mail.
 
 ## Google OAuth client setup
 
@@ -76,7 +76,7 @@ Software and YubiKey creation accept up to four additional comma-separated email
 
 New YubiKey creation detects the inserted device and checks all user PIV slots before opening the form. The detected serial is display-only. Missing, busy, nonempty or multiple devices stop the flow; the same serial is checked again before provisioning.
 
-Gmail **S/MIME only** filters each page using its top-level Content-Type (opaque S/MIME and multipart/signed with a PKCS#7 signature protocol). It does not fetch message bodies or establish signature validity. Pages cover 50 inbox entries before filtering, so a page may show fewer or no matches while **Older** remains available. S/MIME nested inside forwarded messages or ordinary attachments is not included.
+Gmail **Signed or encrypted only** filters each page using its top-level Content-Type: opaque S/MIME, multipart/signed with a PKCS#7 or OpenPGP signature protocol, or multipart/encrypted with the OpenPGP encryption protocol. It does not fetch message bodies or establish signature validity. Pages cover 50 inbox entries before filtering, so a page may show fewer or no matches while **Older** remains available. Inline OpenPGP and protected content nested inside forwarded messages or ordinary attachments are not included. The filter identifies message formats, not valid signatures or trusted senders.
 
 Official desktop builds inject shared client configuration from the `PQ_MAIL_GOOGLE_CLIENT_SECRET` Actions secret. Source builds can supply that environment variable or an ignored `google-client.json` containing `id` and `secret`; without it, use the custom client import. This installed-app client configuration is extractable from the packaged app; it is not a confidential server credential. User tokens are never bundled.
 
@@ -95,3 +95,9 @@ In **Keys**, **Import certificate bundle from file…** opens a `.pqcert` file. 
 New supported YubiKey profiles default to OpenPGP creation, with an opt-out: Level 3 uses hybrid PQ OpenPGP, and Level 5 uses **classical P-384 OpenPGP (not PQ)** with signing/decryption slots 83/82. Pure/hybrid S/MIME remains unchanged. See [OpenPGP profiles](OPENPGP.md).
 
 **Forget YubiKey identity…** confirms the selected profile and serial, removes only its local certificate records, mappings and saved OpenPGP identity, and clears the active selection if necessary. It does not erase device keys or on-key bundles. Forget old profiles individually after reprovisioning a key; importing newly issued certificates adds new identities rather than overwriting certificates with different fingerprints. The old migration button is no longer shown.
+
+## Message formatting and loading state
+
+Compose → Use formatting enables bold, italic, underline, headings, bulleted/numbered lists and HTTP/HTTPS links. Paste inserts plain text. Both the plain-text alternative and formatted HTML are signed, and encrypted when selected, in S/MIME or PGP/MIME. Returning to plain text asks before removing formatting.
+
+Connecting, inbox refresh/search/paging, and opening messages show a large animated teal/lime spinner with the current operation. It clears on success or failure. PIN and credential-unlock dialogs remain separate.

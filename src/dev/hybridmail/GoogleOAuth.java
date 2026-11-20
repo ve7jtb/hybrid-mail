@@ -71,10 +71,14 @@ public final class GoogleOAuth {
         if(fields.containsKey("error"))throw new IOException("Google sign-in was denied or cancelled");
         String code=fields.get("code");if(code==null||code.isBlank())throw new IOException("Missing Google authorization code");return code;
     }
-    static URI authorization(Client client,String email,String redirect,String state,String verifier)throws Exception{
-        Map<String,String> p=new LinkedHashMap<>();p.put("client_id",client.id());p.put("redirect_uri",redirect);p.put("response_type","code");p.put("scope",SCOPE);p.put("state",state);p.put("code_challenge",challenge(verifier));p.put("code_challenge_method","S256");p.put("access_type","offline");p.put("login_hint",email);p.put("prompt","consent select_account");return URI.create(AUTH+"?"+form(p));
+    static URI authorization(Client client,String email,String redirect,String state,String verifier)throws Exception{return authorization(client,email,redirect,state,verifier,SCOPE);}
+    static URI authorization(Client client,String email,String redirect,String state,String verifier,String scope)throws Exception{
+        Map<String,String> p=new LinkedHashMap<>();p.put("client_id",client.id());p.put("redirect_uri",redirect);p.put("response_type","code");p.put("scope",scope);p.put("state",state);p.put("code_challenge",challenge(verifier));p.put("code_challenge_method","S256");p.put("access_type","offline");p.put("login_hint",email);p.put("prompt","consent select_account");return URI.create(AUTH+"?"+form(p));
     }
     public static Token authorize(Client client,String email,Consumer<URI> browser,BooleanSupplier cancelled)throws Exception{
+        return authorize(client,email,browser,cancelled,Set.of(READ_SCOPE,SEND_SCOPE));
+    }
+    static Token authorize(Client client,String email,Consumer<URI> browser,BooleanSupplier cancelled,Set<String> scopes)throws Exception{
         String state=random(),verifier=random();CompletableFuture<String> response=new CompletableFuture<>();
         HttpServer server=HttpServer.create(new InetSocketAddress(InetAddress.getByName("127.0.0.1"),0),0);
         String redirect="http://127.0.0.1:"+server.getAddress().getPort()+"/oauth2/callback";
@@ -92,12 +96,12 @@ public final class GoogleOAuth {
         });
         server.start();
         try{
-            browser.accept(authorization(client,email,redirect,state,verifier));
+            browser.accept(authorization(client,email,redirect,state,verifier,String.join(" ",scopes)));
             long deadline=System.nanoTime()+TimeUnit.MINUTES.toNanos(3);String authCode;
             while(true){if(cancelled.getAsBoolean())throw new IOException("Google sign-in cancelled");if(System.nanoTime()>deadline)throw new IOException("Google sign-in timed out. Try again.");try{authCode=response.get(250,TimeUnit.MILLISECONDS);break;}catch(TimeoutException wait){}catch(ExecutionException e){throw new IOException("Google sign-in was denied or cancelled");}}
             if(cancelled.getAsBoolean())throw new IOException("Google sign-in cancelled");
             Map<String,String> params=new LinkedHashMap<>();params.put("client_id",client.id());if(!client.secret().isEmpty())params.put("client_secret",client.secret());params.put("code",authCode);params.put("code_verifier",verifier);params.put("redirect_uri",redirect);params.put("grant_type","authorization_code");
-            Token token=exchange(params);if(cancelled.getAsBoolean()){token.close();throw new IOException("Google sign-in cancelled");}return token;
+            Token token=exchange(params,scopes,!scopes.equals(Set.of(READ_SCOPE,SEND_SCOPE)));if(cancelled.getAsBoolean()){token.close();throw new IOException("Google sign-in cancelled");}return token;
         }finally{server.stop(0);response.cancel(true);}
     }
     static Map<String,String> refreshParameters(Client client,String refresh)throws IOException{
@@ -107,7 +111,11 @@ public final class GoogleOAuth {
     static Token refresh(Client client,String refresh)throws Exception{
         Token token=exchange(refreshParameters(client,refresh));if(token.refresh==null)token.refresh=refresh.toCharArray();return token;
     }
-    private static Token exchange(Map<String,String> params)throws Exception{
+    static Token refresh(Client client,String refresh,Set<String> scopes)throws Exception{
+        Token token=exchange(refreshParameters(client,refresh),scopes,false);if(token.refresh==null)token.refresh=refresh.toCharArray();return token;
+    }
+    private static Token exchange(Map<String,String> params)throws Exception{return exchange(params,Set.of(READ_SCOPE,SEND_SCOPE),false);}
+    private static Token exchange(Map<String,String> params,Set<String> scopes,boolean requireScope)throws Exception{
         HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).followRedirects(HttpClient.Redirect.NEVER).build();
         HttpRequest request=HttpRequest.newBuilder(TOKEN).timeout(Duration.ofSeconds(30)).header("Content-Type","application/x-www-form-urlencoded").POST(HttpRequest.BodyPublishers.ofString(form(params))).build();
         HttpResponse<InputStream> result=http.send(request,HttpResponse.BodyHandlers.ofInputStream());
@@ -115,14 +123,15 @@ public final class GoogleOAuth {
             byte[] bytes=in.readNBytes(65537);try{
                 if(bytes.length>65536)throw new IOException("Google token response too large");
                 if(result.statusCode()!=200)throw new IOException("Google token request failed (HTTP "+result.statusCode()+"). If access expired or was revoked, sign in again; otherwise check your connection and retry.");
-                return token(new String(bytes,StandardCharsets.UTF_8));
+                return token(new String(bytes,StandardCharsets.UTF_8),scopes,requireScope);
             }finally{Arrays.fill(bytes,(byte)0);}
         }
     }
-    static Token token(String json)throws IOException{
+    static Token token(String json)throws IOException{return token(json,Set.of(READ_SCOPE,SEND_SCOPE),false);}
+    static Token token(String json,Set<String> scopes,boolean requireScope)throws IOException{
         try{JsonObject data=JsonParser.parseString(json).getAsJsonObject();String value=data.get("access_token").getAsString();long seconds=data.get("expires_in").getAsLong();
             if(!"Bearer".equalsIgnoreCase(data.get("token_type").getAsString())||value.isBlank()||seconds<=0||seconds>86400)throw new IOException("Invalid Google token response");
-            if(data.has("scope")&&!new HashSet<>(Arrays.asList(data.get("scope").getAsString().split(" "))).containsAll(List.of(READ_SCOPE,SEND_SCOPE)))throw new IOException("Google did not grant the mail permission");
+            if((requireScope&&!data.has("scope"))||(data.has("scope")&&!new HashSet<>(Arrays.asList(data.get("scope").getAsString().split(" "))).containsAll(scopes)))throw new IOException("Google did not grant all requested permissions");
             Token token=new Token(value,seconds);if(data.has("refresh_token")){String refresh=data.get("refresh_token").getAsString();if(refresh.isBlank()||refresh.length()>16384)throw new IOException("Invalid refresh token");token.refresh=refresh.toCharArray();}return token;
         }catch(IOException e){throw e;}catch(RuntimeException e){throw new IOException("Invalid Google token response");}
     }

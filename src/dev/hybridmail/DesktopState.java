@@ -26,8 +26,10 @@ public final class DesktopState {
         return new DesktopState(override==null?(linux()?Path.of(System.getenv().getOrDefault("XDG_DATA_HOME",Path.of(System.getProperty("user.home"),".local","share").toString()),"pq-mail"):windows()?Path.of(System.getenv().getOrDefault("LOCALAPPDATA",System.getProperty("user.home")),"Hybrid Mail"):Path.of(System.getProperty("user.home"),"Library","Application Support","Hybrid Mail")):Path.of(override));
     }
     public Path directory(){return directory;}
-    public String get(String name,String fallback){return values.getProperty(name,fallback);}
-    public void set(String name,String value){if(value==null)values.remove(name);else values.setProperty(name,value);}
+    public String get(String name,String fallback){return DesktopVault.configured()&&DesktopVault.sensitive(name)?DesktopVault.setting(name,fallback):rawGet(name,fallback);}
+    String rawGet(String name,String fallback){return values.getProperty(name,fallback);}
+    void rawSet(String name,String value){if(value==null)values.remove(name);else values.setProperty(name,value);}
+    public void set(String name,String value){if(DesktopVault.configured()&&DesktopVault.sensitive(name))DesktopVault.putSetting(name,value);else rawSet(name,value);}
     public void save()throws IOException{
         PrivateFiles.directory(directory);
         ByteArrayOutputStream out=new ByteArrayOutputStream();values.store(out,"PQ Mail — non-secret preferences; no PINs or passwords");
@@ -59,7 +61,13 @@ public final class DesktopState {
     }
     public Identity loadIdentity(String id,char[] password)throws Exception{
         Path folder=identityDirectory(id);
-        if(get("identity."+id+".type","token").equals("pkcs12"))return Identity.load(folder.resolve("identity.p12"),password,get("identity."+id+".variant","").equals("pure"));
+        if(get("identity."+id+".type","token").equals("pkcs12")){
+            String stored=get("identity."+id+".vault","");if(!stored.isEmpty()){
+                var profiles=SoftwareIdentityVault.load(vaultIdentityPath(stored),DesktopVault.vault());
+                return profiles.stream().filter(p->{try{return identityId(p).equals(id);}catch(Exception e){return false;}}).findFirst().orElseThrow(()->new IOException("Vault identity does not match catalog"));
+            }
+            return Identity.load(folder.resolve("identity.p12"),password,get("identity."+id+".variant","").equals("pure"));
+        }
         X509Certificate signing=Identity.readCertificate(folder.resolve("signing.cer"));
         X509Certificate encryption=Files.exists(folder.resolve("encryption.cer"))?Identity.readCertificate(folder.resolve("encryption.cer")):null;
         String alg=signing.getPublicKey().getAlgorithm();
@@ -121,6 +129,20 @@ public final class DesktopState {
             var identity=profiles.get(i);String id=remember(identity,name+" · "+identity.signatureAlgorithm(),file);
             set("identity."+id+".variant",profiles.size()==2&&i==0?"pure":"");
         }save();
+    }
+    Path vaultIdentityPath(String filename)throws IOException{
+        if(!filename.matches("[a-f0-9-]{36}\\.vault\\.p12"))throw new IOException("Invalid vault identity path");
+        return directory.resolve("software-vault").resolve(filename);
+    }
+    boolean vaultIdentity(String id){return !get("identity."+id+".vault","").isEmpty();}
+    void rememberVaultProfiles(List<Identity> profiles,String name)throws Exception{
+        String filename=UUID.randomUUID()+".vault.p12";Path path=vaultIdentityPath(filename);PrivateFiles.directory(path.getParent());
+        SoftwareIdentityVault.save(profiles,path,DesktopVault.vault());
+        // Commit catalog pointers only after the encrypted file and its recovery password are durable.
+        LinkedHashSet<String> ids=new LinkedHashSet<>();for(var saved:identities())ids.add(saved.id());
+        for(var identity:profiles){String id=identityId(identity);ids.add(id);set("identity."+id+".name",name+" · "+identity.signatureAlgorithm());set("identity."+id+".type","pkcs12");set("identity."+id+".vault",filename);set("selected.identity",id);}
+        set("identities",String.join(",",ids));save();
+        // Old password-protected copies remain as recovery backups; never silently destroy user files.
     }
     public List<CertificateBundle.Entry> certificateBundle(Identity selected)throws Exception{
         if(selected==null||selected.signingKey()!=null)throw new IOException("Select a saved YubiKey identity to share its pure/hybrid certificates");
@@ -256,6 +278,16 @@ public final class DesktopState {
                 }
             }
             save(); // One atomic settings replacement publishes the entire trust selection.
+        }catch(Exception e){values.clear();values.putAll(before);throw e;}
+    }
+    void migratePgpTrust(OpenPgp.PublicIdentity previous,OpenPgp.PublicIdentity replacement,Set<String> trusted)throws Exception{
+        var next=new OpenPgp.PublicIdentity(replacement.export());OpenPgp.check(next.certifiedEmails().containsAll(trusted),"Migration trust contains an uncertified address");
+        Properties before=new Properties();before.putAll(values);
+        try{
+            var old=new ArrayList<Contact>();for(var c:pgpContacts())if(pgpFingerprint(c).equals(previous.fingerprint()))old.add(c);
+            for(String email:next.certifiedEmails()){var c=rememberPgpChecked(next,email);set("pgp."+c.id()+".trusted",trusted.contains(email)?"true":null);}
+            var currentIds=pgpContacts().stream().map(Contact::id).toList();var removed=new HashSet<String>();for(var c:old){removed.add(c.id());for(String suffix:List.of("email","fingerprint","trusted"))set("pgp."+c.id()+"."+suffix,null);}
+            set("pgp.contacts",String.join(",",currentIds.stream().filter(k->!removed.contains(k)).toList()));save();
         }catch(Exception e){values.clear();values.putAll(before);throw e;}
     }
     public void removePgp(Contact c)throws Exception{

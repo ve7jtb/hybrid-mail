@@ -11,6 +11,7 @@ final class LegacyOpenPgp {
     final PGPPublicKey primary, recipient;
     final List<String> emails;
     final Map<Long,PGPPublicKey> signers=new HashMap<>();
+    final Map<Long,PGPPublicKey> boundKeys=new HashMap<>();
     final Map<Long,PGPSignature> bindings=new HashMap<>();
     final PGPSignature primaryPolicy;
     final int cipher;
@@ -32,7 +33,8 @@ final class LegacyOpenPgp {
         policy(s);require(s.getVersion()==k.getVersion(),"Certificate signature version mismatch");long created=seconds(k.getCreationTime()),expiry=s.getHashedSubPackets().getKeyExpirationTime();
         return seconds(s.getCreationTime())>=created&&created<=OpenPgp.now()+300&&(expiry==0||created+expiry>=OpenPgp.now());
     }
-    static boolean supported(PGPPublicKey k){return k.getVersion()==6?List.of(30,35).contains(k.getAlgorithm()):k.getVersion()==4&&switch(k.getAlgorithm()){
+    static int rank(PGPPublicKey k){return k.getAlgorithm()==36?2:k.getAlgorithm()==35?1:0;}
+    static boolean supported(PGPPublicKey k){return k.getVersion()==6?List.of(25,26,27,28,30,31,35,36).contains(k.getAlgorithm()):k.getVersion()==4&&switch(k.getAlgorithm()){
         case 1,2,3 -> k.getBitStrength()>=2048;
         case 30 -> k.getVersion()==6;
         case 35 -> !k.isMasterKey();
@@ -78,8 +80,8 @@ final class LegacyOpenPgp {
             if(!verified(k.getSignaturesOfType(PGPSignature.SUBKEY_REVOCATION),primary,s->s.verifyCertification(primary,k)).isEmpty())continue;
             var bind=latest(verified(k.getSignaturesOfType(PGPSignature.SUBKEY_BINDING),primary,s->s.verifyCertification(primary,k)));if(bind==null)continue;
             try{if(!live(k,bind))continue;}catch(Exception e){continue;}
-            bindings.put(k.getKeyID(),bind);int flags=bind.getHashedSubPackets().getKeyFlags();
-            if((flags&12)!=0&&k.isEncryptionKey()&&(selected==null||k.getAlgorithm()==35&&selected.getAlgorithm()!=35||k.getAlgorithm()==selected.getAlgorithm()&&k.getCreationTime().after(selected.getCreationTime())||k.getAlgorithm()!=35&&selected.getAlgorithm()!=35&&k.getCreationTime().after(selected.getCreationTime())))selected=k;
+            boundKeys.put(k.getKeyID(),k);bindings.put(k.getKeyID(),bind);int flags=bind.getHashedSubPackets().getKeyFlags();
+            if((flags&12)!=0&&k.isEncryptionKey()&&(selected==null||rank(k)>rank(selected)||rank(k)==rank(selected)&&k.getCreationTime().after(selected.getCreationTime())))selected=k;
             if((flags&2)!=0){boolean cross=false;var embeddedList=new ArrayList<PGPSignature>();for(var packets:Arrays.asList(bind.getHashedSubPackets(),bind.getUnhashedSubPackets())){if(packets!=null){var es=packets.getEmbeddedSignatures();for(int j=0;j<es.size();j++)embeddedList.add(es.get(j));}}var embedded=embeddedList;
                 for(int i=0;i<embedded.size();i++){var s=embedded.get(i);if(s.getSignatureType()!=PGPSignature.PRIMARYKEY_BINDING)continue;
                     try{policy(s);s.init(verifier(),k);if(s.verifyCertification(primary,k))cross=true;}catch(PGPException e){/* invalid cross-certification */}}
@@ -89,6 +91,8 @@ final class LegacyOpenPgp {
     }
     String signingAlgorithms(){
         return signers.isEmpty()?"No usable signing key":signers.values().stream().map(k->{
+            if(k.getAlgorithm()==27)return "Ed25519";
+            if(k.getAlgorithm()==31)return "ML-DSA-87 + Ed448";
             if(k.getAlgorithm()==30)return "ML-DSA-65 + Ed25519";
             if(k.getAlgorithm()==1||k.getAlgorithm()==3)return "RSA "+k.getBitStrength();
             String oid=k.getPublicKeyPacket().getKey() instanceof org.bouncycastle.bcpg.ECPublicBCPGKey ec?ec.getCurveOID().getId():"unknown";
@@ -98,6 +102,7 @@ final class LegacyOpenPgp {
     }
     String encryptionAlgorithm(){
         if(recipient==null)return "No usable encryption subkey";
+        if(recipient.getAlgorithm()==36)return "ML-KEM-1024 + X448";
         if(recipient.getAlgorithm()==35)return "ML-KEM-768 + X25519";
         if(recipient.getAlgorithm()==18&&recipient.getPublicKeyPacket().getKey() instanceof org.bouncycastle.bcpg.ECPublicBCPGKey ec){
             return switch(ec.getCurveOID().getId()){
@@ -117,8 +122,8 @@ final class LegacyOpenPgp {
         require(cipher!=0,"Recipient does not advertise supported AES encryption");
         var builder=new JcePGPDataEncryptorBuilder(cipher).setWithIntegrityPacket(true).setSecureRandom(OpenPgp.RANDOM).setProvider("BC");
         if(version==6){
-            // RFC 9580 mandatory implicit AEAD preference: AES-128/OCB.
-            int chosen=7,mode=2;var preferences=primaryPolicy.getHashedSubPackets().getSubpacket(39);
+            // RFC 9980 section 7.1 adds implicit AES-256/OCB for PQ certificates.
+            int chosen=(primary.getAlgorithm()==30||primary.getAlgorithm()==31)?9:7,mode=2;var preferences=primaryPolicy.getHashedSubPackets().getSubpacket(39);
             if(preferences!=null){byte[] pairs=preferences.getData();require(pairs.length%2==0,"Invalid AEAD preferences");for(int i=0;i<pairs.length;i+=2)if((pairs[i]==7||pairs[i]==9)&&(pairs[i+1]==2||pairs[i+1]==3)){chosen=pairs[i];mode=pairs[i+1];break;}}
             builder=new JcePGPDataEncryptorBuilder(chosen).setWithAEAD(mode,16).setUseV6AEAD().setSecureRandom(OpenPgp.RANDOM).setProvider("BC");
         }

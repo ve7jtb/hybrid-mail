@@ -40,7 +40,7 @@ public final class MailApp extends JFrame {
     private final JPanel encryptionOptions=new JPanel(new CardLayout());
     private final javax.swing.Timer pgpLookupTimer=new javax.swing.Timer(900,e->lookupPgpRecipient());
     private boolean syncingPgp;
-    private final JTextArea pgpStatus=new JTextArea("Select Level 3 hybrid for outgoing OpenPGP signing. Classical v4 certificates are supported for recipient encryption and incoming verification. OpenPGP uses separate public identities and fingerprints; private keys stay in the existing software bundle or YubiKey.");
+    private final JTextArea pgpStatus=new JTextArea("Select a supported Level 3 or Level 5 identity for OpenPGP signing. Classical v4 certificates are supported for recipient encryption and incoming verification. OpenPGP uses separate public identities and fingerprints; private keys stay in the existing software bundle or YubiKey.");
     private final ComposeFormatPolicy composeFormatPolicy=new ComposeFormatPolicy();
     private boolean adjustingComposeFormat;
     private boolean usePgp(){return mailFormat.getSelectedIndex()==1;}
@@ -93,7 +93,7 @@ public final class MailApp extends JFrame {
         pgpEncryption.addActionListener(e->{if(!syncingPgp)refreshPgpChoices();});
         outgoingIdentity.addActionListener(e->{if(!syncingOutgoing){var chosen=(DesktopState.SavedIdentity)outgoingIdentity.getSelectedItem();if(chosen!=null)openSaved(chosen);}});
         outgoingEncryption.setEnabled(!usePgp()&&encrypt.isSelected());encrypt.addActionListener(e->outgoingEncryption.setEnabled(!usePgp()&&encrypt.isSelected()));
-        outgoingEncryption.addActionListener(e->{if(!syncingOutgoing){var chosen=(EncryptionChoice)outgoingEncryption.getSelectedItem();if(chosen!=null){recipient=chosen.certificate();to.setText(chosen.email());recipientLabel.setText(chosen.email()+" · "+recipient.getPublicKey().getAlgorithm());try{state().saveCertificate("recipient",recipient);}catch(Exception error){error(error);}}}}); fields.add(new JLabel("Prefer v6: hybrid signing. V4 recipients: Ed25519 compatibility signing. Lookup never grants trust.")); for(Component item:fields.getComponents())if(item instanceof JComponent c){c.setAlignmentX(Component.LEFT_ALIGNMENT);c.setMaximumSize(new Dimension(Integer.MAX_VALUE,c.getPreferredSize().height));}p.add(fields,BorderLayout.NORTH);
+        outgoingEncryption.addActionListener(e->{if(!syncingOutgoing){var chosen=(EncryptionChoice)outgoingEncryption.getSelectedItem();if(chosen!=null){recipient=chosen.certificate();to.setText(chosen.email());recipientLabel.setText(chosen.email()+" · "+recipient.getPublicKey().getAlgorithm());try{state().saveCertificate("recipient",recipient);}catch(Exception error){error(error);}}}}); fields.add(new JLabel("Prefer v6: hybrid signing. V4 recipients: classical compatibility signing. Lookup never grants trust.")); for(Component item:fields.getComponents())if(item instanceof JComponent c){c.setAlignmentX(Component.LEFT_ALIGNMENT);c.setMaximumSize(new Dimension(Integer.MAX_VALUE,c.getPreferredSize().height));}p.add(fields,BorderLayout.NORTH);
         JPanel content=new JPanel(new BorderLayout(0,6));content.add(new JScrollPane(body));
         JPanel attachments=new JPanel(new BorderLayout());attachmentList.setVisibleRowCount(2);
         attachments.add(new JScrollPane(attachmentList));JPanel fileActions=new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -140,7 +140,7 @@ public final class MailApp extends JFrame {
         try{pgpEncryption.removeAllItems();for(var key:pgpRecipients.choices())pgpEncryption.addItem(key);
             pgpRecipient=(OpenPgp.PublicIdentity)pgpEncryption.getSelectedItem();
             if(usePgp()){encrypt.setEnabled(pgpRecipient!=null&&pgpRecipient.canEncrypt());if(pgpRecipient==null||!pgpRecipient.canEncrypt())encrypt.setSelected(false);}
-            pgpLookupStatus.setText(pgpRecipient==null?"No usable recipient key — encryption unavailable.":pgpTrustStatus(pgpRecipient,to.getText().trim())+" · "+(pgpRecipient.version()==4?"v4 Ed25519 compatibility signing":"v6 hybrid signing")+" · "+(!pgpRecipient.canEncrypt()?"No usable encryption subkey":pgpRecipient.quantumEncryption()?"Hybrid PQ encryption":"WARNING: Classical encryption — not post-quantum resistant."));
+            pgpLookupStatus.setText(pgpRecipient==null?"No usable recipient key — encryption unavailable.":pgpTrustStatus(pgpRecipient,to.getText().trim())+" · "+(pgpRecipient.version()==4?(identity!=null&&identity.softwareOpenPgp()!=null?"v4 P-521 compatibility signing":identity!=null&&OpenPgp.classical(identity)?"v4 P-384 compatibility signing":"v4 Ed25519 compatibility signing"):"v6 hybrid signing")+" · "+(!pgpRecipient.canEncrypt()?"No usable encryption subkey":pgpRecipient.quantumEncryption()?"Hybrid PQ encryption":"WARNING: Classical encryption — not post-quantum resistant."));
         }finally{syncingPgp=false;}
     }
     private void lookupPgpRecipient(){
@@ -174,16 +174,15 @@ public final class MailApp extends JFrame {
             Identity id=identity;String path=adapter;
             job("Creating OpenPGP bindings (one PIN operation; three signatures)…",()->OpenPgp.createOwn(state().directory(),id,path==null?null:ExternalMu.executable(path)).description(),detail->{pgpStatus.setText(detail);offerBundleBackup();});
         }));
-        actions.add(button("Create RFC 9980 OpenPGP identity from YubiKey…",()->{try{
-            Identity id=identity;var entries=state().certificateBundle(id);int serial=entries.get(0).serial();String path=tokenAdapter(false);
-            if(!Identity.HYBRID_65_P384_SIGN.equals(id.signatureAlgorithm()))throw new IOException("Select the Level 3 hybrid YubiKey identity.");
-            if(JOptionPane.showConfirmDialog(this,"Create ML-DSA-65 + Ed25519 signing and ML-KEM-768 + X25519 encryption certificates?\nUses existing slots 9c/84 and 9d/85 on YubiKey "+serial+". No keys are generated.\nThe previous OpenPGP identity will be preserved in a local backup.\nThe new identity will become selected; back it up to the YubiKey afterward.","Create RFC 9980 OpenPGP certificate",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
-            job("Checking extra keys and creating RFC 9980 OpenPGP certificate…",()->{
-                java.security.PublicKey ed,x;
-                try(var card=new OnKeyDesktop(serial)){OnKeyBundle.check(card,entries);byte[] edDer=card.publicKey("84"),xDer=card.publicKey("85");if(edDer==null||xDer==null)throw new IOException("Provision Ed25519 in empty slot 84 and X25519 in empty slot 85 first.");ed=java.security.KeyFactory.getInstance("Ed25519","BC").generatePublic(new java.security.spec.X509EncodedKeySpec(edDer));x=java.security.KeyFactory.getInstance("X25519","BC").generatePublic(new java.security.spec.X509EncodedKeySpec(xDer));}
-                var own=OpenPgp.createRfc9980(id,ExternalMu.executable(path),ed,x);OpenPgp.replaceOwn(state().directory(),id,own);return own.description();
-            },detail->{pgpRecipient=null;pgpSigner=null;pgpStatus.setText(detail);offerBundleBackup();});
-        }catch(Exception e){error(e);}}));
+        actions.add(button("Create / migrate v6 identity (86–89)…",this::migratePgpCertification));
+        actions.add(button("Create Level 5 v4 compatibility certificates",()->{
+            Identity id=identity;String path=adapter;
+            job("Reading Level 5 compatibility keys and signing public certificates…",()->{
+                OpenPgp.check(id!=null&&OpenPgp.classical(id)&&path!=null,"Select a provisioned Level 5 YubiKey identity");var keys=new java.util.HashMap<String,java.security.PublicKey>();
+                try(var card=new OnKeyDesktop(Integer.parseInt(state().get("token.serial","0")))){OnKeyBundle.check(card,state().certificateBundle(id));for(String slot:java.util.List.of("84","85","88","89")){byte[] encoded=card.publicKey(slot);OpenPgp.check(encoded!=null,"Missing compatibility key in "+slot+"; reprovision an empty Level 5 key");keys.put(slot,java.security.KeyFactory.getInstance(slot.equals("84")?"ML-KEM":slot.equals("85")?"X25519":"EC","BC").generatePublic(new java.security.spec.X509EncodedKeySpec(encoded)));}}
+                return Level5Compatibility.issue(state().directory(),id,keys,ExternalMu.executable(path)).description();
+            },detail->{pgpStatus.setText(detail);offerBundleBackup();});
+        }));
         actions.add(button("Import my OpenPGP public identity…",()->{
             Path file=choose(false,"Import my OpenPGP public identity");if(file==null)return;Identity id=identity;
             job("Checking public key bindings…",()->OpenPgp.saveOwn(state().directory(),id,readPgp(file)).description(),pgpStatus::setText);
@@ -192,7 +191,11 @@ public final class MailApp extends JFrame {
             Path file=chooseSave("Export public OpenPGP key","PQ-Mail-public.asc","asc");if(file==null)return;Identity id=identity;
             job("Exporting public key…",()->{Files.write(file,OpenPgp.loadOwn(state().directory(),id).export(),StandardOpenOption.CREATE_NEW);return "Public key exported; no private keys or PINs included.";},pgpStatus::setText);
         }));
-        actions.add(button("Use my OpenPGP key as recipient",()->{try{selectPgpRecipient(OpenPgp.loadOwn(state().directory(),identity));}catch(Exception e){error(e);}}));
+        for(boolean classical:new boolean[]{false,true})actions.add(button(classical?"Export v4 classical fallback certificate…":"Export v4 hybrid compatibility certificate…",()->{
+            Path file=chooseSave("Export v4 certificate",classical?"public-key-v4-classical.asc":"public-key-v4.asc","asc");if(file==null)return;Identity id=identity;
+            job("Exporting public compatibility certificate…",()->{var own=OpenPgp.loadOwn(state().directory(),id);OpenPgp.check(own.compatibility!=null,"Create or restore compatibility certificates first");var cert=classical?OpenPgp.classicalOnlyCompatibility(own.compatibility):own.compatibility;Files.write(file,cert.export(),StandardOpenOption.CREATE_NEW);return cert.description();},pgpStatus::setText);
+        }));
+        actions.add(button("Use my OpenPGP key as recipient",()->{try{var own=OpenPgp.loadOwn(state().directory(),identity);selectPgpRecipient(own.compatibility!=null&&Level5Compatibility.supports(own)?own.compatibility:own);}catch(Exception e){error(e);}}));
         actions.add(button("Find key on keys.openpgp.org…",()->{
             String query=JOptionPane.showInputDialog(this,"Email address or full fingerprint.\nThis lookup is sent to keys.openpgp.org; downloading a certificate does not establish trust.","Find OpenPGP key",JOptionPane.QUESTION_MESSAGE);
             if(query==null)return;
@@ -205,7 +208,7 @@ public final class MailApp extends JFrame {
         actions.add(button("Import recipient OpenPGP public key…",()->importPgpContact(true)));
         actions.add(button("Import sender OpenPGP public key…",()->importPgpContact(false)));
         actions.add(button("Verify with my OpenPGP key",()->{pgpSigner=null;pgpStatus.setText("Incoming OpenPGP verification uses the selected identity's public key.");}));
-        p.add(actions,BorderLayout.NORTH);p.add(new JLabel("<html>Level 3: RFC 9980 Ed25519/X25519, or experimental NIST/Brainpool draft P-384 hybrid. Incoming v4 classical signatures are supported; outgoing signing requires a hybrid PQ profile.<br>Existing keys are reused; no YubiKey slots are changed. Import the same public identity on other devices to preserve fingerprints.<br>Self-signature verification does not establish trust. Reads signed HTML and multipart PGP/MIME as text. Attached public certificates can verify signatures without being saved or trusted. Use S/MIME for outgoing attachments.</html>"),BorderLayout.SOUTH);return p;
+        p.add(actions,BorderLayout.NORTH);p.add(new JLabel("<html>Level 5 software: v6 ML-DSA-87 + Ed448 / ML-KEM-1024 + X448. v4: P-521 signing; ML-KEM-768 + X25519 preferred, P-521 fallback.<br>Level 3: RFC 9980 Ed25519/X25519, or experimental NIST/Brainpool draft P-384 hybrid. Incoming v4 classical signatures are supported; outgoing signing requires a hybrid PQ profile.<br>Existing keys are reused; no YubiKey slots are changed. Import the same public identity on other devices to preserve fingerprints.<br>Self-signature verification does not establish trust. Reads signed HTML and multipart PGP/MIME as text. Attached public certificates can verify signatures without being saved or trusted. Use S/MIME for outgoing attachments.</html>"),BorderLayout.SOUTH);return p;
     }
     private byte[] readPgp(Path file)throws IOException{if(Files.size(file)>128*1024)throw new IOException("OpenPGP public key exceeds 128 KiB");return Files.readAllBytes(file);}
     private void importPgpContact(boolean recipientRole){
@@ -319,7 +322,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         try{GoogleSession.saveClient(new GoogleOAuth.Client(clientId.getText().trim(),new String(value).trim()),state());Files.deleteIfExists(state().directory().resolve("google-client.json"));googleLabel.setText("Google client configured · sign in to connect");status.setText("Desktop OAuth client saved in "+credentialStore()+". Choose Sign in with Google.");}
         catch(Exception e){error(e);}finally{Arrays.fill(value,'\0');}
     }
-    private static String credentialStore(){return DesktopState.windows()?"Windows Credential Manager":DesktopState.linux()?"Linux Secret Service":"Mac Keychain";}
+    private static String credentialStore(){return "passkey vault (or authenticated Mac Keychain for Google)";}
     private void signInGoogle(){
         try{
             GoogleOAuth.Client client=GoogleSession.client(state());
@@ -478,10 +481,13 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     private JPanel keysPanel() {
         JPanel outer = panel(); JPanel p = new JPanel(); p.setLayout(new BoxLayout(p,BoxLayout.Y_AXIS)); outer.add(new JScrollPane(p),BorderLayout.CENTER);
         p.add(section("Selected outgoing identity",identityLabel));
+        p.add(section("Passkey vault",new JLabel("PRF-encrypted settings and software identities; passkey approval unlocks this session.")));
+        p.add(left(button("Unlock / manage passkeys…",()->{try{state();DesktopVault.manage();status.setText("Passkey vault unlocked");}catch(Exception e){error(e);}}),button("Lock vault",this::lockVault),button("Passkey browser…",()->{try{String browser=DesktopPasskeyPrf.chooseBrowser(this,state());if(browser!=null){status.setText("Passkey browser saved: "+browser);JOptionPane.showMessageDialog(this,"Passkey browser saved: "+browser+"\nThe next passkey operation will use this choice.");}}catch(Exception e){error(e);}}),button("Move saved settings into vault…",()->job("Moving legacy mail credentials into passkey vault…",()->{DesktopVault.migrateCredentials();return true;},ok->status.setText("Saved account settings migrated; authenticated Google Keychain storage retained")))));
         p.add(section("1  Software identities (.p12)",new JLabel("Private keys are encrypted in a local PKCS#12 file; no YubiKey provisioning.")));
         JPanel saved=new JPanel(new FlowLayout(FlowLayout.LEFT));saved.add(softwareIdentities);
         saved.add(button("Open software identity",()->openSaved((DesktopState.SavedIdentity)softwareIdentities.getSelectedItem())));p.add(saved);
         p.add(left(button("Create software identity…",this::generate),button("Import software PKCS#12…",this::load)));
+        p.add(left(button("Protect / upgrade software identity…",this::protectSoftwareIdentity),button("Export passkey-wrapped identity…",this::exportIdentityTransfer),button("Import passkey-wrapped identity…",this::importIdentityTransfer)));
         p.add(section("2  YubiKey identities",new JLabel("Private keys stay on the bound YubiKey. Each identity remembers its serial and slots.")));
         JPanel hardware=new JPanel(new FlowLayout(FlowLayout.LEFT));hardware.add(yubikeyIdentities);
         hardware.add(button("Select YubiKey identity",()->openSaved((DesktopState.SavedIdentity)yubikeyIdentities.getSelectedItem())));
@@ -507,7 +513,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         settings.add(button("Show saved identity files",()->{try{Desktop.getDesktop().open(state().directory().toFile());}catch(Exception e){error(e);}}));p.add(settings);
         p.add(Box.createVerticalStrut(24));
         p.add(new JLabel("Generated identities are local test identities. Exchange certificate fingerprints out of band."));
-        p.add(new JLabel("Private keys stay local. Account passwords are not saved by this app."));
+        p.add(new JLabel("Private keys stay local. Saved account secrets require the passkey vault or authenticated Keychain."));
         return outer;
     }
     private void forgetYubiKeyIdentity(){
@@ -522,7 +528,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         }catch(Exception e){error(e);}
     }
     private DesktopState state()throws Exception{
-        if(desktopState==null){desktopState=DesktopState.open();desktopState.activate();}return desktopState;
+        if(desktopState==null){desktopState=DesktopState.open();desktopState.activate();DesktopVault.configure(desktopState,this);}return desktopState;
     }
     private void refreshSaved(){
         syncingOutgoing=true;
@@ -558,7 +564,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     private void openSaved(DesktopState.SavedIdentity saved){
         if(saved==null)return;
         char[] password=new char[0];
-        if(saved.passwordRequired()){
+        if(saved.passwordRequired()&&!desktopState.vaultIdentity(saved.id())){
             JPasswordField field=new JPasswordField();
             if(JOptionPane.showConfirmDialog(this,field,"Saved identity password",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){field.setText("");refreshSaved();return;}
             password=field.getPassword();field.setText("");
@@ -649,7 +655,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         try{
             JTextField email=new JTextField(from.getText()),extraEmails=new JTextField();
             JComboBox<TokenProfile> profile=new JComboBox<>(TokenProfile.values());profile.setSelectedItem(TokenProfile.LEVEL5);
-            JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("Inserted YubiKey serial: "+number+" (all user PIV slots empty)"));form.add(new JLabel("Certificate email address"));form.add(email);form.add(new JLabel("Additional email addresses (up to 4, comma-separated)"));form.add(extraEmails);form.add(new JLabel("Security profile (all options create four keys and both pure/hybrid identities)"));form.add(profile);
+            JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("Inserted YubiKey serial: "+number+" (all user PIV slots empty)"));form.add(new JLabel("Certificate email address"));form.add(email);form.add(new JLabel("Additional email addresses (up to 4, comma-separated)"));form.add(extraEmails);form.add(new JLabel("Security profile (Level 2/3: four keys; Level 5: eight keys; pure/hybrid identities)"));form.add(profile);
             form.add(new JLabel("Requires all 24 user PIV slots empty. Factory attestation is excluded."));
             form.add(new JLabel("No reset, import, deletion or replacement of existing keys is performed."));
             if(JOptionPane.showConfirmDialog(this,form,"Create YubiKey identity",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
@@ -661,9 +667,9 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         JPasswordField pin=new JPasswordField(),management=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default management key",true);
         JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel("YubiKey "+serial+" passed the empty-slot check."));
         form.add(new JLabel("Generate "+profile.ml+" in 9c; "+profile.kem+" in 9d."));form.add(new JLabel("Also generate ECDSA and ECDH "+(profile.category==2?"P-256":"P-384")+" in 83 and 82."));
-        form.add(new JLabel("All keys: PIN Always. Touch required: 9c / 9d; no touch: 82 / 83."));
-        JCheckBox createPgp=new JCheckBox(profile==TokenProfile.LEVEL5?"Also create classical P-384 OpenPGP identity (not PQ)":"Also create hybrid OpenPGP public identity",profile!=TokenProfile.LEVEL2);createPgp.setEnabled(profile!=TokenProfile.LEVEL2);form.add(createPgp);
-        form.add(new JLabel(profile!=TokenProfile.LEVEL2?"Uncheck to opt out. OpenPGP adds signing operations; Level 5 uses slots 83 / 82 only.":"OpenPGP is not supported for Level 2."));
+        form.add(new JLabel("All keys: PIN Always. Touch: 9c / 9d; Level 5 also 84 / 88 / 89. No touch: 82 / 83 / 85."));
+        JCheckBox createPgp=new JCheckBox(profile==TokenProfile.LEVEL5?"Also create OpenPGP v4 hybrid + classical compatibility certificates":"Also create hybrid OpenPGP public identity",profile!=TokenProfile.LEVEL2);createPgp.setEnabled(profile!=TokenProfile.LEVEL2);form.add(createPgp);
+        form.add(new JLabel(profile!=TokenProfile.LEVEL2?"Uncheck to opt out. OpenPGP adds signing operations; Level 5 adds ML-KEM-768/X25519 (84/85) and P-384 signing/ECDH (88/89).":"OpenPGP is not supported for Level 2."));
         form.add(new JLabel("YubiKey PIN"));form.add(pin);form.add(factory);form.add(new JLabel("Management key (hex, only if not factory default)"));form.add(management);
         form.add(new JLabel("Creating keys is not atomic: a failure can leave some slots provisioned. No automatic retry."));
         if(JOptionPane.showConfirmDialog(this,form,"Generate keys on empty YubiKey",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){pin.setText("");management.setText("");return;}
@@ -686,7 +692,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
                 for(boolean composite:hybrid?new boolean[]{!preferHybrid,preferHybrid}:new boolean[]{false}){
                     selected=Identity.forTokenProfile(email,profile,keys.get("9c"),composite?keys.get(traditional):null,keys.get("9d"),composite?keys.get("82"):null,ExternalMu.executable(signer),extra);
                     String id=state().remember(selected,email+" · "+selected.signatureAlgorithm(),null);state().bindToken(id,serial,traditional,"9d","82");
-                    if(createPgp&&OpenPgp.supported(selected)){state().activateIdentity(selected);OpenPgp.createOwn(state().directory(),selected,ExternalMu.executable(signer));}
+                    if(createPgp&&OpenPgp.supported(selected)){state().activateIdentity(selected);if(profile==TokenProfile.LEVEL5)Level5Compatibility.issue(state().directory(),selected,keys,ExternalMu.executable(signer));else OpenPgp.createOwn(state().directory(),selected,ExternalMu.executable(signer));}
                 }return selected;
     }
     private void finishTokenCertificates(){
@@ -700,19 +706,65 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             try{return issueTokenIdentities(serial,email,hybrid,keys,Boolean.parseBoolean(values.getProperty("preferHybrid",Boolean.toString(hybrid))),profile,Identity.additionalEmails(email,values.getProperty("additionalEmails","")),Boolean.parseBoolean(values.getProperty("createOpenPgp","false")));}finally{if(identity!=null)state().activateIdentity(identity);}
         },created->{setIdentity(created);refreshSaved();status.setText("Pending public certificates completed for the existing YubiKey keys");offerBundleBackup();});
     }
+    private void lockVault(){
+        if(!isEnabled())return;
+        if(googleToken!=null){googleToken.close();googleToken=null;}if(microsoftToken!=null){microsoftToken.close();microsoftToken=null;}
+        if(inbox!=null)try{inbox.close();}catch(Exception ignored){}inbox=null;inboxEntries=java.util.List.of();inboxModel.setRowCount(0);
+        if(identity!=null&&identity.signingKey()!=null){identity=null;identityLabel.setText("Software identity locked");}
+        currentRead=null;reader.setText("");DesktopVault.lock();status.setText("Vault locked; software keys and mail sessions released. Draft retained.");
+    }
     private void generate() {
         JTextField email=new JTextField(from.getText()),extraEmails=new JTextField();JComboBox<TokenProfile> mode=new JComboBox<>(TokenProfile.values());mode.setSelectedItem(TokenProfile.LEVEL5);
-        JPasswordField pass=new JPasswordField();JPanel p=new JPanel(new GridLayout(0,1,0,8));
-        p.add(new JLabel("Email address"));p.add(email);p.add(new JLabel("Additional email addresses (up to 4, comma-separated)"));p.add(extraEmails);p.add(new JLabel("Security profile (four software keys; both pure and hybrid identities)"));p.add(mode);
-        p.add(new JLabel("One password-protected .p12 file stores both identities. No YubiKey is changed."));
-        p.add(new JLabel("New PKCS#12 password (12+ characters)"));p.add(pass);
-        if(JOptionPane.showConfirmDialog(this,p,"Create software identities (.p12)",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){pass.setText("");return;}
-        Path file=chooseSave("Save new identity bundle", "identity.p12", "p12");if(file==null){pass.setText("");return;}
-        char[] password=pass.getPassword();pass.setText("");String address=email.getText().trim(),additional=extraEmails.getText();TokenProfile profile=(TokenProfile)mode.getSelectedItem();
-        job("Generating four software keys…",()->{try{
-            if(password.length<12)throw new IllegalArgumentException("Use at least 12 characters for the identity password");
-            var profiles=Identity.generateSoftwareProfile(address,profile,Identity.additionalEmails(address,additional));profiles.get(1).save(file,password,profiles.get(0));return profiles;
-        }finally{Arrays.fill(password,'\0');}},profiles->rememberSoftwareProfiles(profiles,file,address));
+        JPanel p=new JPanel(new GridLayout(0,1,0,8));p.add(new JLabel("Email address"));p.add(email);p.add(new JLabel("Additional email addresses (up to 4, comma-separated)"));p.add(extraEmails);p.add(new JLabel("Pure and hybrid S/MIME profiles"));p.add(mode);
+        p.add(new JLabel("Level 5 also creates v6 ML-DSA-87 + Ed448 / ML-KEM-1024 + X448 OpenPGP."));
+        p.add(new JLabel("v4 compatibility uses P-521 signing, hybrid encryption preferred, P-521 fallback."));
+        p.add(new JLabel("Stored locally with a random 256-bit password protected by your passkey vault."));
+        if(JOptionPane.showConfirmDialog(this,p,"Create vault-protected software identities",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+        String address=email.getText().trim(),additional=extraEmails.getText();TokenProfile profile=(TokenProfile)mode.getSelectedItem();
+        job("Unlocking vault and generating software identities…",()->{
+            state();DesktopVault.ensure();var profiles=SoftwareIdentityVault.addLevel5OpenPgp(Identity.generateSoftwareProfile(address,profile,Identity.additionalEmails(address,additional)));
+            state().rememberVaultProfiles(profiles,address);return profiles;
+        },profiles->{setIdentity(profiles.getLast());from.setText(address);refreshSaved();status.setText("Software identities saved in passkey-protected PKCS#12 storage");});
+    }
+    private void protectSoftwareIdentity(){
+        var saved=(DesktopState.SavedIdentity)softwareIdentities.getSelectedItem();if(saved==null)return;
+        JPasswordField field=new JPasswordField();char[] password=new char[0];
+        if(!desktopState.vaultIdentity(saved.id())){if(JOptionPane.showConfirmDialog(this,field,"Current software identity password",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;password=field.getPassword();field.setText("");}
+        char[] secret=password;
+        job("Protecting software identity; adding Level 5 OpenPGP if needed…",()->{try{
+            state();DesktopVault.ensure();String stored=state().get("identity."+saved.id()+".vault","");
+            var profiles=stored.isEmpty()?Identity.loadProfiles(state().directory().resolve("identities").resolve(saved.id()).resolve("identity.p12"),secret):SoftwareIdentityVault.load(state().vaultIdentityPath(stored),DesktopVault.vault());
+            profiles=SoftwareIdentityVault.addLevel5OpenPgp(profiles);state().rememberVaultProfiles(profiles,certificateEmail(profiles.getLast().signingCert()));return profiles;
+        }finally{Arrays.fill(secret,'\0');}},profiles->{setIdentity(profiles.getLast());refreshSaved();status.setText("Protected in vault. Existing S/MIME keys retained; original encrypted files retained as backups.");});
+    }
+    private void exportIdentityTransfer(){
+        var saved=(DesktopState.SavedIdentity)softwareIdentities.getSelectedItem();if(saved==null)return;
+        if(!desktopState.vaultIdentity(saved.id())){JOptionPane.showMessageDialog(this,"Use Protect / upgrade software identity first.");return;}
+        Path file=chooseSave("Export encrypted identity transfer","PQ-Mail-identity.pqidentity","pqidentity");if(file==null)return;
+        job("Wrapping identity for the selected passkey…",()->{
+            var wrapper=DesktopVault.transferPasskey();String credential=wrapper.get("credential").getAsString();
+            try(var result=DesktopPasskeyPrf.request(DesktopVault.vault().passkeyName(credential),wrapper)){
+                var profiles=SoftwareIdentityVault.load(state().vaultIdentityPath(state().get("identity."+saved.id()+".vault","")),DesktopVault.vault());
+                byte[] bytes=IdentityTransfer.create(profiles,result.credential(),result.salt(),result.prf(),state().directory());Files.write(file,bytes,StandardOpenOption.CREATE_NEW);return true;
+            }
+        },ok->status.setText("Passkey-wrapped identity exported. Same passkey required to import; no account tokens included."));
+    }
+    private void importIdentityTransfer(){
+        Path file=choose(false,"Import passkey-wrapped identity (.pqidentity)");if(file==null)return;
+        job("Unlocking identity transfer with its enrolled passkey…",()->{
+            state();if(Files.size(file)>IdentityTransfer.MAX_BYTES)throw new IOException("Identity transfer exceeds 1 MiB");byte[] bytes=Files.readAllBytes(file);var metadata=IdentityTransfer.metadata(bytes);String credential=metadata.get("credential").getAsString();DesktopVault.requireEnrolled(credential);
+            try(var result=DesktopPasskeyPrf.request(DesktopVault.vault().passkeyName(credential),metadata)){return IdentityTransfer.open(bytes,result.credential(),result.prf(),state().directory());}
+        },profiles->{String detail=profiles.stream().map(id->id.signatureAlgorithm()+" · "+id.signingCert().getSubjectX500Principal()).collect(java.util.stream.Collectors.joining("\n"));
+            if(JOptionPane.showConfirmDialog(this,detail+"\n\nImport these private identities into this instance's vault?\nExisting mail accounts and contact trust are unchanged.","Review identity transfer",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+            job("Saving imported identities under local vault protection…",()->{state().rememberVaultProfiles(profiles,certificateEmail(profiles.getLast().signingCert()));return profiles.getLast();},id->{setIdentity(id);refreshSaved();status.setText("Identity transfer imported with local vault protection; fingerprints preserved");});
+        });
+    }
+    private void exportSoftwareIdentity(){
+        var saved=(DesktopState.SavedIdentity)softwareIdentities.getSelectedItem();if(saved==null)return;
+        if(!desktopState.vaultIdentity(saved.id())){JOptionPane.showMessageDialog(this,"Use Protect / upgrade software identity first.");return;}
+        Path file=chooseSave("Export portable software identities","PQ-Mail-identities.p12","p12");if(file==null)return;
+        JPasswordField field=new JPasswordField();if(JOptionPane.showConfirmDialog(this,field,"Export password (12+ characters)",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;char[] pass=field.getPassword();field.setText("");
+        job("Exporting password-protected identities…",()->{try{if(pass.length<12)throw new IOException("Use at least 12 characters");byte[] bytes=SoftwareIdentityVault.export(state().vaultIdentityPath(state().get("identity."+saved.id()+".vault","")),DesktopVault.vault(),pass);try{Files.write(file,bytes,StandardOpenOption.CREATE_NEW);}finally{Arrays.fill(bytes,(byte)0);}return true;}finally{Arrays.fill(pass,'\0');}},ok->status.setText("Portable .p12 exported with your chosen password; vault password not exported"));
     }
     private void rememberSoftwareProfiles(java.util.List<Identity> profiles,Path file,String name){
         try{state().rememberSoftwareProfiles(profiles,file,name);setIdentity(profiles.getLast());from.setText(certificateEmail(identity.signingCert()));refreshSaved();status.setText("Software identities saved. Select pure or hybrid in Sign with.");}catch(Exception e){error(e);}
@@ -721,8 +773,8 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         Path file=choose(false,"Load identity .p12");if(file==null)return;
         JPasswordField pass=new JPasswordField();if(JOptionPane.showConfirmDialog(this,pass,"Identity password",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){pass.setText("");return;}
         char[] password=pass.getPassword();pass.setText("");job("Loading identity…",()->{try{
-            var profiles=Identity.loadProfiles(file,password);for(var id:profiles)if(id.signingKey()==null)throw new IOException("This file has no software signing key. Select its saved YubiKey identity instead.");return profiles;
-        }finally{Arrays.fill(password,'\0');}},profiles->rememberSoftwareProfiles(profiles,file,file.getFileName().toString()));
+            var profiles=Identity.loadProfiles(file,password);for(var id:profiles)if(id.signingKey()==null)throw new IOException("This file has no software signing key. Select its saved YubiKey identity instead.");state().rememberVaultProfiles(profiles,file.getFileName().toString());return profiles;
+        }finally{Arrays.fill(password,'\0');}},profiles->{setIdentity(profiles.getLast());refreshSaved();status.setText("Imported into vault-protected storage; original file unchanged");});
     }
     private String tokenAdapter(boolean kem){String selected=desktopState.adapter(kem);return selected==null?DesktopState.resources().resolve("adapters").resolve(kem?"pkcs11-kem.py":"pkcs11-mu.py").toString():selected;}
     private void setIdentity(Identity id) {
@@ -731,6 +783,14 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         try{if(OpenPgp.supported(id))pgpRecipients.remember(OpenPgp.loadOwn(state().directory(),id));}catch(Exception ignored){}
         identityLabel.setText(id.signatureAlgorithm()+" · "+id.signingCert().getSubjectX500Principal());status.setText("Identity ready. Import a recipient certificate to encrypt.");}
 
+    private void migratePgpCertification(){try{
+        Identity id=identity;if(id==null||id.signingKey()!=null||!Identity.HYBRID_65_P384_SIGN.equals(id.signatureAlgorithm()))throw new IOException("Select a Level 3 hybrid YubiKey identity with RFC 9980 Ed25519/X25519 keys in 84/85.");
+        var entries=state().certificateBundle(id);int serial=entries.get(0).serial();
+        String message="YubiKey "+serial+"\nGenerate ML-DSA-65 in empty 86 (PIN + touch) and Ed25519 in empty 87 (PIN; no touch).\nAlso generate separate Ed25519 in empty 88 and X25519 in empty 89 (PIN + touch).\nPreserve existing signing 9c/84 and encryption 9d/85 keys.\nCreate a certification-only primary and cross-certified signing subkey.\nThe primary fingerprint changes. Transfer only previously trusted certified email addresses; remove old contact trust.\nBack up and restore-check the new bundle before activating it locally.\nIf interrupted, use this same action to finish recorded certificates/bundle without generating keys again.\nIf generation was partial, stop and inspect the key; occupied slots are never overwritten.";
+        if(JOptionPane.showConfirmDialog(this,message,"Migrate OpenPGP identity — new fingerprint",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+        char[] admin=managementKey();if(admin==null)return;
+        String path=tokenAdapter(false);job("Migrating certification keys and backing up bundle…",()->OpenPgpMigration.run(state(),id,entries,ExternalMu.executable(path),ExternalMu.certification(path),OnKeyDesktop::new,admin),result->{pgpRecipient=null;pgpSigner=null;refreshContacts();refreshSaved();pgpStatus.setText(result);status.setText("OpenPGP migration and on-key backup completed.");});
+    }catch(Exception e){error(e);}}
     private char[] managementKey(){
         JPasswordField field=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default AES-192 management key");
         JPanel p=new JPanel(new GridLayout(0,1));p.add(new JLabel("Management key authorizes public storage / migration. It is not the PIN."));p.add(field);p.add(factory);
@@ -819,7 +879,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             String algorithm=usePgp()?pgpRecipient.encryptionDescription():recipient.getPublicKey().getAlgorithm();
             if(JOptionPane.showOptionDialog(this,CryptoWarnings.encryption(algorithm),"Non-PQ encryption",JOptionPane.DEFAULT_OPTION,JOptionPane.WARNING_MESSAGE,null,new Object[]{"Cancel","Encrypt anyway"},"Cancel")!=1)return;
         }
-        if(usePgp()&&pgpRecipient!=null&&pgpRecipient.version()==4&&JOptionPane.showConfirmDialog(this,"This recipient has a v4 certificate. Use classical Ed25519 compatibility signing?\nYour v4 and v6 public certificates, plus a signing-only v4 copy for older clients, will be attached.\nEd25519 signatures are not post-quantum resistant.","v4 compatibility signing",JOptionPane.OK_CANCEL_OPTION,JOptionPane.WARNING_MESSAGE)!=JOptionPane.OK_OPTION)return;
+        if(usePgp()&&pgpRecipient!=null&&pgpRecipient.version()==4&&JOptionPane.showConfirmDialog(this,"This recipient has a v4 certificate. Use classical compatibility signing (P-521 for Level 5 software; P-384 for Level 5 YubiKey; Ed25519 for Level 3)?\nYour v4 and v6 public certificates will be attached, including a classical-only v4 copy for migrated identities.\nThese compatibility signatures are not post-quantum resistant.","v4 compatibility signing",JOptionPane.OK_CANCEL_OPTION,JOptionPane.WARNING_MESSAGE)!=JOptionPane.OK_OPTION)return;
         final boolean pgp=usePgp(),pgpEncrypt=encrypt.isSelected();final OpenPgp.PublicIdentity pgpTo=pgpRecipient;
         Path file=send?null:chooseSave("Save signed message", "message.eml", "eml");if(!send&&file==null)return;
         Account a=send?account(true):null;if(send&&a==null)return;
@@ -955,10 +1015,10 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         if(smtp){Object[] choices={"Gmail API","Hotmail / Outlook (Microsoft)","Other host (SMTP)","Cancel"};int choice=JOptionPane.showOptionDialog(this,"Choose how to authenticate for sending","Send using",JOptionPane.DEFAULT_OPTION,JOptionPane.QUESTION_MESSAGE,null,choices,choices[0]);if(choice==0)return googleAccount(true);if(choice==1)return microsoftAccount();if(choice!=2)return null;}
         String prefix=smtp?"smtp.":"imap.";
         DesktopState settings;try{settings=state();}catch(Exception e){error(e);return null;}
-        JTextField host=new JTextField(settings.get(prefix+"host","")),port=new JTextField(settings.get(prefix+"port",smtp?"587":"993")),user=new JTextField(settings.get(prefix+"user",from.getText()));JPasswordField pass=new JPasswordField();
+        JTextField host=new JTextField(settings.get(prefix+"host","")),port=new JTextField(settings.get(prefix+"port",smtp?"587":"993")),user=new JTextField(settings.get(prefix+"user",from.getText()));JPasswordField pass=new JPasswordField(settings.get(prefix+"password",""));
         JPanel p=new JPanel(new GridLayout(0,1,0,6));p.add(new JLabel(smtp?"SMTP with required STARTTLS":"IMAP over TLS"));p.add(row("Host",host));p.add(row("Port",port));p.add(row("User",user));p.add(row("Password",pass));
         if(JOptionPane.showConfirmDialog(this,p,smtp?"SMTP account":"IMAP account",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return null;
-        try {int n=Integer.parseInt(port.getText());if(n<1||n>65535||host.getText().isBlank())throw new IllegalArgumentException("Invalid host or port");settings.set(prefix+"host",host.getText().trim());settings.set(prefix+"port",Integer.toString(n));settings.set(prefix+"user",user.getText().trim());settings.save();char[] credential=pass.getPassword();pass.setText("");return new Account(host.getText().trim(),n,user.getText().trim(),credential,false);}catch(Exception e){error(e);return null;}
+        try {int n=Integer.parseInt(port.getText());if(n<1||n>65535||host.getText().isBlank())throw new IllegalArgumentException("Invalid host or port");settings.set(prefix+"host",host.getText().trim());settings.set(prefix+"port",Integer.toString(n));settings.set(prefix+"user",user.getText().trim());settings.save();char[] credential=pass.getPassword();settings.set(prefix+"password",new String(credential));pass.setText("");return new Account(host.getText().trim(),n,user.getText().trim(),credential,false);}catch(Exception e){error(e);return null;}
     }
     private <T> void job(String label,Callable<T> task,java.util.function.Consumer<T> success){
         status.setText(label);setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));setEnabled(false);
@@ -969,7 +1029,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         JFileChooser chooser=new JFileChooser();chooser.setDialogTitle(title);
         chooser.setAcceptAllFileFilterUsed(false);
         for(String extension:extensions)chooser.addChoosableFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
-            extension.equals("pem")?"PEM certificate (*.pem)":extension.equals("cer")?"DER certificate (*.cer)":extension.equals("p12")?"PKCS#12 identity (*.p12)":"Email message (*.eml)",extension));
+            extension.equals("pqidentity")?"Passkey-wrapped identity (*.pqidentity)":extension.equals("pem")?"PEM certificate (*.pem)":extension.equals("cer")?"DER certificate (*.cer)":extension.equals("p12")?"PKCS#12 identity (*.p12)":"Email message (*.eml)",extension));
         chooser.setFileFilter(chooser.getChoosableFileFilters()[0]);
         chooser.setSelectedFile(new java.io.File(filename));
         chooser.addPropertyChangeListener(JFileChooser.FILE_FILTER_CHANGED_PROPERTY,event->{

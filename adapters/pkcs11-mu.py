@@ -139,7 +139,11 @@ def single_process_sign(helper,spki,payload,provider,module,serial,object_id,alg
                 raw=getattr(result,"stderr",b"") or b""
                 match=re.search(rb"single-session signer failed at ([a-z -]+); no retry",raw)
                 stage=" at "+match.group(1).decode("ascii") if match else ""
-                raise AdapterError("Single-process PKCS#11 signing failed"+stage+"; no retry")
+                details=[]
+                for line in raw.splitlines():
+                    if re.fullmatch(rb"PQMAIL_ERROR [0-9A-F]{8,16} [A-Za-z0-9 _()-]{1,120}",line) or re.fullmatch(rb"PQMAIL_PIN_CALLBACKS [0-9]{1,4}",line):
+                        details.append(line.decode("ascii"))
+                raise AdapterError("Single-process PKCS#11 signing failed"+stage+"; no retry"+("; "+"; ".join(details[:9]) if details else ""))
             if not signature.exists() or signature.stat().st_size>8192:raise AdapterError("Missing or oversized signature")
             signed=signature.read_bytes();validate_signature_length(algorithm,len(signed));return signed
     finally:pin[:]=b"\0"*len(pin)
@@ -160,6 +164,18 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
     if algorithm not in ("ML-DSA-44", "ML-DSA-65", "ML-DSA-87", "ECDSA-P256-SHA256", "ECDSA-P384-SHA384", "RSA3072-PSS-SHA256", "Ed25519"):
         raise AdapterError("Unsupported signing algorithm")
     object_id = "%02" if algorithm.startswith("ML-DSA-") else ec_object_id("84" if algorithm=="Ed25519" else ec_slot)
+    if os.environ.get("PQMAIL_LEVEL5_COMPATIBILITY"):
+        if os.environ["PQMAIL_LEVEL5_COMPATIBILITY"]!="1" or algorithm!="ECDSA-P384-SHA384":raise AdapterError("Invalid Level 5 compatibility signing operation")
+        object_id=ec_object_id("88")
+    compatibility = os.environ.get("PQMAIL_COMPATIBILITY_SLOT", "")
+    if compatibility:
+        if compatibility != "88" or algorithm != "Ed25519":raise AdapterError("Invalid compatibility slot")
+        object_id = ec_object_id("88")
+    certification = os.environ.get("PQMAIL_CERTIFICATION_SLOTS", "")
+    if certification:
+        if certification != "86,87" or algorithm not in ("ML-DSA-65", "Ed25519"):
+            raise AdapterError("Invalid certification slot configuration")
+        object_id = ec_object_id("86" if algorithm == "ML-DSA-65" else "87")
     helper=Path(executable).with_name("pqmail-pkcs11-sign.exe" if os.name=="nt" else "pqmail-pkcs11-sign")
     if pin is not None and helper.is_file():
         return single_process_sign(helper,spki,mu,provider,module,serial,object_id,algorithm,pin,run)

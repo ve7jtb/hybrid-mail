@@ -148,6 +148,7 @@ class RsaEncodingRegressionTest(unittest.TestCase):
             different=bytearray(decoded);different[-1]=3
             self.assertFalse(ADAPTER.public_keys_match(bytes(different),*args))
 
+if __name__=="__main__":unittest.main()
 
 class DiscoveryEnvironmentTest(unittest.TestCase):
     def test_scoped_metadata_and_inherited_flags(self):
@@ -167,7 +168,7 @@ class SingleProcessAdapterTest(unittest.TestCase):
     def test_single_call_key_binding_and_secret_cleanup(self):
         import tempfile
         with tempfile.TemporaryDirectory() as temp:
-            helper=Path(temp)/('pqmail-pkcs11-sign.exe' if os.name=='nt' else 'pqmail-pkcs11-sign');helper.touch();calls=[];pin=bytearray(b'654321');paths=[]
+            helper=Path(temp)/'pqmail-pkcs11-sign';helper.touch();calls=[];pin=bytearray(b'654321');paths=[]
             def run(command,**kw):
                 calls.append(command);paths.extend([Path(command[3]),Path(command[4])])
                 self.assertEqual(command[2],'pkcs11:serial=123456;id=%02;type=')
@@ -184,7 +185,7 @@ class SingleProcessAdapterTest(unittest.TestCase):
         import tempfile
         for timeout in [False,True]:
             with tempfile.TemporaryDirectory() as temp:
-                (Path(temp)/('pqmail-pkcs11-sign.exe' if os.name=='nt' else 'pqmail-pkcs11-sign')).touch();pin=bytearray(b'654321');calls=[]
+                (Path(temp)/'pqmail-pkcs11-sign').touch();pin=bytearray(b'654321');calls=[]
                 def run(command,**kw):
                     calls.append(command)
                     if timeout:raise subprocess.TimeoutExpired(command,100)
@@ -192,5 +193,3 @@ class SingleProcessAdapterTest(unittest.TestCase):
                 with self.assertRaises((ADAPTER.AdapterError,subprocess.TimeoutExpired)):
                     ADAPTER.sign(b'p'*2614,MU,str(Path(temp)/'openssl'),'/provider','/module','123456',io.BytesIO(),run,algorithm='ML-DSA-87',pin=pin)
                 self.assertEqual(len(calls),1);self.assertEqual(pin,bytearray(6))
-
-if __name__=="__main__":unittest.main()

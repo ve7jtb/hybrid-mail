@@ -17,7 +17,9 @@ import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 
 public record Identity(X509Certificate signingCert, PrivateKey signingKey,
-                       X509Certificate encryptionCert, PrivateKey encryptionKey, PrivateKey traditionalKey) {
+                       X509Certificate encryptionCert, PrivateKey encryptionKey, PrivateKey traditionalKey, SoftwareOpenPgp softwareOpenPgp) {
+    public Identity(X509Certificate sc,PrivateKey sk,X509Certificate ec,PrivateKey ek,PrivateKey tk){this(sc,sk,ec,ek,tk,null);}
+    public Identity withSoftwareOpenPgp(SoftwareOpenPgp pgp){return new Identity(signingCert,signingKey,encryptionCert,encryptionKey,traditionalKey,pgp);}
     public static final String PURE_SIGN = "ML-DSA-65";
     public static final String HYBRID_SIGN = "MLDSA65-ECDSA-P256-SHA512";
     public static final String HYBRID_RSA_SIGN = "MLDSA65-RSA3072-PSS-SHA512";
@@ -198,7 +200,7 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
     public void save(Path file, char[] password) throws Exception {save(file,password,null);}
     void save(Path file,char[] password,Identity pure)throws Exception {
         if (password.length < 12) throw new IllegalArgumentException("Use at least 12 characters for the identity password");
-        KeyStore ks = KeyStore.getInstance("PKCS12", "BC"); ks.load(null, password);
+        KeyStore ks = KeyStore.getInstance("PKCS12-AES256-AES128", "BC"); ks.load(null, password);
         if (signingKey != null) ks.setKeyEntry("sign", signingKey, password, new java.security.cert.Certificate[]{signingCert});
         else ks.setCertificateEntry("sign", signingCert);
         if (encryptionKey != null) ks.setKeyEntry("encrypt", encryptionKey, password, new java.security.cert.Certificate[]{encryptionCert});
@@ -212,6 +214,7 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
             ks.setKeyEntry("pure-sign",pure.signingKey(),password,new java.security.cert.Certificate[]{pure.signingCert()});
             ks.setKeyEntry("pure-encrypt",pure.encryptionKey(),password,new java.security.cert.Certificate[]{pure.encryptionCert()});
         }
+        if(softwareOpenPgp!=null)softwareOpenPgp.store(ks,password);
         PrivateFiles.create(file);
         try (OutputStream out = Files.newOutputStream(file)) { ks.store(out, password); }
     }
@@ -242,7 +245,7 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         if (!(sc.getPublicKey() instanceof java.security.interfaces.RSAPublicKey) && !(sc.getPublicKey() instanceof java.security.interfaces.ECPublicKey) && !a.equalsIgnoreCase(PURE_SIGN) && !a.equalsIgnoreCase(HYBRID_SIGN) && !a.equalsIgnoreCase(HYBRID_RSA_SIGN) && !a.equalsIgnoreCase(PURE_87_SIGN) && !a.equalsIgnoreCase(HYBRID_87_SIGN) && !a.equalsIgnoreCase(PURE_44_SIGN) && !a.equalsIgnoreCase(HYBRID_44_SIGN) && !a.equalsIgnoreCase(HYBRID_65_P384_SIGN))
             throw new GeneralSecurityException("Unsupported signing key: " + a);
         return new Identity(sc, (PrivateKey)ks.getKey(prefix+"sign", password), (X509Certificate)ks.getCertificate(prefix+"encrypt"),
-            (PrivateKey)ks.getKey(prefix+"encrypt", password), (PrivateKey)ks.getKey("traditional", password));
+            (PrivateKey)ks.getKey(prefix+"encrypt", password), (PrivateKey)ks.getKey("traditional", password), SoftwareOpenPgp.load(ks,password));
     }
     /** Supported software/public recipient profiles; token recovery keeps its narrower validation. */
     public static void validateEncryptionKey(PublicKey key)throws Exception{

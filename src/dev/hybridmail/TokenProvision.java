@@ -39,6 +39,8 @@ final class TokenProvision {
         for(String slot:hybrid?List.of("9c","9d",json.has("83")?"83":"9a","82"):List.of("9c","9d")){
             String alg=slot.equals("9c")?"ML-DSA":slot.equals("9d")?"ML-KEM":"EC";
             keys.put(slot,KeyFactory.getInstance(alg,"BC").generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(json.get(slot).getAsString()))));
-        }return keys;
+        }
+        for(String slot:List.of("84","85","88","89"))if(json.has(slot)){String alg=slot.equals("84")?"ML-KEM":slot.equals("85")?"X25519":"EC";keys.put(slot,KeyFactory.getInstance(alg,"BC").generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(json.get(slot).getAsString()))));}
+        return keys;
     }
 }

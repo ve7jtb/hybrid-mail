@@ -100,7 +100,7 @@ Android now restores these bundles and uses the extra keys through YubiKit over 
 
 Validation includes RFC 9980 Appendix A.3 public certificate and detached
 signature vectors, simulated-token PGP/MIME round trips, and bundle restoration
-with wrong/missing extra-slot rejection. Desktop hardware certificate signing, encrypted-message round trip, bundle backup and fresh restoration passed on key <YUBIKEY_SERIAL>. Android emulator protocol tests passed; physical Android NFC validation remains pending.
+with wrong/missing extra-slot rejection. Desktop hardware certificate signing, encrypted-message round trip, bundle backup and fresh restoration passed on a Level 3 Beta0 key. Android emulator protocol tests passed; physical Android NFC validation remains pending.
 
 ## V4 recipients and incoming signatures
 
@@ -130,12 +130,34 @@ For v4 recipients, the desktop RFC 9980 YubiKey identity signs with its existing
 
 Local regression tests cover v6-first selection (including classical v6 over hybrid v4), hybrid subkey preference and revocation fallback, Ed25519 certificate/message validation, both attached certificates, v3 hybrid encryption/decryption and tamper rejection, and continued v6 hybrid signing for v6 or unknown recipients. Hardware calls were simulated in these tests; no email was sent.
 
-### Older-client signing certificate view
+### Compatibility certificate views
 
-Desktop v4 compatibility messages also attach `public-key-v4-signing.asc`: the same Ed25519 primary key and self-certified email, with no encryption subkeys. Proton’s public crypto library rejects algorithm 35 in v4 certificates; this additional view passes its compatibility check without removing the full hybrid v4 or v6 certificates. All three files are signed. No new private key or trust decision is involved. The original Gmail test signature verified with Bouncy Castle, GnuPG and OpenPGP.js; Proton’s local MIME verifier accepted the signing-only view. Live automatic detection after this change remains untested.
+Migrated identities attach exactly three public certificates for v4 recipients: v6, full v4 hybrid-capable, and v4 classical-only. The v4 variants share one primary fingerprint. The diagnostic signing-only attachment has been removed.
 
 ### Sequoia v6 interoperability
 
 The desktop parser accepts RFC 9980 v6 ML-DSA-65 + Ed25519 certificates with multiple certified email user IDs, certification-only primaries, separate cross-certified signing subkeys, authentication subkeys and ML-KEM-768 + X25519 encryption subkeys. It verifies bindings, expiry and revocation before use; importing does not grant trust. Unsupported algorithms and critical extensions remain rejected. Existing PQ Mail identity generation and fingerprints are unchanged.
 
-Local tests against Sequoia sq 1.5.0 / sequoia-openpgp 2.4.1 verified detached signatures and signed/encrypted payloads in both directions using disposable software keys. Sequoia default encrypted-message padding is accepted. Missing AEAD preferences use the RFC 9580 AES-128/OCB fallback. This tests OpenPGP cryptography and MIME payload handling, not delivery through another mail service or a new hardware run. Public regression fixtures are in `tests/fixtures/sequoia`; no private test keys are included.
+Local tests against Sequoia sq 1.5.0 / sequoia-openpgp 2.4.1 verified detached signatures and signed/encrypted payloads in both directions using disposable software keys. Sequoia default encrypted-message padding is accepted. RFC 9980 PQ certificates use the implicit AES-256/OCB preference when no explicit AEAD preferences are present. This tests OpenPGP cryptography and MIME payload handling, not delivery through another mail service or a new hardware run. Public regression fixtures are in `tests/fixtures/sequoia`; no private test keys are included.
+
+### Separate certification-key migration (desktop)
+
+Choose **OpenPGP → Create / migrate v6 identity (86–89)…** for an existing Level 3 RFC 9980 YubiKey identity. The selected token serial and all existing public-key bindings are checked. Slots 86–89 must contain neither keys nor certificates before generation; unknown slot status fails closed. Existing 9c/84 hybrid signing, 9d/85 hybrid encryption, and S/MIME keys/certificates are preserved.
+
+| Purpose | Slots | Algorithms |
+|---|---|---|
+| Certification-only v6 primary | 86 / 87 | ML-DSA-65 + Ed25519 |
+| Hybrid signing subkey | 9c / 84 | Existing ML-DSA-65 + Ed25519 |
+| Hybrid encryption subkey | 9d / 85 | Existing ML-KEM-768 + X25519 |
+| Classical compatibility signing | 88 | New Ed25519 |
+| Classical compatibility encryption | 89 | New X25519 |
+
+New keys require the PIN for use. Slots 86, 88 and 89 additionally require touch for newly generated keys; 87 does not. Existing keys retain their policies. The signing subkeys are cross-certified. The new v6 primary binds both hybrid and classical subkeys. Outgoing v6 signatures remain hybrid; v4 compatibility signatures use only slot 88. V4 classical encryption uses slot 89, never the hybrid X25519 component in 85.
+
+The migration changes fingerprints. It transfers only already-trusted certified email addresses to the corresponding new v6/v4 fingerprints; it removes the old contact trust and grants no additional trust. Local journal files contain public certificates, public keys and trust choices only. Public rollback files may remain locally, but old identities are not kept active for message reading.
+
+The signed on-key bundle is committed and read-back restored before local identity/trust changes. The new PQMAILB2 payload stores the v6 and full v4 public certificate; the classical-only v4 view is derived without private-key access. Older B1 bundles remain readable. Older applications that understand only B1 need updating before restoring B2. No PINs, management keys, private keys or trust decisions are written to the token bundle.
+
+After an interrupted certificate/bundle phase, repeat the migration action to use the public journal; it does not regenerate recorded keys. A partial/uncertain key-generation outcome stops and requires inspection rather than automatically retrying or overwriting a slot. The previous bundle bank is retained by the two-bank writer.
+
+Validation uses software token simulators: key preservation, signing/encryption, v4/v6 trust transfer, interrupted-write resume, B2 restoration and rejection of wrong keys/occupied slots. Sequoia validates the separated primary/signing subkey and its signatures; classical X25519 decryption was independently checked with Sequoia v4 and v6 ciphertexts. Physical 86–89 provisioning remains to be tested.

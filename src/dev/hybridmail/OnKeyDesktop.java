@@ -6,7 +6,7 @@ import java.util.concurrent.*;
 import com.google.gson.*;
 
 /** One exclusive PC/SC connection, shared by Windows/macOS/Linux. */
-final class OnKeyDesktop implements OnKeyBundle.Card {
+final class OnKeyDesktop implements OpenPgpMigration.Card {
     private final Process process;
     private final BufferedReader reader;
     private final Writer writer;
@@ -26,7 +26,10 @@ final class OnKeyDesktop implements OnKeyBundle.Card {
     public byte[] publicKey(String slot)throws Exception{var r=request("key");r.addProperty("slot",slot);var v=call(r);return v.isJsonNull()?null:Base64.getDecoder().decode(v.getAsString());}
     public byte[] get(int tag)throws Exception{var r=request("get");r.addProperty("tag",tag);var v=call(r);return v.isJsonNull()?null:Base64.getDecoder().decode(v.getAsString());}
     public void put(int tag,byte[] bytes)throws Exception{var r=request("put");r.addProperty("tag",tag);r.addProperty("data",Base64.getEncoder().encodeToString(bytes));call(r);}
+    public void deleteObject(int tag)throws Exception{var r=request("delete");r.addProperty("tag",tag);call(r);}
     public void authenticate(char[] management)throws Exception{try{var r=request("auth");r.addProperty("management",new String(management));call(r);}finally{Arrays.fill(management,'\0');}}
+    public void checkCertificationEmpty()throws Exception{call(request("certification-empty"));}
+    public void generateCertification()throws Exception{call(request("certification-generate"));}
     public void move9aTo83()throws Exception{call(request("move"));}
     public void close(){try{writer.close();}catch(Exception ignored){}process.destroyForcibly();reads.shutdownNow();}
 }

@@ -45,7 +45,7 @@ def export_public(executable,provider,module,serial,slot,algorithm,run=subproces
         folder=Path(directory);config=folder/'openssl.cnf';public=folder/'public.der'
         config.write_text(_common.configuration(provider,module,public=True),encoding='utf-8')
         result=run([executable,'pkey','-provider','default','-provider','pkcs11','-pubin','-in',uri,'-pubout','-outform','DER','-out',str(public)],
-                   stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,env=_common.child_environment(config),timeout=30)
+                   stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,env=_common.child_environment(config,object_id(slot)),timeout=30)
         if result.returncode or not public.exists():raise AdapterError('Cannot export encryption slot public key'+_common.safe_openssl_error(result))
         size=public.stat().st_size
         if not (1190<=size<=1250 if algorithm=='ML-KEM-768' else 1570<=size<=1620 if algorithm=='ML-KEM-1024' else size==44 if algorithm=='X25519' else 80<=size<=150):raise AdapterError('Unexpected encryption public key type')
@@ -56,18 +56,35 @@ def check_config(executable,serial):
     if not Path(executable).is_absolute() or not serial.isdecimal():raise AdapterError('Set absolute OPENSSL_BIN and explicit PKCS11_SERIAL')
 
 
+def single_process_recover(helper,algorithm,public,data,provider,module,serial,slot,pin,run):
+    with tempfile.TemporaryDirectory(prefix='pqmail-kem-session-') as directory:
+        folder=Path(directory);config=folder/'openssl.cnf'
+        config.write_text(_common.configuration(provider,module),encoding='utf-8')
+        expected=folder/'expected.der';expected.write_bytes(public)
+        incoming=folder/'public-input.der';incoming.write_bytes(data)
+        result=run([str(helper),algorithm,'pkcs11:serial='+serial+';id='+object_id(slot)+';type=',str(expected),str(incoming)],
+                   input=bytes(pin)+b'\n',stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                   env=_common.child_environment(config,object_id(slot)),timeout=100,start_new_session=True)
+        if result.returncode:raise AdapterError('Single-process PKCS#11 '+algorithm+' failed; no retry'+_common.safe_openssl_error(result))
+        if len(result.stdout)!=(48 if algorithm=='ECDH-P384' else 32):raise AdapterError('Invalid token shared secret length')
+        return result.stdout
+
+
 def recover(algorithm,public,data,executable,provider,module,serial,slot,pin,run=subprocess.run):
     check_config(executable,serial)
     if algorithm not in ('ML-KEM-768','ML-KEM-1024','ECDH-P256','ECDH-P384','X25519'):raise AdapterError('Unsupported private operation')
     if not 6<=len(pin)<=8 or any(c<32 or c>126 for c in pin):raise AdapterError('Invalid PIN input format')
     try:
+        helper=Path(executable).with_name('pqmail-pkcs11-kem.exe' if os.name=='nt' else 'pqmail-pkcs11-kem')
+        if helper.is_file():
+            return single_process_recover(helper,algorithm,public,data,provider,module,serial,slot,pin,run)
         actual=export_public(executable,provider,module,serial,slot,algorithm,run)
         if not hmac.compare_digest(public,actual):raise AdapterError('Encryption slot public key does not match the recipient identity')
         uri='pkcs11:serial='+serial+';id='+object_id(slot)+';type=private'
         with tempfile.TemporaryDirectory(prefix='hybrid-mail-kem-') as directory:
             folder=Path(directory);config=folder/'openssl.cnf';input_file=folder/'public-input.der'
             config.write_text(_common.configuration(provider,module),encoding='utf-8');input_file.write_bytes(data)
-            env=_common.child_environment(config);env['HYBRID_MAIL_PIN_STDIN']='1'
+            env=_common.child_environment(config,object_id(slot));env['HYBRID_MAIL_PIN_STDIN']='1'
             command=[executable,'pkeyutl','-provider','default','-provider','pkcs11','-inkey',uri]
             command+=['-decap','-in',str(input_file)] if algorithm.startswith('ML-KEM-') else ['-derive','-peerkey',str(input_file),'-peerform','DER']
             if os.name=='nt':
@@ -87,6 +104,17 @@ def recover(algorithm,public,data,executable,provider,module,serial,slot,pin,run
     finally:pin[:]=b'\0'*len(pin)
 
 
+def selected_slot(algorithm):
+    slot=os.environ.get('PKCS11_KEM_SLOT' if algorithm.startswith('ML-KEM-') else 'PKCS11_ECDH_SLOT','')
+    if algorithm=='X25519':slot='85'
+    if os.environ.get('PQMAIL_COMPATIBILITY_SLOT'):
+        if algorithm!='X25519' or os.environ['PQMAIL_COMPATIBILITY_SLOT']!='89':raise AdapterError('Invalid compatibility slot')
+        slot='89'
+    if os.environ.get("PQMAIL_LEVEL5_COMPATIBILITY"):
+        if os.environ["PQMAIL_LEVEL5_COMPATIBILITY"]!="1" or algorithm not in ("ML-KEM-768","X25519","ECDH-P384"):raise AdapterError("Invalid Level 5 compatibility encryption operation")
+        slot={"ML-KEM-768":"84","X25519":"85","ECDH-P384":"89"}[algorithm]
+    return slot
+
 def main():
     pin=None
     try:
@@ -101,8 +129,7 @@ def main():
         pin=bytearray(sys.stdin.buffer.readline(10))
         if not pin.endswith(b'\n'):raise AdapterError('Missing app PIN input')
         del pin[-1:]
-        slot=os.environ.get('PKCS11_KEM_SLOT' if algorithm.startswith('ML-KEM-') else 'PKCS11_ECDH_SLOT','')
-        if algorithm=='X25519':slot='85'
+        slot=selected_slot(algorithm)
         secret=recover(algorithm,public,data,*values,slot,pin)
         sys.stdout.buffer.write(secret);sys.stdout.buffer.flush();return 0
     except (AdapterError,OSError,subprocess.SubprocessError) as error:

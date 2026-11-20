@@ -29,7 +29,7 @@ public final class V4CompatibilityTest {
   ok(!new String(v4.export(),java.nio.charset.StandardCharsets.US_ASCII).contains("\r\n="));
   ok(!new String(OpenPgp.decoded(OpenPgp.mime(parts.second())),java.nio.charset.StandardCharsets.US_ASCII).contains("\r\n="));
   var signingOnly=OpenPgp.signingOnlyCompatibility(v4);ok(!signingOnly.canEncrypt()&&signingOnly.fingerprint().equals(v4.fingerprint()));
-  var mimeBody=new jakarta.mail.internet.MimeBodyPart(new java.io.ByteArrayInputStream(parts.first()));ok(((jakarta.mail.Multipart)mimeBody.getContent()).getCount()==4);
+  var mimeBody=new jakarta.mail.internet.MimeBodyPart(new java.io.ByteArrayInputStream(parts.first()));ok(((jakarta.mail.Multipart)mimeBody.getContent()).getCount()==3);
   var opened=OpenPgp.open(signed,signingOnly,null,null,null);ok(!opened.postQuantum()&&opened.text().equals("Hello"));
   for(var target:List.of(v4,classical)){
    byte[] encrypted=OpenPgp.composeForRecipient(id,own,target,true,"legacy@example.com","legacy@example.com","Compatibility","Hello",hw);

@@ -5,11 +5,14 @@ import java.util.*;
 public final class Rfc9980Test {
  static void ok(boolean b)throws Exception{OpenPgp.check(b,"RFC9980 assertion failed");}
  static final class Hardware implements ExternalMu.Backend,ExternalKem.Backend {
-  final OpenPgpTest.Hardware pq;final KeyPair ed,x;int edCalls,xCalls;
-  Hardware(Identity id)throws Exception{pq=new OpenPgpTest.Hardware(id);ed=KeyPairGenerator.getInstance("Ed25519","BC").generateKeyPair();x=KeyPairGenerator.getInstance("X25519","BC").generateKeyPair();}
+  final OpenPgpTest.Hardware pq;final KeyPair ed,x,compatEd,compatX;int edCalls,xCalls;
+  Hardware(Identity id)throws Exception{pq=new OpenPgpTest.Hardware(id);compatEd=KeyPairGenerator.getInstance("Ed25519","BC").generateKeyPair();compatX=KeyPairGenerator.getInstance("X25519","BC").generateKeyPair();ed=KeyPairGenerator.getInstance("Ed25519","BC").generateKeyPair();x=KeyPairGenerator.getInstance("X25519","BC").generateKeyPair();}
   public Hardware newOperation(){return this;}
   public void clearSecrets(){pq.clearSecrets();}
   public byte[] sign(PublicKey pub,byte[] mu)throws Exception{return pq.sign(pub,mu);}
+  public byte[] signCompatibilityEd25519(PublicKey pub,byte[] digest)throws Exception{ok(Arrays.equals(pub.getEncoded(),compatEd.getPublic().getEncoded()));Signature s=Signature.getInstance("Ed25519","BC");s.initSign(compatEd.getPrivate());s.update(digest);return s.sign();}
+  public byte[] deriveCompatibility(PublicKey pub,PublicKey peer)throws Exception{ok(Arrays.equals(pub.getEncoded(),compatX.getPublic().getEncoded()));return OpenPgp.derive(compatX.getPrivate(),peer);}
+  public byte[] signEcdsa(PublicKey pub,byte[] digest)throws Exception{return pq.signEcdsa(pub,digest);}
   public byte[] signEd25519(PublicKey pub,byte[] digest)throws Exception{edCalls++;ok(Arrays.equals(pub.getEncoded(),ed.getPublic().getEncoded()));Signature s=Signature.getInstance("Ed25519","BC");s.initSign(ed.getPrivate());s.update(digest);return s.sign();}
   public byte[] decapsulate(PublicKey pub,byte[] ct)throws Exception{return pq.decapsulate(pub,ct);}
   public byte[] derive(PublicKey pub,PublicKey peer)throws Exception{xCalls++;ok(Arrays.equals(pub.getEncoded(),x.getPublic().getEncoded()));return OpenPgp.derive(x.getPrivate(),peer);}

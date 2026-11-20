@@ -17,6 +17,10 @@ python3 scripts/bundle-google-client.py
 jar --create --file build/hybrid-mail.jar --main-class dev.hybridmail.MailApp -C build/classes .
 if [[ "${1:-}" == test ]]; then
   java scripts/CheckJava.java --test
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.PasskeyBrowserTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.PasskeyCallbackTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.DesktopVaultTest
+  if command -v node >/dev/null; then node tests/test_desktop_passkey.cjs; fi
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.ComposeFormatPolicyTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.SelfTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.TokenIdentityTest

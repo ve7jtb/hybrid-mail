@@ -24,6 +24,11 @@ final class AndroidStore {
         a.put(new JSONObject().put("id",e.id).put("label",e.label).put("bundle",e.bundle).put("serial",e.serial).put("sign",e.sign).put("encrypt",e.encrypt));
         if(!context.getSharedPreferences("identities",0).edit().putString("entries",a.toString()).commit())throw new java.io.IOException("Cannot save identity catalog");
     }
+    void replaceSoftwareBundle(Entry entry,String bundle)throws Exception{
+        var a=new JSONArray();boolean found=false;
+        for(var e:entries()){if(e.id().equals(entry.id())){if(e.serial()!=0)throw new java.io.IOException("Not a software identity");found=true;e=new Entry(e.id(),e.label(),bundle,0,"","");}a.put(new JSONObject().put("id",e.id()).put("label",e.label()).put("bundle",e.bundle()).put("serial",e.serial()).put("sign",e.sign()).put("encrypt",e.encrypt()));}
+        if(!found||!context.getSharedPreferences("identities",0).edit().putString("entries",a.toString()).commit())throw new java.io.IOException("Cannot update identity catalog");
+    }
     Identity loadToken(Entry e)throws Exception{return new Identity(Identity.readCertificate(root.resolve(e.sign)),null,Identity.readCertificate(root.resolve(e.encrypt)),null,null);}
     void addToken(String label,int serial,Identity id)throws Exception {addToken(label,serial,id,"9a");}
     void addToken(String label,int serial,Identity id,String traditional)throws Exception {

@@ -26,12 +26,12 @@ final class MacKeychain {
         }catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException("Keychain access interrupted");}catch(ExecutionException|TimeoutException e){throw new IOException("Cannot read credential-store response");}finally{process.destroyForcibly();}
     }
     static String get(String account)throws IOException{return get(account,false);}
-    static String get(String account,boolean authenticate)throws IOException{byte[] data=call(authenticate?"get-protected":"get",account,null);if(data==null)return null;try{return new String(data,StandardCharsets.UTF_8);}finally{Arrays.fill(data,(byte)0);}}
-    static void put(String account,String value)throws IOException{byte[] data=value.getBytes(StandardCharsets.UTF_8);try{call("put",account,data);}finally{Arrays.fill(data,(byte)0);}}
+    static String get(String account,boolean authenticate)throws IOException{if(!authenticate&&DesktopVault.configured())return DesktopVault.get(account);byte[] data=call(authenticate?"get-protected":"get",account,null);if(data==null)return null;try{return new String(data,StandardCharsets.UTF_8);}finally{Arrays.fill(data,(byte)0);}}
+    static void put(String account,String value)throws IOException{if(DesktopVault.configured()){DesktopVault.put(account,value);return;}byte[] data=value.getBytes(StandardCharsets.UTF_8);try{call("put",account,data);}finally{Arrays.fill(data,(byte)0);}}
     static boolean protectedHelperAvailable(){return !DesktopState.windows()&&Files.isExecutable(DesktopState.resources().resolve("../Helpers/PQMailKeychain.app/Contents/MacOS/PQMailKeychain").normalize());}
     static boolean protectedSession()throws IOException{return protectedHelperAvailable()&&call("probe-protected","google-session",null)!=null;}
     static void protectSession(boolean enable)throws IOException{if(!protectedHelperAvailable())throw new IOException("This build needs a signed, provisioned Keychain helper to protect the Google OAuth refresh token.");call(enable?"protect":"unprotect","google-session",null);}
     static void putProtected(String account,String value)throws IOException{byte[] data=value.getBytes(StandardCharsets.UTF_8);try{call("put-protected",account,data);}finally{Arrays.fill(data,(byte)0);}}
     static void deleteProtectedSession()throws IOException{if(protectedHelperAvailable())call("delete-protected","google-session",null);}
-    static void delete(String account)throws IOException{call("delete",account,null);}
+    static void delete(String account)throws IOException{if(DesktopVault.configured()){DesktopVault.delete(account);return;}call("delete",account,null);}
 }

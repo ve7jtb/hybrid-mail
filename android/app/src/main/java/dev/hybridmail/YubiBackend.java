@@ -51,6 +51,11 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
     }
     static Map<Slot,PublicKey> pgpKeys(Identity id,String[] slots,OpenPgp.PublicIdentity own)throws Exception {
         OpenPgp.match(own,id);
+        if(Level5Compatibility.supports(own)&&own.compatibility!=null){
+            var result=keys(id,slots);var full=own.compatibility;Level5Compatibility.checkPair(own,full);
+            result.put(Slot.RETIRED7,Level5Compatibility.key(full.legacy.primary));result.put(Slot.RETIRED8,Level5Compatibility.key(Level5Compatibility.classical(full).legacy.recipient));
+            result.put(Slot.RETIRED3,OpenPgp.pq(OpenPgp.slice(full.subkey,38,full.subkey.length),false));result.put(Slot.RETIRED4,OpenPgp.curve25519(OpenPgp.slice(full.subkey,6,38),false));return result;
+        }
         if(!OpenPgp.rfc9980(own))return keys(id,slots);
         Map<Slot,PublicKey> result=new EnumMap<>(Slot.class);
         result.put(Slot.fromValue(Integer.parseInt(slots[0],16)),own.signing.pq());
@@ -124,6 +129,15 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
             if(digest.length!=(type==KeyType.ECCP384?48:32))throw new GeneralSecurityException("Incorrect ECDSA digest size");
             return session.rawSignOrDecrypt(slotFor(key),type,digest);
         }catch(Exception e){clearSecrets();throw e;}
+    }
+    public byte[] signCompatibilityEcdsa(PublicKey key,byte[] digest)throws Exception{
+        if(slotFor(key)!=Slot.RETIRED7)throw new GeneralSecurityException("Compatibility signing requires slot 88");return signEcdsa(key,digest);
+    }
+    public byte[] decapsulateLevel5Compatibility(PublicKey key,byte[] ciphertext)throws Exception{
+        if(slotFor(key)!=Slot.RETIRED3)throw new GeneralSecurityException("Compatibility KEM requires slot 84");return decapsulate(key,ciphertext);
+    }
+    public byte[] deriveLevel5Compatibility(PublicKey key,PublicKey peer)throws Exception{
+        if(slotFor(key)!=(key instanceof java.security.interfaces.ECPublicKey?Slot.RETIRED8:Slot.RETIRED4))throw new GeneralSecurityException("Wrong compatibility ECDH slot");return derive(key,peer);
     }
     public byte[] signEd25519(PublicKey key,byte[] digest)throws Exception {
         try {

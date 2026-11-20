@@ -20,14 +20,14 @@ public final class OnKeyBundleTest {
         var ids=Identity.generateSoftwareProfile("onkey@example.com",profile,List.of("alias@example.com"));List<OnKeyBundle.Profile> profiles=new ArrayList<>();
         for(var id:ids){byte[] pgp=OpenPgp.supported(id)?OpenPgp.create(id,null).encoded:new byte[0];profiles.add(new OnKeyBundle.Profile(new CertificateBundle.Entry(id,123456,"9c",slot,"9d","82"),pgp));}
         byte[] payload=OnKeyBundle.payload(profiles);var signer=ids.get(1).signer(null);signer.getOutputStream().write(payload);var bytes=new ByteArrayOutputStream();var out=new DataOutputStream(bytes);out.writeBytes("PQMAILS1");OnKeyBundle.blob(out,payload);out.writeInt(1);OnKeyBundle.blob(out,signer.getSignature());byte[] encoded=bytes.toByteArray();OnKeyBundle.decode(encoded);
-        if(directory!=null){Files.createDirectories(directory);Files.write(directory.resolve(profile.code+".pqkey"),encoded);}return encoded;
+        if(directory!=null){Files.createDirectories(directory);Files.write(directory.resolve(profile.code+".pqkey"),encoded);Files.write(directory.resolve(profile.code+".pqmzip"),OnKeyStorage.pack(encoded));}return encoded;
     }
     public static void main(String[] args)throws Exception{
         MailEngine.init();Path output=args.length==0?null:Path.of(args[0]);
         for(var profile:TokenProfile.values()){
             byte[] bytes=fixture(profile,"83",output);var bundle=OnKeyBundle.decode(bytes);check(bundle.entries().size()==2);check(bundle.profiles().get(1).pgp().length>0==(profile!=TokenProfile.LEVEL2));
             var fake=new Fake();fake.keys.putAll(OnKeyBundle.bindings(bundle.entries()));OnKeyStorage.save(fake,bytes,new char[]{'x'});check(Arrays.equals(bytes,OnKeyStorage.load(fake).encoded()));
-            int chunks=(bytes.length+2047)/2048;
+            int chunks=(OnKeyStorage.pack(bytes).length+2047)/2048;
             for(int cut=0;cut<=chunks;cut++){var interrupted=fake.copy();interrupted.failAt=cut;fails(()->OnKeyStorage.save(interrupted,bytes,new char[]{'x'}));check(Arrays.equals(bytes,OnKeyStorage.load(interrupted).encoded()));}
             OnKeyStorage.save(fake,bytes,new char[]{'x'});check(Arrays.equals(bytes,OnKeyStorage.load(fake).encoded()));
             var torn=fake.copy();torn.objects.put(0x5f5100,new byte[]{80,81});check(Arrays.equals(bytes,OnKeyStorage.load(torn).encoded()));
@@ -42,7 +42,7 @@ public final class OnKeyBundleTest {
         }finally{try(var paths=Files.walk(temp)){for(var file:paths.sorted(Comparator.reverseOrder()).toList())Files.delete(file);}}
         OnKeyBundle.migrate(card,old.entries(),new char[]{'x'});
         var occupied=new Fake();occupied.keys.putAll(OnKeyBundle.bindings(old.entries()));occupied.keys.put("83",new byte[]{1});fails(()->OnKeyBundle.migrate(occupied,old.entries(),new char[]{'x'}));check(!occupied.moved);
-        if(output!=null)for(var profile:TokenProfile.values()){Path swift=output.resolve("swift-"+profile.code+".pqkey");if(Files.exists(swift))OnKeyBundle.decode(Files.readAllBytes(swift));}
+        if(output!=null)for(var profile:TokenProfile.values()){Path swift=output.resolve("swift-"+profile.code+".pqkey");if(Files.exists(swift)){byte[] raw=Files.readAllBytes(swift);OnKeyBundle.decode(raw);check(Arrays.equals(raw,OnKeyStorage.unpack(Files.readAllBytes(output.resolve("swift-"+profile.code+".pqmzip")))));}}
         System.out.println("PASS migration keeps public keys and rejects occupied 83; on-key bundle suite complete");
     }
 }

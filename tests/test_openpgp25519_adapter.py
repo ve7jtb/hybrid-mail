@@ -1,5 +1,6 @@
 import base64, importlib.util, io, subprocess, unittest
 from pathlib import Path
+from unittest.mock import patch
 ROOT=Path(__file__).parents[1]
 def module(name,file):
  s=importlib.util.spec_from_file_location(name,ROOT/'adapters'/file);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
@@ -25,3 +26,18 @@ class ExtraKeysTest(unittest.TestCase):
   for size in (0,32,47,49,63,65,128):
    request=io.BytesIO(b'Ed25519\n'+base64.b64encode(b'p'*44)+b'\n'+base64.b64encode(b'd'*size)+b'\n')
    with self.assertRaises(SIGN.AdapterError):SIGN.read_request(request)
+
+ def test_dedicated_signing_slots(self):
+  for env,alg,object_id,size in [({'PQMAIL_CERTIFICATION_SLOTS':'86,87'},'ML-DSA-65','%09',3309),({'PQMAIL_CERTIFICATION_SLOTS':'86,87'},'Ed25519','%0A',64),({'PQMAIL_COMPATIBILITY_SLOT':'88'},'Ed25519','%0B',64),({'PQMAIL_LEVEL5_COMPATIBILITY':'1'},'ECDSA-P384-SHA384','%0B',96)]:
+   pub=b'p'*44
+   def run(cmd,**kwargs):
+    self.assertIn('pkcs11:serial=123456;id='+object_id+';type='+('public' if cmd[1]=='pkey' else 'private'),cmd)
+    Path(cmd[-1]).write_bytes(pub if cmd[1]=='pkey' else b's'*size)
+    return subprocess.CompletedProcess(cmd,0)
+   with patch.dict(SIGN.os.environ,env,clear=True):self.assertEqual(len(SIGN.sign(pub,b'd'*64,'/openssl','/provider','/module','123456',io.BytesIO(),run,algorithm=alg,ec_slot="83")),size)
+
+ def test_level5_kem_slot_routes(self):
+  with patch.dict(KEM.os.environ,{'PQMAIL_LEVEL5_COMPATIBILITY':'1'},clear=True):
+   for alg,slot in [('ML-KEM-768','84'),('X25519','85'),('ECDH-P384','89')]:self.assertEqual(KEM.selected_slot(alg),slot)
+   for alg in ['ML-KEM-1024','ECDH-P256','Ed25519']:
+    with self.assertRaises(KEM.AdapterError):KEM.selected_slot(alg)

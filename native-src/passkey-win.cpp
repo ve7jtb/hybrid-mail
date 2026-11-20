@@ -20,6 +20,7 @@
 #include <io.h>
 #include <fcntl.h>
 #include <thread>
+#include <atomic>
 #ifndef WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_6
 #error A Windows SDK with WebAuthn PRF assertion support is required
 #endif
@@ -100,7 +101,7 @@ struct Api {
     ~Api(){if(library)FreeLibrary(library);}
 };
 struct Operation {
-    Api& api;Request& request;GUID cancellation{};HRESULT status=E_FAIL;PWEBAUTHN_ASSERTION result=nullptr;std::string client;
+    Api& api;Request& request;GUID cancellation{};HRESULT status=E_FAIL;PWEBAUTHN_ASSERTION result=nullptr;std::string client;std::atomic<bool> cancelled{false};
     Operation(Api& a,Request& r):api(a),request(r),client(clientData(r)){}
     ~Operation(){if(result){if(result->dwVersion>=3&&result->pHmacSecret){auto secret=result->pHmacSecret;if(secret->pbFirst)wipe(secret->pbFirst,secret->cbFirst);if(secret->pbSecond)wipe(secret->pbSecond,secret->cbSecond);}api.freeAssertion(result);}}
 };
@@ -117,7 +118,10 @@ static WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS options(Request& r,GUID& can
 }
 static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l){
     auto op=reinterpret_cast<Operation*>(GetWindowLongPtrW(window,GWLP_USERDATA));
-    if(message==WM_CLOSE||(message==WM_COMMAND&&LOWORD(w)==1)){if(op){op->api.cancel(&op->cancellation);EnableWindow(GetDlgItem(window,1),FALSE);}return 0;}
+    if(message==WM_CLOSE||(message==WM_COMMAND&&LOWORD(w)==1)){if(op){op->cancelled=true;op->api.cancel(&op->cancellation);SetTimer(window,1,100,nullptr);EnableWindow(GetDlgItem(window,1),FALSE);}return 0;}
+    // Cancellation can race the start of the worker's API call. Keep cancelling
+    // the same operation ID until the call acknowledges it and exits.
+    if(message==WM_TIMER&&w==1){if(op&&op->cancelled)op->api.cancel(&op->cancellation);return 0;}
     if(message==WM_APP+1){DestroyWindow(window);return 0;}
     if(message==WM_DESTROY){PostQuitMessage(0);return 0;}
     return DefWindowProcW(window,message,w,l);
@@ -156,8 +160,9 @@ static int run(Request& r,Api& api){
     int length=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,r.name.data(),static_cast<int>(r.name.size()),nullptr,0);check(length>0);std::wstring name(length,L' ');MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,r.name.data(),static_cast<int>(r.name.size()),name.data(),length);
     std::wstring label=L"Use your existing PQ Mail passkey: "+name+L"\nApprove the Windows prompt. No new credential is created.";
     CreateWindowW(L"STATIC",label.c_str(),WS_CHILD|WS_VISIBLE,18,18,475,65,window,nullptr,instance,nullptr);CreateWindowW(L"BUTTON",L"Cancel",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,385,95,100,28,window,reinterpret_cast<HMENU>(1),instance,nullptr);ShowWindow(window,SW_SHOW);SetForegroundWindow(window);
-    std::thread worker([&]{WEBAUTHN_CLIENT_DATA client{WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,static_cast<DWORD>(op.client.size()),reinterpret_cast<PBYTE>(op.client.data()),WEBAUTHN_HASH_ALGORITHM_SHA_256};WEBAUTHN_CREDENTIAL credential{};WEBAUTHN_HMAC_SECRET_SALT salt{};WEBAUTHN_HMAC_SECRET_SALT_VALUES salts{};auto o=options(r,op.cancellation,credential,salt,salts);op.status=api.assertion(window,L"ve7jtb.github.io",&client,&o,&op.result);PostMessageW(window,WM_APP+1,0,0);});
+    std::thread worker([&]{WEBAUTHN_CLIENT_DATA client{WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,static_cast<DWORD>(op.client.size()),reinterpret_cast<PBYTE>(op.client.data()),WEBAUTHN_HASH_ALGORITHM_SHA_256};WEBAUTHN_CREDENTIAL credential{};WEBAUTHN_HMAC_SECRET_SALT salt{};WEBAUTHN_HMAC_SECRET_SALT_VALUES salts{};auto o=options(r,op.cancellation,credential,salt,salts);op.status=op.cancelled?HRESULT_FROM_WIN32(ERROR_CANCELLED):api.assertion(window,L"ve7jtb.github.io",&client,&o,&op.result);PostMessageW(window,WM_APP+1,0,0);});
     MSG message{};while(GetMessageW(&message,nullptr,0,0)>0){TranslateMessage(&message);DispatchMessageW(&message);}worker.join();
+    if(op.cancelled)op.status=HRESULT_FROM_WIN32(ERROR_CANCELLED);
     if(FAILED(op.status)){char error[180];std::snprintf(error,sizeof(error),"{\"error\":\"Windows WebAuthn failed (HRESULT 0x%08lX). Cancelled, unavailable, or unsupported PRF; vault remains locked.\"}",static_cast<unsigned long>(op.status));std::fputs(error,stdout);return 2;}
     if(!op.result||op.result->dwVersion<3||!op.result->pHmacSecret||op.result->pHmacSecret->cbFirst!=32){std::fputs("{\"error\":\"This authenticator did not return PRF output. Vault remains locked; no browser was opened.\"}",stdout);return 2;}
     auto output=resultJson(op);bool ok=std::fwrite(output.data(),1,output.size(),stdout)==output.size()&&std::fflush(stdout)==0;wipe(output.data(),output.size());return ok?0:2;

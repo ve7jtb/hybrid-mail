@@ -33,11 +33,13 @@ jobs:
       - name: Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config meson ninja-build libpcsclite-dev libudev-dev pcscd libccid libsecret-1-dev gnome-keyring dbus-x11 patchelf fakeroot libgtk-3-0t64 libasound2t64 libxtst6 libxrender1 libxi6 libfontconfig1 xdg-utils
+          sudo apt-get install -y build-essential pkg-config meson ninja-build libpcsclite-dev libudev-dev pcscd libccid libsecret-1-dev gnome-keyring dbus-x11 patchelf fakeroot libgtk-3-0t64 libasound2t64 libxtst6 libxrender1 libxi6 libfontconfig1 xdg-utils xvfb
       - run: bash scripts/build-dependencies.sh
       - run: bash build.sh test
         env:
           PQ_MAIL_GOOGLE_CLIENT_SECRET: ${{ secrets.PQ_MAIL_GOOGLE_CLIENT_SECRET }}
+      - name: Native passkey PIN dialog and modal ownership
+        run: xvfb-run -a java -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.LinuxPasskeyUiTest
       - run: bash scripts/build-linux-native.sh
       - name: Disposable Secret Service test
         run: dbus-run-session -- bash scripts/test-linux-credentials.sh

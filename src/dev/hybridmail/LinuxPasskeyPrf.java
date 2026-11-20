@@ -79,11 +79,13 @@ final class LinuxPasskeyPrf {
   catch(CharacterCodingException e){throw new IOException("Invalid FIDO PIN encoding",e);}
   finally{if(b!=null&&b.hasArray())Arrays.fill(b.array(),(byte)0);}
  }
- private static final class Prompt implements Interaction,AutoCloseable {
+ static final class Prompt implements Interaction,AutoCloseable {
   private JDialog dialog;private JPanel content;private final Thread caller;private volatile boolean closed;
   Prompt(String name,Thread caller)throws Exception{this.caller=caller;try{SwingUtilities.invokeAndWait(()->{
    if(closed)return;
-   dialog=new JDialog((Frame)null,"Unlock vault — "+name,false);dialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+   Window owner=KeyboardFocusManager.getCurrentKeyboardFocusManager().getActiveWindow();
+   for(Window window:Window.getWindows())if(window instanceof Dialog d&&d.isVisible()&&d.isModal())owner=window;
+   dialog=new JDialog(owner,"Unlock vault — "+name,Dialog.ModalityType.MODELESS);dialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
    dialog.addWindowListener(new java.awt.event.WindowAdapter(){public void windowClosing(java.awt.event.WindowEvent e){cancel();}});
    content=new JPanel(new BorderLayout(8,8));content.setBorder(BorderFactory.createEmptyBorder(16,16,16,16));
    dialog.add(content);JButton cancel=new JButton("Cancel");cancel.addActionListener(e->cancel());dialog.add(cancel,BorderLayout.SOUTH);

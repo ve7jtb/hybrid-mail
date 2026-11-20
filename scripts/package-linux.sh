@@ -10,7 +10,7 @@ out="$PWD/dist/linux"
 mkdir -p "$stage/native/bin" "$stage/native/lib" "$stage/adapters" "$stage/notices" "$out"
 cp build/hybrid-mail.jar lib/*.jar "$stage/"
 cp adapters/*.py "$stage/adapters/"
-cp build/native/pqmail-pkcs11-sign build/native/hybrid-mail-provision build/native/hybrid-mail-credentials "$stage/native/bin/"
+cp build/native/pqmail-passkey build/native/pqmail-pkcs11-sign build/native/hybrid-mail-provision build/native/hybrid-mail-credentials "$stage/native/bin/"
 cp native/*.so .deps/openssl-install/lib/libcrypto.so.3 .deps/openssl-install/lib/libssl.so.3 "$stage/native/lib/"
 cp .deps/openssl-install/bin/openssl "$stage/native/bin/"
 cp docs/THIRD-PARTY.txt docs/YUBIKIT-LICENSE.txt .deps/openssl-3.5.9/LICENSE.txt "$stage/notices/"
@@ -29,6 +29,10 @@ set -e
 
 "$stage/native/bin/openssl" version
 PKCS11_PROVIDER_MODULE="$stage/native/lib/libykcs11.so" "$stage/native/bin/openssl" list -providers -provider default -provider "$stage/native/lib/pkcs11.so"
+"$stage/native/bin/pqmail-passkey" --probe
+java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.LinuxPasskeyTest "$stage/native/bin/pqmail-passkey"
+ldd "$stage/native/bin/pqmail-passkey" > "$out/fido-helper-libraries-$arch.txt"
+! grep -q "not found" "$out/fido-helper-libraries-$arch.txt"
 python3 -m py_compile adapters/*.py
 jpackage --type app-image --name 'PQ Mail' --icon assets/pq-mail.png --input "$stage" --main-jar hybrid-mail.jar --main-class dev.hybridmail.MailApp --dest "$image" --app-version 1.2.1 --add-modules java.desktop,java.naming,java.security.jgss,java.security.sasl,java.net.http,jdk.httpserver,jdk.crypto.ec,jdk.unsupported
 java scripts/CheckJava.java "$image/PQ Mail/lib/runtime" "$out/java-runtime-$arch.txt"
@@ -36,7 +40,7 @@ java scripts/CheckJava.java "$image/PQ Mail/lib/runtime" "$out/java-runtime-$arc
 cp -a "$image/PQ Mail" "$PWD/build/linux-smoke"
 sed -i 's/app.mainclass=dev.hybridmail.MailApp/app.mainclass=dev.hybridmail.SoftwareProfilesTest/' 'build/linux-smoke/lib/app/PQ Mail.cfg'
 'build/linux-smoke/bin/PQ Mail'
-jpackage --type deb --name 'PQ Mail' --icon assets/pq-mail.png --resource-dir assets/linux --app-image "$image/PQ Mail" --dest "$out" --app-version 1.2.1 --linux-package-name pq-mail --linux-deb-maintainer ve7jtb@gmail.com --vendor 'PQ Mail' --linux-menu-group Network --linux-shortcut --linux-package-deps 'python3, pcscd, libccid, libsecret-1-0, xdg-utils' --install-dir /opt
+jpackage --type deb --name 'PQ Mail' --icon assets/pq-mail.png --resource-dir assets/linux --app-image "$image/PQ Mail" --dest "$out" --app-version 1.2.1 --linux-package-name pq-mail --linux-deb-maintainer ve7jtb@gmail.com --vendor 'PQ Mail' --linux-menu-group Network --linux-shortcut --linux-package-deps 'python3, pcscd, libccid, libsecret-1-0, libudev1, libu2f-udev, xdg-utils' --install-dir /opt
 mv "$out/"*.deb "$out/PQ-Mail-1.2.1-Linux-$arch.deb"
 # jpackage's Debian step can generate a separate launcher icon; verify that
 # the desktop entry points to our artwork, not the default Java icon.
@@ -50,8 +54,10 @@ entry=next(root.glob('opt/pq-mail/lib/*.desktop'))
 assert 'StartupWMClass=PQ Mail' in entry.read_text(), 'Missing desktop window association'
 icon=next(line[5:] for line in entry.read_text().splitlines() if line.startswith('Icon='))
 assert (root/icon.lstrip('/')).read_bytes()==Path('assets/pq-mail.png').read_bytes(), 'Debian desktop launcher uses the wrong icon'
-print('PASS Debian desktop launcher uses the custom PQ Mail icon')
+assert (root/"opt/pq-mail/lib/app/native/bin/pqmail-passkey").is_file(), "Missing native FIDO helper"
+print('PASS Debian desktop launcher artwork and native FIDO helper')
 PYICON
 rm -rf "$icon_check"
+cp docs/LINUX-PASSKEYS.md "$out/Native-passkeys.txt"
 tar -czf "$out/PQ-Mail-1.2.1-Linux-$arch.tar.gz" -C "$image" 'PQ Mail'
 (cd "$out" && sha256sum *.deb *.tar.gz > SHA256SUMS)

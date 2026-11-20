@@ -7,26 +7,28 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 
-/** Native macOS/Windows assertion bridge. PRF output stays in process pipes/memory. */
+/** Native macOS/Windows/Linux assertion bridge. PRF output stays in process pipes/memory. */
 final class NativePasskeyPrf {
  static final String SECURITY_KEY="Native macOS — security key", PLATFORM="Native macOS — platform passkey", BROWSER="Browser";
  static final String WINDOWS_KEY="Native Windows — security key", WINDOWS_PLATFORM="Native Windows — platform passkey";
+ static final String LINUX_KEY="Native Linux — YubiKey USB";
  static Path app(){return DesktopState.resources().resolve("../Helpers/PQMailPasskey.app").normalize();}
- static Path helper(){return DesktopState.windows()?DesktopState.resources().resolve("native/bin/pqmail-passkey.exe"):app().resolve("Contents/MacOS/PQMailPasskey");}
+ static Path helper(){if(DesktopState.linux())return DesktopState.resources().resolve("native/bin/pqmail-passkey");return DesktopState.windows()?DesktopState.resources().resolve("native/bin/pqmail-passkey.exe"):app().resolve("Contents/MacOS/PQMailPasskey");}
  static boolean supportedVersion(String version){
   try{String[] n=version.split("\\.");int major=Integer.parseInt(n[0]),minor=n.length>1?Integer.parseInt(n[1]):0;return major>26||(major==26&&minor>=4);}catch(RuntimeException e){return false;}
  }
- static boolean available(){if(DesktopState.windows())return Files.isExecutable(helper());return System.getProperty("os.name").startsWith("Mac")&&supportedVersion(System.getProperty("os.version"))&&Files.isExecutable(helper())&&Files.isRegularFile(app().resolve("Contents/embedded.provisionprofile"));}
- static boolean selected(String method){return SECURITY_KEY.equals(method)||PLATFORM.equals(method)||windowsMethod(method);}
+ static boolean available(){if(DesktopState.windows()||DesktopState.linux())return Files.isExecutable(helper());return System.getProperty("os.name").startsWith("Mac")&&supportedVersion(System.getProperty("os.version"))&&Files.isExecutable(helper())&&Files.isRegularFile(app().resolve("Contents/embedded.provisionprofile"));}
+ static boolean selected(String method){return SECURITY_KEY.equals(method)||PLATFORM.equals(method)||windowsMethod(method)||LINUX_KEY.equals(method);}
  static boolean windowsMethod(String method){return WINDOWS_KEY.equals(method)||WINDOWS_PLATFORM.equals(method);}
+ static boolean methodMatchesOs(String method,String os){return os.equals("Linux")?LINUX_KEY.equals(method):os.startsWith("Windows")?windowsMethod(method):os.startsWith("Mac")&&(SECURITY_KEY.equals(method)||PLATFORM.equals(method));}
  static boolean platformMethod(String method){return PLATFORM.equals(method)||WINDOWS_PLATFORM.equals(method);}
- static String[] methods(String os){return os.startsWith("Windows")?new String[]{BROWSER,WINDOWS_KEY,WINDOWS_PLATFORM}:os.startsWith("Mac")?new String[]{BROWSER,SECURITY_KEY,PLATFORM}:new String[]{BROWSER};}
+ static String[] methods(String os){return os.startsWith("Windows")?new String[]{BROWSER,WINDOWS_KEY,WINDOWS_PLATFORM}:os.startsWith("Mac")?new String[]{BROWSER,SECURITY_KEY,PLATFORM}:os.equals("Linux")?new String[]{BROWSER,LINUX_KEY}:new String[]{BROWSER};}
  static String choose(java.awt.Component owner,DesktopState settings)throws Exception{
   String[] methods=methods(System.getProperty("os.name"));
-  String requirements=DesktopState.windows()?"Native Windows unlock uses the system WebAuthn dialog.\nRequires WebAuthn API v4+ and a PRF-capable authenticator.":System.getProperty("os.name").startsWith("Mac")?"Native macOS unlock uses AuthenticationServices.\nRequires macOS 26.4+ and a signed, provisioned helper.":"This platform uses the Browser method.";
+  String requirements=DesktopState.windows()?"Native Windows unlock uses the system WebAuthn dialog.\nRequires WebAuthn API v4+ and a PRF-capable authenticator.":System.getProperty("os.name").startsWith("Mac")?"Native macOS unlock uses AuthenticationServices.\nRequires macOS 26.4+ and a signed, provisioned helper.":DesktopState.linux()?"Native Linux uses YubiKit over USB HID.\nRequires a PRF-capable YubiKey with a configured FIDO2 PIN.\nConnect one YubiKey; Linux hidraw access is required.":"This platform uses the Browser method.";
   var choice=(String)javax.swing.JOptionPane.showInputDialog(owner,requirements+"\nExisting passkeys can unlock and be enrolled natively.\nCreating a new passkey currently requires the Browser method.\nNative helper: "+(available()?"available":"unavailable in this build"),"Passkey method",javax.swing.JOptionPane.QUESTION_MESSAGE,null,methods,settings.get("passkey.method",BROWSER));
   if(choice==null)return null;
-  if(selected(choice)&&!available())throw new IOException(DesktopState.windows()?"The packaged Windows passkey helper is missing. Passkey preference remains unchanged.":"Native passkeys require macOS 26.4+ and a helper provisioned for Associated Domains by a paid Apple Developer team. Passkey preference remains unchanged.");
+  if(selected(choice)&&!available())throw new IOException(DesktopState.windows()?"The packaged Windows passkey helper is missing. Passkey preference remains unchanged.":DesktopState.linux()?"The packaged Linux passkey helper is missing. Passkey preference remains unchanged.":"Native passkeys require macOS 26.4+ and a helper provisioned for Associated Domains by a paid Apple Developer team. Passkey preference remains unchanged.");
   settings.set("passkey.method",choice);settings.save();return choice;
  }
  static JsonObject requestData(String name,JsonObject wrapper,byte[] salt,String challenge,String method){
@@ -35,11 +37,11 @@ final class NativePasskeyPrf {
   if(wrapper!=null)request.addProperty("credential",wrapper.get("credential").getAsString());return request;
  }
  static DesktopPasskeyPrf.Result request(String name,JsonObject wrapper,String method)throws Exception{
-  if(windowsMethod(method)!=DesktopState.windows())throw new IOException("This native passkey method belongs to another platform. Choose Passkey method in Keys.");
+  if(!methodMatchesOs(method,System.getProperty("os.name")))throw new IOException("This native passkey method belongs to another platform. Choose Passkey method in Keys.");
   if(!available())throw new IOException("Native passkey helper is unavailable or not provisioned. Choose Browser in Keys → Passkey method to use Chrome. No browser was opened.");
   byte[] salt=wrapper==null?PrfVault.random(32):PrfVault.decode(wrapper.get("salt").getAsString());String challenge=PrfVault.b64(PrfVault.random(32));
   var request=requestData(name,wrapper,salt,challenge,method);
-  byte[] reply=windowsMethod(method)?exchange(helper(),windowsRequest(request),300):exchange(helper(),request,300);
+  byte[] reply=LINUX_KEY.equals(method)?LinuxPasskeyPrf.request(helper(),request):windowsMethod(method)?exchange(helper(),windowsRequest(request),300):exchange(helper(),request,300);
   try{return decodeResult(reply,salt,challenge,wrapper==null?null:wrapper.get("credential").getAsString());}finally{Arrays.fill(reply,(byte)0);}
  }
  static DesktopPasskeyPrf.Result decodeResult(byte[] bytes,byte[] salt,String challenge,String credential)throws Exception{

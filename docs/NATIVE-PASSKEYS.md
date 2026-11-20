@@ -82,3 +82,7 @@ code without including PINs or PRF responses.
 
 References: [Apple passkey integration](https://developer.apple.com/documentation/authenticationservices/supporting-passkeys/),
 [security-key assertion API](https://developer.apple.com/documentation/authenticationservices/asauthorizationsecuritykeypublickeycredentialassertionrequest).
+
+## Linux USB FIDO2
+
+Linux packages include a separate YubiKit HID assertion helper. See [Linux setup, security boundary and validation](LINUX-PASSKEYS.md). It reuses the same PRF wrappers as the browser and the other native backends. Live Linux hardware validation remains pending.

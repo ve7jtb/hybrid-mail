@@ -37,7 +37,7 @@ final class DesktopVault {
   String name=ui(()->JOptionPane.showInputDialog(owner,"Name this passkey (for example, MacBook or backup security key).\nFirst select an existing PQ Mail passkey. Create a new one only if needed.\nYour provider must support WebAuthn PRF.","Add vault passkey",JOptionPane.QUESTION_MESSAGE));
   if(name==null)throw new IOException("Passkey setup cancelled");name=name.trim();if(name.isEmpty()||name.length()>80||name.codePoints().anyMatch(Character::isISOControl))throw new IOException("Use a passkey name of 1–80 characters");
   if(vault.exists()&&!vault.unlocked())throw new IOException("Unlock the existing vault before adding a passkey");
-  try(var result=DesktopPasskeyPrf.request(name,null)){
+  try(var result=DesktopPasskeyPrf.request(name,null,NativePasskeyPrf.LINUX_KEY.equals(settings().get("passkey.method",NativePasskeyPrf.BROWSER)))){
    if(alreadyEnrolled(result.credential()))return false;
    if(vault.exists())vault.addPasskey(result.credential(),result.salt(),result.prf());else vault.create(result.credential(),result.salt(),result.prf());
    vault.renamePasskey(result.credential(),name);vault.put("passkey.user."+result.credential(),result.user());

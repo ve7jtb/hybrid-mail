@@ -14,3 +14,5 @@ bash scripts/build-provision.sh
 cc -O2 -Wall -Wextra native-src/credentials-linux.c -o build/native/hybrid-mail-credentials $(pkg-config --cflags --libs libsecret-1)
 
 HYBRID_OPENSSL_ROOT="$prefix" bash scripts/build-pkcs11-signer.sh
+
+bash scripts/build-passkey-linux.sh

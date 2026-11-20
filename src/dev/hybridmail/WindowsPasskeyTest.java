@@ -22,7 +22,7 @@ public final class WindowsPasskeyTest {
   var empty=request.deepCopy();empty.addProperty("credential","");DesktopVaultTest.reject(()->NativePasskeyPrf.windowsRequest(empty));
   var longId=request.deepCopy();longId.addProperty("credential",PrfVault.b64(new byte[2049]));DesktopVaultTest.reject(()->NativePasskeyPrf.windowsRequest(longId));
   DesktopVaultTest.check(Arrays.equals(NativePasskeyPrf.methods("Windows 11"),new String[]{NativePasskeyPrf.BROWSER,NativePasskeyPrf.WINDOWS_KEY,NativePasskeyPrf.WINDOWS_PLATFORM}),"Windows options");
-  DesktopVaultTest.check(Arrays.equals(NativePasskeyPrf.methods("Linux"),new String[]{NativePasskeyPrf.BROWSER}),"No native helper advertised on Linux");
+  DesktopVaultTest.check(Arrays.equals(NativePasskeyPrf.methods("Linux"),new String[]{NativePasskeyPrf.BROWSER,NativePasskeyPrf.LINUX_KEY}),"Linux HID helper option");
   DesktopVaultTest.check(NativePasskeyPrf.selected(NativePasskeyPrf.WINDOWS_KEY)&&!NativePasskeyPrf.windowsMethod(NativePasskeyPrf.SECURITY_KEY),"Platform dispatch");
   // Both native backends use the same authenticated response/vault validation.
   NativePasskeyTest.main(new String[0]);

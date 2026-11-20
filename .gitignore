@@ -37,3 +37,5 @@ settings.properties
 identities/
 
 native-src/provision/target/
+
+native-src/passkey-linux/target/

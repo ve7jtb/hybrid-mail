@@ -11,11 +11,22 @@ Copy-Item build/hybrid-mail.jar,lib/*.jar $stage
 Copy-Item adapters/*.py "$stage/adapters"
 Copy-Item docs/THIRD-PARTY.txt,docs/YUBIKIT-LICENSE.txt "$stage/notices"
 if (!(Test-Path build/native/pqmail-pkcs11-sign.exe)) { throw 'Build the single-process PKCS11 helper first.' }
+if (!(Test-Path build/native/pqmail-passkey.exe)) { throw 'Build the native WebAuthn helper with scripts/build-passkey-windows.ps1 first.' }
 Copy-Item build/native/*.exe "$stage/native/bin"
 Copy-Item build/native/*.dll "$stage/native/lib"
 Copy-Item build/native/openssl/* "$stage/native/bin"
 # Provider DLL dependencies are beside the provider as well as OpenSSL.
 Copy-Item build/native/openssl/*.dll "$stage/native/lib"
+# The WebAuthn helper must match the installer architecture, not rely on emulation.
+$passkeyBytes=[IO.File]::ReadAllBytes("$stage/native/bin/pqmail-passkey.exe")
+$peOffset=[BitConverter]::ToInt32($passkeyBytes,0x3c)
+$machine=[BitConverter]::ToUInt16($passkeyBytes,$peOffset+4)
+$expectedMachine=if($Architecture -eq 'arm64'){0xAA64}else{0x8664}
+if($machine -ne $expectedMachine){throw 'Passkey helper architecture does not match installer'}
+& "$stage/native/bin/pqmail-passkey.exe" --self-test; Checked
+$probe=& "$stage/native/bin/pqmail-passkey.exe" --probe; Checked
+$probe | ConvertFrom-Json | Out-Null
+$probe | Set-Content -Encoding utf8 "dist/windows/passkey-capabilities-$Architecture.json"
 $pythonArch=if($Architecture -eq 'arm64'){'arm64'}else{'amd64'}
 Invoke-WebRequest "https://www.python.org/ftp/python/3.13.9/python-3.13.9-embed-$pythonArch.zip" -OutFile build/python.zip
 Expand-Archive build/python.zip "$stage/native/python" -Force
@@ -35,7 +46,7 @@ if ($helperProcess.ExitCode -ne 1 -or (Get-Content "$PWD/build/helper-load.txt" 
 $env:PKCS11_PROVIDER_MODULE="$stage/native/lib/ykcs11.dll"
 & "$stage/native/bin/openssl.exe" list -providers -provider default -provider "$stage/native/lib/pkcs11.dll"; Checked
 & "$stage/native/python/python.exe" -m py_compile adapters/pkcs11-mu.py adapters/pkcs11-kem.py adapters/pkcs11-presence.py; Checked
-foreach($test in @('SelfTest','TokenIdentityTest','TokenKemTest','Token87Test','SoftwareProfilesTest','GmailApiTest','CertificateBundleTest','OnKeyBundleTest')) {
+foreach($test in @('WindowsPasskeyTest','DesktopVaultTest','SelfTest','TokenIdentityTest','TokenKemTest','Token87Test','SoftwareProfilesTest','GmailApiTest','CertificateBundleTest','OnKeyBundleTest')) {
  & "$env:JAVA_HOME/bin/java.exe" '-Djava.awt.headless=true' -cp "$stage/*" "dev.hybridmail.$test"; Checked
 }
 # Isolated native credential-store test; never accesses an actual OAuth credential.

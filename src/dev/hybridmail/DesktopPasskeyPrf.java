@@ -20,6 +20,11 @@ final class DesktopPasskeyPrf {
  }
  static Result request(String name,JsonObject wrapper)throws Exception {return request(name,wrapper,false);}
  static Result request(String name,JsonObject wrapper,boolean discover)throws Exception {
+  String method=DesktopVault.settings().get("passkey.method",NativePasskeyPrf.BROWSER);
+  if(NativePasskeyPrf.selected(method)){
+   if(wrapper==null&&!discover)throw new java.io.IOException("Native mode uses existing passkeys. Choose Use existing passkey to enroll one, or select Browser in Keys → Passkey method to create a new passkey.");
+   return NativePasskeyPrf.request(name,wrapper,method);
+  }
   boolean create=wrapper==null&&!discover;byte[] salt=wrapper==null?PrfVault.random(32):PrfVault.decode(wrapper.get("salt").getAsString());
   String challenge=PrfVault.b64(PrfVault.random(32)),nonce=PrfVault.b64(PrfVault.random(32)),user=create?PrfVault.b64(PrfVault.random(32)):"";
   var generator=KeyPairGenerator.getInstance("EC");generator.initialize(new ECGenParameterSpec("secp256r1"));var pair=generator.generateKeyPair();

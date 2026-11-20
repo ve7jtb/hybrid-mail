@@ -19,6 +19,8 @@ if [[ "${1:-}" == test ]]; then
   java scripts/CheckJava.java --test
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.PasskeyBrowserTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.PasskeyCallbackTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.NativePasskeyTest
+  java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.WindowsPasskeyTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.DesktopVaultTest
   if command -v node >/dev/null; then node tests/test_desktop_passkey.cjs; fi
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.ComposeFormatPolicyTest

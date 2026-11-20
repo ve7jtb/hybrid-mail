@@ -21,7 +21,7 @@ final class DesktopVault {
  static void ensure()throws Exception {
   if(vault==null)throw new IOException("Open PQ Mail to set up the passkey vault");if(vault.unlocked())return;
   if(SwingUtilities.isEventDispatchThread()){
-   JDialog dialog=new JDialog((Frame)null,"Unlock PQ Mail vault",true);dialog.add(new JLabel("  Complete the passkey operation in your browser.  "));dialog.pack();dialog.setLocationRelativeTo(owner);dialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+   JDialog dialog=new JDialog((Frame)null,"Unlock PQ Mail vault",true);dialog.add(new JLabel("  Complete the passkey operation in the system prompt or selected browser.  "));dialog.pack();dialog.setLocationRelativeTo(owner);dialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
    var worker=new SwingWorker<Void,Void>(){protected Void doInBackground()throws Exception{unlock();return null;}protected void done(){dialog.dispose();}};JButton cancel=new JButton("Cancel");cancel.addActionListener(e->worker.cancel(true));dialog.add(cancel,java.awt.BorderLayout.SOUTH);dialog.pack();worker.execute();dialog.setVisible(true);worker.get();
   }else unlock();
  }
@@ -55,7 +55,7 @@ final class DesktopVault {
  }
  static boolean enrollExisting()throws Exception {
   if(!vault.unlocked())throw new IOException("Unlock the vault before adding an existing passkey");
-  String name=ui(()->JOptionPane.showInputDialog(owner,"Name the existing passkey for this vault.\nChoose it in your browser; no credential will be created or replaced.","Use existing passkey",JOptionPane.QUESTION_MESSAGE));
+  String name=ui(()->JOptionPane.showInputDialog(owner,"Name the existing passkey for this vault.\nChoose it in the system prompt or selected browser; no credential will be created or replaced.","Use existing passkey",JOptionPane.QUESTION_MESSAGE));
   if(name==null)throw new IOException("Passkey selection cancelled");name=name.trim();if(name.isEmpty()||name.length()>80||name.codePoints().anyMatch(Character::isISOControl))throw new IOException("Use a name of 1–80 characters");
   try(var result=DesktopPasskeyPrf.request(name,null,true)){
    if(alreadyEnrolled(result.credential()))return false;

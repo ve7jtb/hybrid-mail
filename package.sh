@@ -52,12 +52,12 @@ if [[ -n "${PQ_MAIL_APPLE_TEAM:-}" ]]; then
   ./scripts/build-keychain-helper.sh
   mkdir -p "$DEST/PQ Mail.app/Contents/Helpers"
   ditto build/keychain-derived/Build/Products/Release/PQMailKeychain.app "$DEST/PQ Mail.app/Contents/Helpers/PQMailKeychain.app"
-  # Preserve the helper's profile and entitlements; never deep re-sign it ad hoc.
-  if [[ "${PQ_MAIL_DISTRIBUTION:-0}" == 1 ]]; then
-    bash scripts/sign-macos.sh "$DEST/PQ Mail.app"
-  else
-    codesign --force --sign "$PQ_MAIL_SIGNING_IDENTITY" "$DEST/PQ Mail.app"
+  if [[ "${PQ_MAIL_NATIVE_PASSKEYS:-0}" == 1 ]]; then
+    bash scripts/build-passkey-helper.sh
+    ditto build/passkey-derived/Build/Products/Release/PQMailPasskey.app "$DEST/PQ Mail.app/Contents/Helpers/PQMailPasskey.app"
   fi
+  # Preserve the helpers' profiles and entitlements; never deep re-sign them ad hoc.
+  bash scripts/sign-macos.sh "$DEST/PQ Mail.app"
 else
   codesign --force --deep --sign - "$DEST/PQ Mail.app"
 fi

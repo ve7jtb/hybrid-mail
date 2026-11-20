@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import unittest
+import tempfile
 SPEC=importlib.util.spec_from_file_location('kem',Path(__file__).parents[1]/'adapters/pkcs11-kem.py')
 KEM=importlib.util.module_from_spec(SPEC);SPEC.loader.exec_module(KEM)
 
@@ -40,6 +41,26 @@ class KemAdapterTest(unittest.TestCase):
         finally:
             self.assertEqual(pin,bytearray(6));self.assertTrue(all(not p.exists() for p in paths))
             self.assertEqual(len(calls),1 if wrong_key else 2)
+    def test_single_process_pipe_cleanup_and_no_retry(self):
+        for failure in (False,True):
+            with tempfile.TemporaryDirectory() as directory:
+                executable=Path(directory)/'openssl'
+                (Path(directory)/'pqmail-pkcs11-kem').touch()
+                pin=bytearray(b'654321');calls=[];paths=[]
+                def run(command,**kwargs):
+                    calls.append(command);paths.extend([Path(command[-1]),Path(command[-2])])
+                    self.assertEqual(kwargs['input'],b'654321\n')
+                    self.assertTrue(kwargs['start_new_session'])
+                    self.assertEqual(kwargs['env']['YKCS11_DISCOVERY_ID'],'3')
+                    self.assertFalse(any('654321' in arg for arg in command))
+                    self.assertFalse(any('654321' in value for value in kwargs['env'].values()))
+                    return subprocess.CompletedProcess(command,1 if failure else 0,stdout=b's'*32,stderr=b'')
+                if failure:
+                    with self.assertRaises(KEM.AdapterError):KEM.recover('ML-KEM-1024',b'p'*1582,b'c'*1568,str(executable),'/provider','/module','123456','9d',pin,run)
+                else:
+                    self.assertEqual(KEM.recover('ML-KEM-1024',b'p'*1582,b'c'*1568,str(executable),'/provider','/module','123456','9d',pin,run),b's'*32)
+                self.assertEqual(len(calls),1);self.assertEqual(pin,bytearray(6))
+                self.assertTrue(all(not path.exists() for path in paths))
     def test_mlkem_pipe_and_cleanup(self):self.run_case()
     def test_ecdh_pipe_and_cleanup(self):self.run_case('ECDH-P256')
     def test_wrong_key_no_private_operation(self):

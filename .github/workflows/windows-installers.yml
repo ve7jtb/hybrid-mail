@@ -1,8 +1,10 @@
 name: Windows installers
 on:
   workflow_dispatch:
-  push:
+  pull_request:
     branches: [main]
+  push:
+    branches: [main, feature/on-key-certificates]
     paths: ['src/**', 'adapters/**', 'native-src/**', 'patches/**', 'scripts/**', 'assets/**', '.gitattributes', '.github/workflows/windows-installers.yml']
 permissions:
   contents: read
@@ -71,6 +73,7 @@ jobs:
           Copy-Item native-src/provision/target/release/hybrid-mail-provision.exe build/native/
           cl /O2 native-src/credentials-win.c /Fe:build/native/hybrid-mail-credentials.exe advapi32.lib
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./scripts/build-passkey-windows.ps1
           git clone --config core.autocrlf=false https://github.com/Yubico/yubico-pkcs11.git .deps/ykcs11
           git -C .deps/ykcs11 checkout c28419969d0ac2ead2e94065b77ebbd281cc52de
           git -C .deps/ykcs11 apply "$PWD/patches/ykcs11-ec-metadata.patch"
@@ -100,6 +103,7 @@ jobs:
           meson setup .deps/provider/build .deps/provider -Dbuild_info=HybridMail-PR818
           meson compile -C .deps/provider/build
           cp .deps/provider/build/src/pkcs11.dll build/native/
+          CC=${{ matrix.compiler }} HYBRID_OPENSSL_ROOT="$MINGW_PREFIX" bash scripts/build-pkcs11-signer.sh
           mkdir -p build/native/openssl
           cp "$MINGW_PREFIX/bin/openssl.exe" "$MINGW_PREFIX/bin/"*.dll build/native/openssl/
           cp "$MINGW_PREFIX/share/licenses/openssl/LICENSE.txt" build/native/openssl/ || true
@@ -112,4 +116,5 @@ jobs:
           path: |
             dist/windows/*.exe
             dist/windows/java-runtime-*.txt
+            dist/windows/passkey-capabilities-*.json
           if-no-files-found: error

@@ -26,8 +26,10 @@ public final class DesktopState {
         return new DesktopState(override==null?(linux()?Path.of(System.getenv().getOrDefault("XDG_DATA_HOME",Path.of(System.getProperty("user.home"),".local","share").toString()),"pq-mail"):windows()?Path.of(System.getenv().getOrDefault("LOCALAPPDATA",System.getProperty("user.home")),"Hybrid Mail"):Path.of(System.getProperty("user.home"),"Library","Application Support","Hybrid Mail")):Path.of(override));
     }
     public Path directory(){return directory;}
-    public String get(String name,String fallback){return values.getProperty(name,fallback);}
-    public void set(String name,String value){if(value==null)values.remove(name);else values.setProperty(name,value);}
+    public String get(String name,String fallback){return DesktopVault.configured()&&DesktopVault.sensitive(name)?DesktopVault.setting(name,fallback):rawGet(name,fallback);}
+    String rawGet(String name,String fallback){return values.getProperty(name,fallback);}
+    void rawSet(String name,String value){if(value==null)values.remove(name);else values.setProperty(name,value);}
+    public void set(String name,String value){if(DesktopVault.configured()&&DesktopVault.sensitive(name))DesktopVault.putSetting(name,value);else rawSet(name,value);}
     public void save()throws IOException{
         PrivateFiles.directory(directory);
         ByteArrayOutputStream out=new ByteArrayOutputStream();values.store(out,"PQ Mail — non-secret preferences; no PINs or passwords");
@@ -59,7 +61,13 @@ public final class DesktopState {
     }
     public Identity loadIdentity(String id,char[] password)throws Exception{
         Path folder=identityDirectory(id);
-        if(get("identity."+id+".type","token").equals("pkcs12"))return Identity.load(folder.resolve("identity.p12"),password,get("identity."+id+".variant","").equals("pure"));
+        if(get("identity."+id+".type","token").equals("pkcs12")){
+            String stored=get("identity."+id+".vault","");if(!stored.isEmpty()){
+                var profiles=SoftwareIdentityVault.load(vaultIdentityPath(stored),DesktopVault.vault());
+                return profiles.stream().filter(p->{try{return identityId(p).equals(id);}catch(Exception e){return false;}}).findFirst().orElseThrow(()->new IOException("Vault identity does not match catalog"));
+            }
+            return Identity.load(folder.resolve("identity.p12"),password,get("identity."+id+".variant","").equals("pure"));
+        }
         X509Certificate signing=Identity.readCertificate(folder.resolve("signing.cer"));
         X509Certificate encryption=Files.exists(folder.resolve("encryption.cer"))?Identity.readCertificate(folder.resolve("encryption.cer")):null;
         String alg=signing.getPublicKey().getAlgorithm();
@@ -100,18 +108,48 @@ public final class DesktopState {
         LinkedHashSet<String> ids=new LinkedHashSet<>();for(var old:identities())ids.add(old.id());ids.add(id);
         set("identities",String.join(",",ids));set("identity."+id+".name",name);set("identity."+id+".type",token?"token":"pkcs12");set("selected.identity",id);if(token&&get("identity."+id+".token.serial","").isBlank()&&!get("token.serial","").isBlank())bindToken(id,get("token.serial",""),get("token.rsaSlot","9a"),get("token.kemSlot","9d"),get("token.ecdhSlot","82"));save();return id;
     }
+    /** Forget one local token record; never opens a token connection. */
+    public void forgetYubiKeyIdentity(String id)throws Exception{
+        var saved=identities().stream().filter(i->i.id().equals(id)).findFirst().orElseThrow(()->new IOException("Unknown saved identity"));
+        if(saved.passwordRequired())throw new IOException("This action only forgets YubiKey identities");
+        Path folder=identityDirectory(id);
+        Identity identity=loadIdentity(id,new char[0]);
+        Path pgp=OpenPgp.supported(identity)?OpenPgp.ownPath(directory,identity):null;
+        Properties before=new Properties();before.putAll(values);
+        set("identities",String.join(",",identities().stream().map(SavedIdentity::id).filter(other->!other.equals(id)).toList()));
+        for(String key:new ArrayList<>(values.stringPropertyNames()))if(key.startsWith("identity."+id+"."))values.remove(key);
+        if(id.equals(get("selected.identity","")))set("selected.identity",null);
+        try{save();}catch(Exception e){values.clear();values.putAll(before);throw e;}
+        for(String file:List.of("signing.cer","signing.pem","encryption.cer","encryption.pem"))Files.deleteIfExists(folder.resolve(file));
+        if(pgp!=null)Files.deleteIfExists(pgp);
+        try(var files=Files.list(folder)){if(files.findAny().isEmpty())Files.delete(folder);}
+    }
     public void rememberSoftwareProfiles(List<Identity> profiles,Path file,String name)throws Exception{
         for(int i=0;i<profiles.size();i++){
             var identity=profiles.get(i);String id=remember(identity,name+" · "+identity.signatureAlgorithm(),file);
             set("identity."+id+".variant",profiles.size()==2&&i==0?"pure":"");
         }save();
     }
+    Path vaultIdentityPath(String filename)throws IOException{
+        if(!filename.matches("[a-f0-9-]{36}\\.vault\\.p12"))throw new IOException("Invalid vault identity path");
+        return directory.resolve("software-vault").resolve(filename);
+    }
+    boolean vaultIdentity(String id){return !get("identity."+id+".vault","").isEmpty();}
+    void rememberVaultProfiles(List<Identity> profiles,String name)throws Exception{
+        String filename=UUID.randomUUID()+".vault.p12";Path path=vaultIdentityPath(filename);PrivateFiles.directory(path.getParent());
+        SoftwareIdentityVault.save(profiles,path,DesktopVault.vault());
+        // Commit catalog pointers only after the encrypted file and its recovery password are durable.
+        LinkedHashSet<String> ids=new LinkedHashSet<>();for(var saved:identities())ids.add(saved.id());
+        for(var identity:profiles){String id=identityId(identity);ids.add(id);set("identity."+id+".name",name+" · "+identity.signatureAlgorithm());set("identity."+id+".type","pkcs12");set("identity."+id+".vault",filename);set("selected.identity",id);}
+        set("identities",String.join(",",ids));save();
+        // Old password-protected copies remain as recovery backups; never silently destroy user files.
+    }
     public List<CertificateBundle.Entry> certificateBundle(Identity selected)throws Exception{
         if(selected==null||selected.signingKey()!=null)throw new IOException("Select a saved YubiKey identity to share its pure/hybrid certificates");
         String serial=get("identity."+identityId(selected)+".token.serial","");if(serial.isBlank())throw new IOException("Selected identity has no YubiKey serial");
         List<CertificateBundle.Entry> result=new ArrayList<>();
         for(var saved:identities())if(!saved.passwordRequired()&&serial.equals(get("identity."+saved.id()+".token.serial",""))){
-            Identity id=loadIdentity(saved.id(),new char[0]);if(!CertificateBundle.sameKeys(selected,id))continue;
+            Identity id=loadIdentity(saved.id(),new char[0]);if(!CertificateBundle.sameKeys(selected,id))continue;if(!CertificateBundle.emails(selected.signingCert()).equals(CertificateBundle.emails(id.signingCert()))||!CertificateBundle.emails(selected.encryptionCert()).equals(CertificateBundle.emails(id.encryptionCert())))continue;
             String prefix="identity."+saved.id()+".token.";
             result.add(new CertificateBundle.Entry(id,Integer.parseInt(serial),"9c",get(prefix+"rsaSlot","9a"),get(prefix+"kemSlot","9d"),get(prefix+"ecdhSlot","82")));
         }
@@ -130,6 +168,14 @@ public final class DesktopState {
             else for(String role:List.of("signing","encryption")){X509Certificate cert=role.equals("signing")?e.identity().signingCert():e.identity().encryptionCert();for(String email:CertificateBundle.emails(cert))rememberContact(cert,email,role);}
         }
         set("selected.identity",previous);save();
+    }
+    public void importOnKey(OnKeyBundle.Bundle bundle)throws Exception{
+        for(var e:bundle.entries()){String id=identityId(e.identity()),prefix="identity."+id+".token.";
+            if(e.traditionalSlot().equals("83")&&get(prefix+"serial","").equals(Integer.toString(e.serial()))&&get(prefix+"rsaSlot","9a").equals("9a"))bindToken(id,Integer.toString(e.serial()),"83",e.kemSlot(),e.ecdhSlot());
+        }importCertificateBundle(bundle.entries(),true);bundle.savePgp(directory);
+    }
+    public void migrateTokenBindings(List<CertificateBundle.Entry> entries)throws Exception{
+        for(var e:entries){String id=identityId(e.identity());bindToken(id,Integer.toString(e.serial()),"83",e.kemSlot(),e.ecdhSlot());}save();
     }
     public void saveCertificate(String role,X509Certificate certificate)throws Exception{
         if(!Set.of("recipient","pinned").contains(role))throw new IllegalArgumentException("Invalid certificate role");
@@ -186,6 +232,70 @@ public final class DesktopState {
         Files.move(directory.resolve("contacts").resolve(contact.id()),trash.resolve(contact.id()+"-"+System.currentTimeMillis()));
         var ids=new ArrayList<String>();for(var old:contacts())if(!old.id().equals(contact.id()))ids.add(old.id());
         set("contacts",String.join(",",ids));set("contact."+contact.id()+".email",null);set("contact."+contact.id()+".role",null);save();
+    }
+    private static String pgpId(String email,String fingerprint)throws Exception{
+        OpenPgp.validateEmail(email);if(!fingerprint.matches("(?i)[0-9a-f]{40}|[0-9a-f]{64}"))throw new IOException("Invalid full OpenPGP fingerprint");
+        return OpenPgp.hex(OpenPgp.hash("SHA-256",OpenPgp.bytes(email.toLowerCase(Locale.ROOT)+"\n"+fingerprint.toLowerCase(Locale.ROOT))));
+    }
+    public List<Contact> pgpContacts(){
+        var result=new ArrayList<Contact>();for(String id:get("pgp.contacts","").split(","))if(id.matches("[a-f0-9]{64}"))result.add(new Contact(id,get("pgp."+id+".email",""),"OpenPGP"));return List.copyOf(result);
+    }
+    public String pgpFingerprint(Contact c)throws Exception{
+        if(!pgpContacts().contains(c))throw new IOException("Unknown OpenPGP contact");String fp=get("pgp."+c.id()+".fingerprint","");
+        if(!pgpId(c.email(),fp).equals(c.id()))throw new IOException("OpenPGP contact metadata mismatch");return fp;
+    }
+    public OpenPgp.PublicIdentity pgpCertificate(Contact c)throws Exception{
+        String fp=pgpFingerprint(c);Path path=directory.resolve("openpgp-contacts").resolve(c.id()).resolve("public.asc");
+        if(Files.size(path)>128*1024)throw new IOException("OpenPGP contact too large");var key=new OpenPgp.PublicIdentity(Files.readAllBytes(path));
+        if(!key.fingerprint().equals(fp)||!key.matchesEmail(c.email()))throw new IOException("OpenPGP contact certificate mismatch");return key;
+    }
+    public Contact rememberPgp(OpenPgp.PublicIdentity supplied,String email)throws Exception{
+        var key=new OpenPgp.PublicIdentity(supplied.export());email=email.trim().toLowerCase(Locale.ROOT);
+        if(!key.matchesEmail(email))throw new IOException("Email is not certified by this OpenPGP key");Contact contact=rememberPgpChecked(key,email);save();return contact;
+    }
+    private Contact rememberPgpChecked(OpenPgp.PublicIdentity key,String email)throws Exception{
+        String fp=key.fingerprint(),id=pgpId(email,fp);
+        write(directory.resolve("openpgp-contacts").resolve(id).resolve("public.asc"),key.export());
+        var ids=new LinkedHashSet<String>();for(var c:pgpContacts())ids.add(c.id());ids.add(id);set("pgp.contacts",String.join(",",ids));set("pgp."+id+".email",email);set("pgp."+id+".fingerprint",fp);return new Contact(id,email,"OpenPGP");
+    }
+    public boolean isPgpTrusted(String email,String fp)throws Exception{
+        String id=pgpId(email,fp);var c=pgpContacts().stream().filter(v->v.id().equals(id)).findFirst().orElse(null);
+        if(c==null||!Boolean.parseBoolean(get("pgp."+id+".trusted","false")))return false;
+        pgpCertificate(c);return true; // Trust never overrides validity or certificate binding checks.
+    }
+    public void setPgpTrusted(Contact c,boolean trusted)throws Exception{
+        pgpFingerprint(c);if(trusted)pgpCertificate(c);set("pgp."+c.id()+".trusted",trusted?"true":null);save();
+    }
+    public void setPgpTrustSelection(OpenPgp.PublicIdentity supplied,Set<String> selectedEmails)throws Exception{
+        var key=new OpenPgp.PublicIdentity(supplied.export());var emails=key.certifiedEmails();
+        var selected=new HashSet<String>();for(String email:selectedEmails)selected.add(email.trim().toLowerCase(Locale.ROOT));
+        if(!emails.containsAll(selected))throw new IOException("Trust selection includes an email not certified by this key");
+        Properties before=new Properties();before.putAll(values);
+        try{
+            for(String email:emails){String id=pgpId(email,key.fingerprint());
+                if(selected.contains(email)||pgpContacts().stream().anyMatch(c->c.id().equals(id))){
+                    var c=rememberPgpChecked(key,email);set("pgp."+c.id()+".trusted",selected.contains(email)?"true":null);
+                }
+            }
+            save(); // One atomic settings replacement publishes the entire trust selection.
+        }catch(Exception e){values.clear();values.putAll(before);throw e;}
+    }
+    void migratePgpTrust(OpenPgp.PublicIdentity previous,OpenPgp.PublicIdentity replacement,Set<String> trusted)throws Exception{
+        var next=new OpenPgp.PublicIdentity(replacement.export());OpenPgp.check(next.certifiedEmails().containsAll(trusted),"Migration trust contains an uncertified address");
+        Properties before=new Properties();before.putAll(values);
+        try{
+            var old=new ArrayList<Contact>();for(var c:pgpContacts())if(pgpFingerprint(c).equals(previous.fingerprint()))old.add(c);
+            for(String email:next.certifiedEmails()){var c=rememberPgpChecked(next,email);set("pgp."+c.id()+".trusted",trusted.contains(email)?"true":null);}
+            var currentIds=pgpContacts().stream().map(Contact::id).toList();var removed=new HashSet<String>();for(var c:old){removed.add(c.id());for(String suffix:List.of("email","fingerprint","trusted"))set("pgp."+c.id()+"."+suffix,null);}
+            set("pgp.contacts",String.join(",",currentIds.stream().filter(k->!removed.contains(k)).toList()));save();
+        }catch(Exception e){values.clear();values.putAll(before);throw e;}
+    }
+    public void removePgp(Contact c)throws Exception{
+        pgpFingerprint(c);Path folder=directory.resolve("openpgp-contacts").resolve(c.id());
+        Path removed=directory.resolve("removed-contacts");PrivateFiles.directory(removed);
+        if(Files.exists(folder))Files.move(folder,removed.resolve("pgp-"+c.id()+"-"+System.nanoTime()));
+        set("pgp.contacts",String.join(",",pgpContacts().stream().filter(v->!v.id().equals(c.id())).map(Contact::id).toList()));
+        for(String suffix:List.of("email","fingerprint","trusted"))set("pgp."+c.id()+"."+suffix,null);save();
     }
     public void clearCertificate(String role)throws IOException{
         if(!Set.of("recipient","pinned").contains(role))throw new IllegalArgumentException("Invalid certificate role");

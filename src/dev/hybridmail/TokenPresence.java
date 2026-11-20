@@ -14,6 +14,7 @@ public final class TokenPresence {
     public static void require(String adapter)throws Exception{
         String name=Path.of(adapter).getFileName().toString();if(!name.equals("pkcs11-mu.py")&&!name.equals("pkcs11-kem.py"))return;
         Path probe=Path.of(adapter).resolveSibling("pkcs11-presence.py");
+        if(!java.nio.file.Files.isRegularFile(probe))throw new IOException("YubiKey presence-check helper is missing. Repair or reinstall the app; reconnecting the key will not fix this.");
         require(()->{
             Process process=DesktopState.process(probe.toString()).redirectInput(ProcessBuilder.Redirect.from(new java.io.File(DesktopState.windows()?"NUL":"/dev/null"))).redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.DISCARD).start();
             try{if(!process.waitFor(15,TimeUnit.SECONDS))throw new IOException("YubiKey presence check timed out");return process.exitValue();}finally{if(process.isAlive())process.destroyForcibly();}

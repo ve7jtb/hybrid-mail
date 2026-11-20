@@ -1,6 +1,6 @@
 # PQ Mail for iOS — S/MIME and OpenPGP preview
 
-Native SwiftUI app with **OpenSSL 3.6.5** for software cryptography and
+Native SwiftUI app with **OpenSSL 3.5 LTS (patched 3.5.10-dev snapshot)** for software cryptography and
 **YubiKit Swift 1.4.0 source** for NFC/USB-C transport and a bounded raw PIV adapter for PQ operations. Builds for
 Apple Silicon iOS Simulator and arm64 iOS devices, iOS 16+.
 
@@ -104,7 +104,7 @@ Definitions and OIDs match desktop `TokenProfile.java`:
 
 The level label refers to ML-DSA's NIST category, not every component. Each
 identity has four independent keys so pure and hybrid modes can use the same keys.
-The corresponding YubiKey slots remain 9c, 9a, 9d and 82.
+New credentials use 9c, 83, 9d and 82; imported legacy credentials keep their explicit 9a mapping until migration.
 
 ## Crypto implementation
 
@@ -131,11 +131,13 @@ are not a claim of compatibility with every S/MIME implementation or older draft
 ## Build
 
 Use Xcode with Swift 6.1+ on Apple Silicon. OpenSSL source is pinned to
-`c8bd5a57108599ac650bbae77fcabe3109dab2e8` (3.6.5). Generated libraries and private
+`81162ed421d98f527f55bfff205994f53831223b` (3.5.10-dev, containing the November 2026 security fixes). Generated libraries and private
 test fixtures are not source files and must not be committed.
 
 ```sh
-git clone --depth 1 --branch openssl-3.6.5 https://github.com/openssl/openssl.git /tmp/pq-mail-openssl
+git init /tmp/pq-mail-openssl
+git -C /tmp/pq-mail-openssl fetch --depth 1 https://github.com/openssl/openssl.git 81162ed421d98f527f55bfff205994f53831223b
+git -C /tmp/pq-mail-openssl checkout --detach FETCH_HEAD
 cd ios
 bash scripts/build-openssl.sh /tmp/pq-mail-openssl
 swift test
@@ -218,3 +220,32 @@ NFC/USB-C testing on physical PQ hardware remains required.
 ## Cross-platform OpenPGP
 
 Desktop and Android implement the same Level 3 hybrid OpenPGP wire format. Export/import the same `.asc` public identity alongside the corresponding software `.p12` or public YubiKey credential bundle to retain fingerprints. Bidirectional Java/OpenSSL signed and encrypted message exchange passes; the Swift suite now has 19 passing tests. See the [shared OpenPGP guide](../docs/OPENPGP.md). Physical iPhone YubiKey testing remains pending.
+
+## USB-only development build
+
+A USB-only variant enables CryptoTokenKit smart-card access without NFC Tag
+Reading. It hides NFC controls and defaults all YubiKey operations to USB-C.
+Use `App/USB.entitlements`, `App/USBInfo.plist` and the `USB_ONLY` compilation
+condition. This is useful when the Apple development team cannot provision NFC.
+Hardware access still needs testing on the connected phone.
+
+```sh
+xcodebuild -project PQMail.xcodeproj -scheme PQMail -configuration Debug \
+  -destination 'generic/platform=iOS' DEVELOPMENT_TEAM=YOUR_TEAM_ID \
+  CODE_SIGN_ENTITLEMENTS=App/USB.entitlements INFOPLIST_FILE=App/USBInfo.plist \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG USB_ONLY' \
+  -allowProvisioningUpdates build
+```
+
+The separate `SOFTWARE_ONLY` condition hides all token controls and uses
+`App/Software.entitlements` with `App/SoftwareInfo.plist`. Neither variant changes
+the full build's NFC and USB capability settings.
+
+## On-key certificate bundles
+
+The identity screen now offers saving/importing signed public bundles directly
+from a YubiKey and explicit ECDSA migration from 9a to empty 83. Existing mappings
+remain intact until migration. Public reads do not require a PIN; writes/migration
+require management-key authentication. See [format and recovery](../docs/ON-KEY-CERTIFICATES.md).
+Hardware access on iOS still requires appropriate entitlements. Physical storage
+and migration tests are pending; installing this build changes no keys.

@@ -2,7 +2,7 @@
 Name=APPLICATION_NAME
 Comment=APPLICATION_DESCRIPTION
 Exec=APPLICATION_LAUNCHER
-Icon=APPLICATION_ICON
+Icon=/opt/pq-mail/lib/PQ Mail.png
 Terminal=false
 Type=Application
 Categories=DEPLOY_BUNDLE_CATEGORY

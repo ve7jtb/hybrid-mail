@@ -1,0 +1,11 @@
+<resources>
+    <style name="PqMailTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">#00566B</item>
+        <item name="android:colorControlActivated">#00566B</item>
+        <item name="android:statusBarColor">#00566B</item>
+        <item name="android:navigationBarColor">#F1F7F5</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowBackground">#F1F7F5</item>
+    </style>
+</resources>

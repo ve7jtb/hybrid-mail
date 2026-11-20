@@ -1,0 +1,1 @@
+Public certificate and detached signature from RFC 9980 Appendix A.4.2/A.4.4, https://www.rfc-editor.org/rfc/rfc9980.html. Signed text: Testing followed by LF. Public standard test vectors; not user keys.

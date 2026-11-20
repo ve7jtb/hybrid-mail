@@ -1,0 +1,1 @@
+Public test vectors from RFC 9980 Appendix A.3.2 and A.3.4: https://www.rfc-editor.org/rfc/rfc9980.txt . These are published synthetic keys, not user certificates. The detached signature is a canonical-text signature over `Testing\r\n`.

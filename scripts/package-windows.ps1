@@ -10,11 +10,23 @@ New-Item -ItemType Directory -Force "$stage/native/bin","$stage/native/lib","$st
 Copy-Item build/hybrid-mail.jar,lib/*.jar $stage
 Copy-Item adapters/*.py "$stage/adapters"
 Copy-Item docs/THIRD-PARTY.txt,docs/YUBIKIT-LICENSE.txt "$stage/notices"
+if (!(Test-Path build/native/pqmail-pkcs11-sign.exe)) { throw 'Build the single-process PKCS11 helper first.' }
+if (!(Test-Path build/native/pqmail-passkey.exe)) { throw 'Build the native WebAuthn helper with scripts/build-passkey-windows.ps1 first.' }
 Copy-Item build/native/*.exe "$stage/native/bin"
 Copy-Item build/native/*.dll "$stage/native/lib"
 Copy-Item build/native/openssl/* "$stage/native/bin"
 # Provider DLL dependencies are beside the provider as well as OpenSSL.
 Copy-Item build/native/openssl/*.dll "$stage/native/lib"
+# The WebAuthn helper must match the installer architecture, not rely on emulation.
+$passkeyBytes=[IO.File]::ReadAllBytes("$stage/native/bin/pqmail-passkey.exe")
+$peOffset=[BitConverter]::ToInt32($passkeyBytes,0x3c)
+$machine=[BitConverter]::ToUInt16($passkeyBytes,$peOffset+4)
+$expectedMachine=if($Architecture -eq 'arm64'){0xAA64}else{0x8664}
+if($machine -ne $expectedMachine){throw 'Passkey helper architecture does not match installer'}
+& "$stage/native/bin/pqmail-passkey.exe" --self-test; Checked
+$probe=& "$stage/native/bin/pqmail-passkey.exe" --probe; Checked
+$probe | ConvertFrom-Json | Out-Null
+$probe | Set-Content -Encoding utf8 "dist/windows/passkey-capabilities-$Architecture.json"
 $pythonArch=if($Architecture -eq 'arm64'){'arm64'}else{'amd64'}
 Invoke-WebRequest "https://www.python.org/ftp/python/3.13.9/python-3.13.9-embed-$pythonArch.zip" -OutFile build/python.zip
 Expand-Archive build/python.zip "$stage/native/python" -Force
@@ -24,10 +36,17 @@ Get-ChildItem "$stage/native/python" -Filter 'vcruntime*.dll' | Copy-Item -Desti
 # Embedded Python's stdlib is sufficient for all adapters.
 $env:PATH="$stage/native/bin;$env:PATH"
 & "$stage/native/bin/openssl.exe" version; Checked
+# Verify software signatures against the staged OpenSSL DLLs, without hardware.
+$env:OPENSSL_CONF='NUL'
+& "$PWD/build/tests/test-pkcs11-sign.exe"; Checked
+Remove-Item Env:OPENSSL_CONF
+# No-argument helper invocation must reach its own argument validation.
+$helperProcess=Start-Process -FilePath "$stage/native/bin/pqmail-pkcs11-sign.exe" -Wait -PassThru -NoNewWindow -RedirectStandardError "$PWD/build/helper-load.txt"
+if ($helperProcess.ExitCode -ne 1 -or (Get-Content "$PWD/build/helper-load.txt" -Raw).Trim() -ne 'PQ Mail single-session signer failed at arguments; no retry') { throw 'Packaged signing helper load test failed' }
 $env:PKCS11_PROVIDER_MODULE="$stage/native/lib/ykcs11.dll"
 & "$stage/native/bin/openssl.exe" list -providers -provider default -provider "$stage/native/lib/pkcs11.dll"; Checked
 & "$stage/native/python/python.exe" -m py_compile adapters/pkcs11-mu.py adapters/pkcs11-kem.py adapters/pkcs11-presence.py; Checked
-foreach($test in @('SelfTest','TokenIdentityTest','TokenKemTest','Token87Test','SoftwareProfilesTest','GmailApiTest')) {
+foreach($test in @('WindowsPasskeyTest','DesktopVaultTest','SelfTest','TokenIdentityTest','TokenKemTest','Token87Test','SoftwareProfilesTest','GmailApiTest','CertificateBundleTest','OnKeyBundleTest')) {
  & "$env:JAVA_HOME/bin/java.exe" '-Djava.awt.headless=true' -cp "$stage/*" "dev.hybridmail.$test"; Checked
 }
 # Isolated native credential-store test; never accesses an actual OAuth credential.

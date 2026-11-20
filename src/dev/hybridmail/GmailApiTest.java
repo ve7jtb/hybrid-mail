@@ -16,8 +16,9 @@ public final class GmailApiTest {
   req.bodyPublisher().orElseThrow().subscribe(new Flow.Subscriber<ByteBuffer>(){public void onSubscribe(Flow.Subscription s){s.request(Long.MAX_VALUE);}public void onNext(ByteBuffer b){byte[] v=new byte[b.remaining()];b.get(v);out.writeBytes(v);}public void onError(Throwable t){done.completeExceptionally(t);}public void onComplete(){done.complete(null);}});done.get();return out.toString(StandardCharsets.UTF_8);
  }
  public static void main(String[] args)throws Exception{
-  check(GmailApi.isSmime("application/pkcs7-mime; smime-type=enveloped-data")&&GmailApi.isSmime("multipart/signed; protocol=\"application/pkcs7-signature\"")&&!GmailApi.isSmime("multipart/signed; protocol=\"application/pgp-signature\"")&&!GmailApi.isSmime("text/plain"),"MIME filter recognizes S/MIME, excludes PGP and plain mail");
-  MailEngine.init();var calls=new ArrayList<HttpRequest>();byte[][] wire={null};boolean[] second={false};var secrets=new ArrayList<char[]>();
+  for(String type:List.of("application/pkcs7-mime; smime-type=enveloped-data","application/x-pkcs7-mime","multipart/signed; protocol=\"application/pkcs7-signature\"","multipart/signed; protocol=\"application/x-pkcs7-signature\"","multipart/signed; protocol=\"application/pgp-signature\"","MULTIPART/ENCRYPTED; protocol=\"APPLICATION/PGP-ENCRYPTED\""))check(ProtectedMailFilter.matches(type),"S/MIME and OpenPGP filter: "+type);
+  for(String type:List.of("text/plain","multipart/mixed","multipart/signed","multipart/encrypted; protocol=\"application/pkcs7-signature\"","application/pgp-keys","application/pgp-signature","invalid"))check(!ProtectedMailFilter.matches(type),"Unprotected or ambiguous header excluded: "+type);
+  MailEngine.init();var calls=new ArrayList<HttpRequest>();String[] headerType={"text/plain"};byte[][] wire={null};boolean[] second={false};var secrets=new ArrayList<char[]>();
   GmailApi.Transport transport=(req,limit)->{
    calls.add(req);check(req.uri().getScheme().equals("https")&&req.uri().getHost().equals("gmail.googleapis.com"),"fixed HTTPS Gmail endpoint");
    check(req.headers().firstValue("Authorization").orElse("").equals("Bearer test-access"),"bearer header");
@@ -27,11 +28,12 @@ public final class GmailApiTest {
    if(p.endsWith("/messages")){check(q.contains("labelIds=INBOX")&&q.contains("maxResults=50"),"paged inbox only");second[0]=q.contains("pageToken=");return json(second[0]?"{\"messages\":[{\"id\":\"older\"}]}":"{\"messages\":[{\"id\":\"new\"}],\"nextPageToken\":\"cursor/+\"}");}
    if(q.equals("format=raw"))return json("{\"raw\":\""+Base64.getUrlEncoder().withoutPadding().encodeToString(wire[0])+"\"}");
    check(q.contains("format=metadata")&&!q.contains("format=full"),"headers only until opened");
-   return json("{\"internalDate\":\"1000\",\"sizeEstimate\":100,\"payload\":{\"headers\":[{\"name\":\"Subject\",\"value\":\"=?UTF-8?B?Y2Fmw6k=?=\"}]}}");
+   var metadata=JsonParser.parseString("{\"internalDate\":\"1000\",\"sizeEstimate\":100,\"payload\":{\"headers\":[{\"name\":\"Subject\",\"value\":\"=?UTF-8?B?Y2Fmw6k=?=\"}]}}").getAsJsonObject();
+   var contentType=new JsonObject();contentType.addProperty("name","Content-Type");contentType.addProperty("value",headerType[0]);metadata.getAsJsonObject("payload").getAsJsonArray("headers").add(contentType);return json(metadata.toString());
   };
   try(var api=new GmailApi(()->{var v="test-access".toCharArray();secrets.add(v);return v;},transport)){
    api.verifyAccount("a@example.test");reject(()->api.verifyAccount("wrong@example.test"),"wrong Google account rejected");
-   api.setSmimeOnly(true);check(api.latest().isEmpty()&&api.hasOlder(),"filtered empty page preserves navigation without body downloads");api.setSmimeOnly(false);var first=api.latest();long uid=first.get(0).uid();check(first.get(0).subject().equals("café")&&api.hasOlder()&&!api.hasNewer(),"decoded headers and first-page controls");
+   api.setProtectedOnly(true);check(api.latest().isEmpty()&&api.hasOlder(),"filtered empty page preserves navigation without body downloads");for(String type:List.of("application/pkcs7-mime","multipart/signed; protocol=\"application/pgp-signature\"","multipart/encrypted; protocol=\"application/pgp-encrypted\"")){headerType[0]=type;check(api.latest().size()==1&&api.hasOlder(),"Protected MIME listed with metadata only: "+type);}headerType[0]="text/plain";api.setProtectedOnly(false);var first=api.latest();long uid=first.get(0).uid();check(first.get(0).subject().equals("café")&&api.hasOlder()&&!api.hasNewer(),"decoded headers and first-page controls");
    api.older();check(!api.hasOlder()&&api.hasNewer(),"older page controls");reject(()->api.message(uid),"previous page no longer retained");
    var back=api.newer();check(api.hasOlder()&&!api.hasNewer(),"return to newer page");
    for(var profile:TokenProfile.values())for(var id:Identity.generateSoftwareProfile("a@example.test",profile,List.of()))for(boolean encrypt:new boolean[]{false,true}){

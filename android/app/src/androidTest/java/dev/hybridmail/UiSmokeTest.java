@@ -14,7 +14,8 @@ public class UiSmokeTest {
         var instrument=InstrumentationRegistry.getInstrumentation();
         var activity=(MainActivity)instrument.startActivitySync(new Intent(instrument.getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         try{instrument.runOnMainSync(()->{
-            View root=activity.findViewById(android.R.id.content);assertNotNull(button(root,"Compose signed mail"));
+            View root=activity.findViewById(android.R.id.content);assertNotNull(button(root,"Settings"));
+            button(root,"Settings").performClick();
             button(root,"Identities & certificates").performClick();
             assertNotNull(button(root,"Import existing YubiKey certificate pair"));
             button(root,"Create software .p12 — four keys").performClick();assertNotNull(button(root,"Create encrypted .p12"));

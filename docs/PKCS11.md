@@ -93,3 +93,57 @@ Generate fresh certificates with the dual-key demo afterward. Touch policy canno
 Software tests pass for ECDSA and RSA composite external signing, certificate-only identity save/load, invalid component rejection, exact RSA-PSS parameters, anonymous PIN-pipe transport, per-signature PIN reuse/cleanup, and provisioning guards. Hardware validation passed on 2026-11-16 for the RSA/no-touch/app-PIN flow. Both keys reported PIN policy Always and touch policy Never. Fresh pure and RSA composite certificates and S/MIME messages verified through Bouncy Castle; both saved messages and signer certificates were independently reopened and verified afterward. The RSA composite used PKCS#11 for both components. Each composite signer scopes one app PIN cache to its two component operations, then clears it. The signing run sent no email and changed no token keys; the separately authorized provisioning step created/replaced the two keys beforehand. Device identifiers, public certificates, identity files and messages remain local.
 
 For token-backed pure/hybrid encryption and decryption, see [PKCS11-KEM.md](PKCS11-KEM.md).
+
+### RFC 9980 extra keys
+
+The desktop adapters route Ed25519 signing to PIV 84 and X25519 derivation to
+85, validating the exported public key before each private operation. Ed25519
+signs the OpenPGP digest as a pure Ed25519 message (`pkeyutl -rawin`), without
+CMS domain separation or Ed25519ph. ML-DSA continues to use external mu.
+The included Yubico module patch also corrects the DER PrintableString length
+for `curve25519` (10 bytes, not 11); otherwise the OpenSSL provider rejects
+CKA_EC_PARAMS for X25519. A native unit test covers this encoding.
+
+
+## Scoped discovery and single-process signing
+
+The signing adapter sets `YKCS11_DISCOVERY=metadata` and
+`YKCS11_DISCOVERY_ID` to the validated PKCS#11 object ID in its URI. The patched
+Yubico module reads that slot's live public key and policies. It does not generate
+attestation-certificate objects in metadata mode; normal module discovery remains
+unchanged when this mode is not selected. Firmware without metadata falls back
+to existing attestation discovery for the requested slot. Older modules ignore
+the settings and retain their existing discovery behavior.
+
+When `pqmail-pkcs11-sign` is bundled beside OpenSSL and an app PIN is available,
+the adapter invokes it once. The helper compares the live public key before
+reading the PIN from its anonymous input pipe, checks the loaded private-key
+object's public material, signs and independently verifies the signature. It
+explicitly enables the provider's PIN callback mode, avoiding an additional
+terminal prompt. The process exits after the operation and clears its PIN.
+A helper error stops the operation without retry or fallback. Packages without
+the helper, and interactive Terminal callers, retain the two-process path.
+
+ML-DSA verification uses the default provider's digest/message API with `mu=1`:
+the precomputed representative is not hashed again. Software tests cover
+ML-DSA-44/65/87, Ed25519, P-256/P-384 ECDSA and RSA-3072-PSS, including wrong keys,
+altered input/signatures and truncation. Callback tests cover callback selection,
+readiness and PIN delivery without a device. The module's discovery tests and
+adapter tests cover slot selection, inherited-environment cleanup, key binding,
+PIN clearing, timeout handling and no fallback after failure.
+
+`scripts/build-pkcs11-signer.sh` builds and software-tests the helper on macOS,
+Linux and Windows/MSYS2 against the selected `HYBRID_OPENSSL_ROOT`. Mac packaging,
+Linux native builds and both Windows CI architectures invoke it. Windows uses
+QueryPerformanceCounter for phase timing and the CRT environment API for PIN
+callback selection. The helper
+is signed alongside the existing native binaries and uses bundle-relative
+OpenSSL loading. Windows/Linux packages require the helper and run software verification plus
+a loader smoke test using staged libraries. Physical YubiKey testing on those
+platforms remains separate from these CI checks. No Android/iOS backend changes are
+required. See the README for measured Mac results and physical touch-required
+slot 9c validation.
+
+For local diagnostics, setting `PQMAIL_SIGN_TIMINGS` records phase durations and
+the number of PIN callback invocations on stderr, never PIN contents or APDUs.
+Do not interpret touch/PIN wait time as card computation time.

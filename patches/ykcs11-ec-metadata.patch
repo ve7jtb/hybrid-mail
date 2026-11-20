@@ -1,9 +1,58 @@
 diff --git a/crates/ykcs11/src/objects.rs b/crates/ykcs11/src/objects.rs
-index ddb872d..8b990ca 100644
+index ddb872d..f3b8581 100644
 --- a/crates/ykcs11/src/objects.rs
 +++ b/crates/ykcs11/src/objects.rs
-@@ -1328,11 +1328,20 @@ pub(crate) const X25519_CURVE_PARAMS: &[u8] = &[
-     0x13, 0x0b, b'c', b'u', b'r', b'v', b'e', b'2', b'5', b'5', b'1', b'9',
+@@ -834,6 +834,26 @@ fn detect_key(
+     piv: &mut ActivePivSession,
+     slot: Slot,
+ ) -> (KeyPresence, PinPolicy, TouchPolicy, bool, Option<Vec<u8>>) {
++    // PQ Mail uses key metadata, not generated attestation certificates, for
++    // discovery. Opt-in preserves the normal PKCS#11 attestation-object view.
++    // Read live metadata each session; never cache keys or policy across tokens.
++    if std::env::var("YKCS11_DISCOVERY").as_deref() == Ok("metadata") {
++        match piv.get_slot_metadata(slot) {
++            Ok(metadata) => return (
++                KeyPresence::Present(metadata.public_key),
++                metadata.pin_policy,
++                metadata.touch_policy,
++                metadata.generated,
++                None,
++            ),
++            Err(e) if is_key_absent(&e) => return (
++                KeyPresence::Absent, PinPolicy::Default, TouchPolicy::Default, false, None,
++            ),
++            // Older firmware may not implement metadata. Preserve discovery's
++            // existing attestation fallback and handling of unknown keys.
++            Err(_) => {}
++        }
++    }
+     match piv.attest_key(slot) {
+         Ok(attestation_der) => {
+             let mut pin_policy = PinPolicy::Default;
+@@ -1055,7 +1075,17 @@ fn read_slot_objects(piv: &mut ActivePivSession, slot: Slot) -> Vec<PivObject> {
+     found
+ }
+ 
++fn discovery_slot(value: Option<&str>) -> Option<Slot> {
++    // Invalid/unset scope retains complete discovery; never guesses a key.
++    value.and_then(|s| s.parse::<u8>().ok()).and_then(slot_from_cka_id)
++}
++
+ pub fn read_objects(piv: &mut ActivePivSession) -> Vec<PivObject> {
++    if std::env::var("YKCS11_DISCOVERY").as_deref() == Ok("metadata") {
++        if let Some(slot) = discovery_slot(std::env::var("YKCS11_DISCOVERY_ID").ok().as_deref()) {
++            return read_slot_objects(piv, slot);
++        }
++    }
+     let mut found = Vec::new();
+     for slot in ALL_SLOTS {
+         found.extend(read_slot_objects(piv, slot));
+@@ -1325,14 +1355,23 @@ pub(crate) const ED25519_CURVE_PARAMS: &[u8] = &[
+     0x13, 0x0c, b'e', b'd', b'w', b'a', b'r', b'd', b's', b'2', b'5', b'5', b'1', b'9',
+ ];
+ pub(crate) const X25519_CURVE_PARAMS: &[u8] = &[
+-    0x13, 0x0b, b'c', b'u', b'r', b'v', b'e', b'2', b'5', b'5', b'1', b'9',
++    0x13, 0x0a, b'c', b'u', b'r', b'v', b'e', b'2', b'5', b'5', b'1', b'9',
  ];
  
 -fn ec_params_attr(obj: &PivObject, public_key: &PublicKey) -> Option<Vec<u8>> {
@@ -25,7 +74,7 @@ index ddb872d..8b990ca 100644
          _ => None,
      }
  }
-@@ -1680,7 +1689,8 @@ fn get_privkey_attribute(obj: &PivObject, attr_type: CK_ATTRIBUTE_TYPE) -> Optio
+@@ -1680,7 +1719,8 @@ fn get_privkey_attribute(obj: &PivObject, attr_type: CK_ATTRIBUTE_TYPE) -> Optio
          }
          CKA_DERIVE => {
              yk_dbg!("DERIVE");
@@ -35,7 +84,36 @@ index ddb872d..8b990ca 100644
          }
          CKA_DECAPSULATE => {
              yk_dbg!("DECAPSULATE");
-@@ -1991,6 +2001,23 @@ mod tests {
+@@ -1958,6 +1998,28 @@ fn get_data_attribute(obj: &PivObject, attr_type: CK_ATTRIBUTE_TYPE) -> Option<V
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    #[test]
++    fn scoped_discovery_uses_exact_pkcs11_id() {
++        for id in 1u8..=24 {
++            let slot = discovery_slot(Some(&id.to_string())).unwrap();
++            assert_eq!(slot_cka_id(slot), id);
++        }
++        assert!(discovery_slot(None).is_none());
++        for invalid in ["", "0", "25", "255", "256", "9c", "9;type=private", "-1"] {
++            assert!(discovery_slot(Some(invalid)).is_none());
++        }
++        assert!(matches!(discovery_slot(Some("9")), Some(Slot::Retired5)));
++    }
++
++    #[test]
++    fn curve25519_parameters_have_correct_der_length() {
++        for params in [ED25519_CURVE_PARAMS, X25519_CURVE_PARAMS] {
++            assert_eq!(params[0], 0x13);
++            assert_eq!(params[1] as usize, params.len() - 2);
++        }
++        assert_eq!(&X25519_CURVE_PARAMS[2..], b"curve25519");
++    }
++
+     use crate::backend::PivBackend;
+     use crate::piv_slot::PivSlotData;
+     use pkcs11_common::backend::Slot as EngineSlot;
+@@ -1991,6 +2053,23 @@ mod tests {
          }
      }
  

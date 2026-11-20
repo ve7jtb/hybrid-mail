@@ -8,7 +8,7 @@ root = Path(__file__).resolve().parent
 src = root.parent / 'src/dev/hybridmail'
 out = root / 'app/build/generated/shared/dev/hybridmail'
 out.mkdir(parents=True, exist_ok=True)
-for name in ['CertificateBundle','Identity','TokenProfile','MailEngine','ImapInbox','MailInbox','ExternalMu','ExternalKem','OpenPgp']:
+for name in ['IdentityTransfer','PrfVault','RegistrationCbor','SoftwareIdentityVault','SoftwareOpenPgp','ComposeFormatPolicy','Level5Compatibility','OnKeyBundle','OnKeyStorage','CertificateBundle','Identity','TokenProfile','MailEngine','ImapInbox','MailInbox','ExternalMu','ExternalKem','OpenPgp','VerifiedMime','LegacyOpenPgp','OpenPgpRecipients','CryptoWarnings']:
     s=(src/(name+'.java')).read_text()
     if name=='ExternalMu':
         marker='    /** Executable protocol:'
@@ -28,9 +28,15 @@ for old in libs.glob('*.jar'): old.unlink()
 jars=list((root.parent/'lib').glob('*.jar'))
 assert len(jars)>=8, 'Build desktop dependencies first: scripts/build-dependencies.sh'
 for p in jars:
-    if p.name.startswith(('gson', 'jakarta.activation', 'angus-activation')): continue
+    if p.name.startswith(('jakarta.activation', 'angus-activation')): continue
     with zipfile.ZipFile(p) as source, zipfile.ZipFile(libs/p.name,'w',zipfile.ZIP_DEFLATED) as dest:
         for item in source.infolist():
             n=item.filename
             if n.startswith('META-INF/versions/') or n.endswith('module-info.class') or n.upper().endswith(('.SF','.RSA','.DSA')):continue
             dest.writestr(item,source.read(n))
+
+# Run the canonical legacy certificate policy tests on Android too.
+test_out=root/'app/build/generated/shared-tests/dev/hybridmail'
+test_out.mkdir(parents=True,exist_ok=True)
+for name in ['LegacyOpenPgpTest','LegacyOpenPgpPolicyTest']:
+    (test_out/(name+'.java')).write_text((src/(name+'.java')).read_text())

@@ -15,6 +15,7 @@ android {
         targetCompatibility JavaVersion.VERSION_17
         coreLibraryDesugaringEnabled true
     }
+    sourceSets.androidTest.java.srcDir "$buildDir/generated/shared-tests"
     sourceSets.main.java.srcDir "$buildDir/generated/shared"
     packaging.resources {
         excludes += ['META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'META-INF/LICENSE*', 'META-INF/NOTICE*', 'META-INF/versions/**', 'META-INF/INDEX.LIST', 'META-INF/DEPENDENCIES', 'module-info.class']
@@ -28,11 +29,16 @@ tasks.register('prepareShared', Exec) {
     inputs.dir rootProject.file('../src/dev/hybridmail')
     inputs.dir rootProject.file('../lib')
     inputs.file rootProject.file('prepare.py')
+    outputs.dir "$buildDir/generated/shared-tests"
     outputs.dir "$buildDir/generated/shared"
     outputs.dir "$buildDir/android-libs"
 }
 tasks.named('preBuild').configure { dependsOn 'prepareShared' }
 dependencies {
+    implementation 'androidx.credentials:credentials:1.6.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.6.0'
+    implementation('net.openid:appauth:0.11.1') { exclude group: 'com.google.code.gson', module: 'gson' }
+    implementation 'com.google.android.gms:play-services-auth:22.0.0'
     implementation fileTree(dir: "$buildDir/android-libs", include: ['*.jar'])
     implementation 'com.yubico.yubikit:android:3.3.0'
     implementation 'com.yubico.yubikit:piv:3.3.0'

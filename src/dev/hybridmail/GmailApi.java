@@ -26,10 +26,12 @@ final class GmailApi implements MailInbox {
     boolean hasNewer(){return !earlierPages.isEmpty();}
     synchronized List<ImapInbox.Entry> older()throws Exception{if(!hasOlder())return List.of();String old=page;var result=loadPage(nextPage);earlierPages.push(old);return result;}
     synchronized List<ImapInbox.Entry> newer()throws Exception{if(!hasNewer())return List.of();var result=loadPage(earlierPages.peek());earlierPages.pop();return result;}
+    private String search="";
+    int pageNumber(){return earlierPages.size()+1;}
+    synchronized void setSearch(String value){String next=value.trim();if(!search.equals(next)){search=next;earlierPages.clear();page="";nextPage="";ids.clear();}}
     private boolean closed;
-    private boolean smimeOnly;
-    void setSmimeOnly(boolean value){smimeOnly=value;}
-    static boolean isSmime(String value){try{var type=new ContentType(value);String base=type.getBaseType().toLowerCase(Locale.ROOT);String protocol=type.getParameter("protocol");return base.equals("application/pkcs7-mime")||base.equals("application/x-pkcs7-mime")||(base.equals("multipart/signed")&&protocol!=null&&(protocol.equalsIgnoreCase("application/pkcs7-signature")||protocol.equalsIgnoreCase("application/x-pkcs7-signature")));}catch(Exception e){return false;}}
+    private boolean protectedOnly;
+    void setProtectedOnly(boolean value){protectedOnly=value;}
     GmailApi(Credentials credentials){this(credentials,network());}
     GmailApi(Credentials credentials,Transport transport){this.credentials=credentials;this.transport=transport;}
     private static Transport network(){
@@ -66,7 +68,7 @@ final class GmailApi implements MailInbox {
         var result=loadPage("");earlierPages.clear();return result;
     }
     private List<ImapInbox.Entry> loadPage(String cursor)throws Exception{
-        String query="messages?labelIds=INBOX&maxResults=50"+(cursor.isEmpty()?"":"&pageToken="+java.net.URLEncoder.encode(cursor,StandardCharsets.UTF_8));
+        String query="messages?labelIds=INBOX&maxResults=50"+(search.isEmpty()?"":"&q="+java.net.URLEncoder.encode(search,StandardCharsets.UTF_8))+(cursor.isEmpty()?"":"&pageToken="+java.net.URLEncoder.encode(cursor,StandardCharsets.UTF_8));
         var data=request(query,null,65536);var result=new ArrayList<ImapInbox.Entry>();var found=new HashMap<Long,String>();
         if(data.has("messages"))for(var item:data.getAsJsonArray("messages")){
             if(result.size()==50)break;String id=safeId(item.getAsJsonObject().get("id").getAsString());
@@ -78,7 +80,7 @@ final class GmailApi implements MailInbox {
                 if(name.equalsIgnoreCase("Content-Type"))contentType=value;
                 if(name.equalsIgnoreCase("From"))from=value;if(name.equalsIgnoreCase("Subject"))subject=value;
             }
-            if(smimeOnly&&!isSmime(contentType))continue;
+            if(protectedOnly&&!ProtectedMailFilter.matches(contentType))continue;
             long uid=ids.entrySet().stream().filter(e->e.getValue().equals(id)).map(Map.Entry::getKey).findFirst().orElseGet(()->++nextId);
             found.put(uid,id);result.add(new ImapInbox.Entry(uid,from,subject,Instant.ofEpochMilli(metadata.get("internalDate").getAsLong()),metadata.get("sizeEstimate").getAsLong()));
         }

@@ -25,6 +25,9 @@ public final class ExternalKem {
     public interface Backend {
         byte[] decapsulate(PublicKey key,byte[] ciphertext)throws Exception;
         byte[] derive(PublicKey key,PublicKey peer)throws Exception;
+        default byte[] decapsulateLevel5Compatibility(PublicKey key,byte[] ct)throws Exception{throw new GeneralSecurityException("Level 5 compatibility backend required");}
+        default byte[] deriveLevel5Compatibility(PublicKey key,PublicKey peer)throws Exception{throw new GeneralSecurityException("Level 5 compatibility backend required");}
+        default byte[] deriveCompatibility(PublicKey key,PublicKey peer)throws Exception{throw new GeneralSecurityException("Dedicated X25519 backend required");}
         default Backend newOperation(){return this;}
         default void clearSecrets(){}
     }
@@ -35,15 +38,19 @@ public final class ExternalKem {
         ExecutableBackend(String path){this.path=path;}
         public Backend newOperation(){return new ExecutableBackend(path);}
         public void clearSecrets(){pin.clear();}
-        private byte[] invoke(String algorithm,PublicKey key,byte[] input)throws Exception{
+        private byte[] invoke(String algorithm,PublicKey key,byte[] input)throws Exception{return invoke(algorithm,key,input,java.util.Map.of());}
+        private byte[] invoke(String algorithm,PublicKey key,byte[] input,java.util.Map<String,String> config)throws Exception{
             try{
-                byte[] secret=ExternalMu.invoke(path,algorithm,key,input,pin.copy(()->{TokenPresence.require(path);return TokenPin.request(algorithm);}),true);
+                byte[] secret=ExternalMu.invoke(path,algorithm,key,input,pin.copy(()->{TokenPresence.require(path);return TokenPin.request(algorithm);}),true,config);
                 if(secret.length!=(algorithm.equals("ECDH-P384")?48:32)){Arrays.fill(secret,(byte)0);throw new GeneralSecurityException("Invalid token shared-secret length");}
                 return secret;
             }catch(Exception e){clearSecrets();throw e;}
         }
         public byte[] decapsulate(PublicKey key,byte[] ct)throws Exception{return invoke(key.getAlgorithm(),key,ct);}
-        public byte[] derive(PublicKey key,PublicKey peer)throws Exception{return invoke(((java.security.interfaces.ECPublicKey)key).getParams().getCurve().getField().getFieldSize()==384?"ECDH-P384":"ECDH-P256",key,peer.getEncoded());}
+        public byte[] decapsulateLevel5Compatibility(PublicKey key,byte[] ct)throws Exception{return invoke("ML-KEM-768",key,ct,java.util.Map.of("PQMAIL_LEVEL5_COMPATIBILITY","1"));}
+        public byte[] deriveLevel5Compatibility(PublicKey key,PublicKey peer)throws Exception{return invoke(key instanceof java.security.interfaces.ECPublicKey?"ECDH-P384":"X25519",key,peer.getEncoded(),java.util.Map.of("PQMAIL_LEVEL5_COMPATIBILITY","1"));}
+        public byte[] deriveCompatibility(PublicKey key,PublicKey peer)throws Exception{return invoke("X25519",key,peer.getEncoded(),java.util.Map.of("PQMAIL_COMPATIBILITY_SLOT","89"));}
+        public byte[] derive(PublicKey key,PublicKey peer)throws Exception{if(!(key instanceof java.security.interfaces.ECPublicKey))return invoke("X25519",key,peer.getEncoded());return invoke(((java.security.interfaces.ECPublicKey)key).getParams().getCurve().getField().getFieldSize()==384?"ECDH-P384":"ECDH-P256",key,peer.getEncoded());}
     }
     public static void validatePublicKey(PublicKey key)throws Exception{
         if(key instanceof CompositePublicKey c){

@@ -5,7 +5,7 @@
 #include <io.h>
 #include <fcntl.h>
 int main(int argc,char **argv){
- if(argc!=3||(strcmp(argv[2],"google-client")&&strcmp(argv[2],"google-session")&&strcmp(argv[2],"self-test")))return 1;
+ if(argc!=3||(strcmp(argv[2],"google-client")&&strcmp(argv[2],"google-session") && strcmp(argv[2],"microsoft-session")&&strcmp(argv[2],"self-test")))return 1;
  _setmode(_fileno(stdin),_O_BINARY);_setmode(_fileno(stdout),_O_BINARY);
  char target[100];snprintf(target,sizeof(target),"dev.hybridmail.google-oauth/%s",argv[2]);
  if(!strcmp(argv[1],"get")){PCREDENTIALA c=NULL;if(!CredReadA(target,CRED_TYPE_GENERIC,0,&c))return GetLastError()==ERROR_NOT_FOUND?2:1;fwrite(c->CredentialBlob,1,c->CredentialBlobSize,stdout);CredFree(c);return 0;}

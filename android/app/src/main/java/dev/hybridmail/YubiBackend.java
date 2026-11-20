@@ -35,19 +35,34 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
         String algorithm=switch(metadata.getKeyType()) {
             case MLDSA44 -> "ML-DSA-44";case MLDSA65 -> "ML-DSA-65";case MLDSA87 -> "ML-DSA-87";
             case MLKEM768 -> "ML-KEM-768";case MLKEM1024 -> "ML-KEM-1024";
-            case ECCP256, ECCP384 -> "EC";
+            case ECCP256, ECCP384 -> "EC";case ED25519 -> "Ed25519";case X25519 -> "X25519";
             default -> throw new GeneralSecurityException("Unsupported key in slot "+slot);
         };
         return KeyFactory.getInstance(algorithm,"BC").generatePublic(new X509EncodedKeySpec(metadata.getPublicKeyValues().getEncoded()));
     }
     static Map<Slot,PublicKey> keys(Identity identity) {
-        return keys(identity,new String[]{"9c","9a","9d","82"});
+        return keys(identity,new String[]{"9c","83","9d","82"});
     }
     static Map<Slot,PublicKey> keys(Identity identity,String[] slots){
         Map<Slot,PublicKey> keys=new EnumMap<>(Slot.class);
         add(keys,identity.signingCert().getPublicKey(),Slot.fromValue(Integer.parseInt(slots[0],16)),Slot.fromValue(Integer.parseInt(slots[1],16)));
         if(identity.encryptionCert()!=null)add(keys,identity.encryptionCert().getPublicKey(),Slot.fromValue(Integer.parseInt(slots[2],16)),Slot.fromValue(Integer.parseInt(slots[3],16)));
         return keys;
+    }
+    static Map<Slot,PublicKey> pgpKeys(Identity id,String[] slots,OpenPgp.PublicIdentity own)throws Exception {
+        OpenPgp.match(own,id);
+        if(Level5Compatibility.supports(own)&&own.compatibility!=null){
+            var result=keys(id,slots);var full=own.compatibility;Level5Compatibility.checkPair(own,full);
+            result.put(Slot.RETIRED7,Level5Compatibility.key(full.legacy.primary));result.put(Slot.RETIRED8,Level5Compatibility.key(Level5Compatibility.classical(full).legacy.recipient));
+            result.put(Slot.RETIRED3,OpenPgp.pq(OpenPgp.slice(full.subkey,38,full.subkey.length),false));result.put(Slot.RETIRED4,OpenPgp.curve25519(OpenPgp.slice(full.subkey,6,38),false));return result;
+        }
+        if(!OpenPgp.rfc9980(own))return keys(id,slots);
+        Map<Slot,PublicKey> result=new EnumMap<>(Slot.class);
+        result.put(Slot.fromValue(Integer.parseInt(slots[0],16)),own.signing.pq());
+        result.put(Slot.RETIRED3,own.signing.ec());
+        result.put(Slot.fromValue(Integer.parseInt(slots[2],16)),own.encryption.pq());
+        result.put(Slot.RETIRED4,own.encryption.ec());
+        return result;
     }
     private static void add(Map<Slot,PublicKey> keys,PublicKey key,Slot pq,Slot ec) {
         if(key instanceof org.bouncycastle.jcajce.CompositePublicKey c){keys.put(pq,c.getPublicKeys().get(0));keys.put(ec,c.getPublicKeys().get(1));}
@@ -115,13 +130,32 @@ final class YubiBackend implements ExternalMu.Backend, ExternalKem.Backend {
             return session.rawSignOrDecrypt(slotFor(key),type,digest);
         }catch(Exception e){clearSecrets();throw e;}
     }
+    public byte[] signCompatibilityEcdsa(PublicKey key,byte[] digest)throws Exception{
+        if(slotFor(key)!=Slot.RETIRED7)throw new GeneralSecurityException("Compatibility signing requires slot 88");return signEcdsa(key,digest);
+    }
+    public byte[] decapsulateLevel5Compatibility(PublicKey key,byte[] ciphertext)throws Exception{
+        if(slotFor(key)!=Slot.RETIRED3)throw new GeneralSecurityException("Compatibility KEM requires slot 84");return decapsulate(key,ciphertext);
+    }
+    public byte[] deriveLevel5Compatibility(PublicKey key,PublicKey peer)throws Exception{
+        if(slotFor(key)!=(key instanceof java.security.interfaces.ECPublicKey?Slot.RETIRED8:Slot.RETIRED4))throw new GeneralSecurityException("Wrong compatibility ECDH slot");return derive(key,peer);
+    }
+    public byte[] signEd25519(PublicKey key,byte[] digest)throws Exception {
+        try {
+            if(digest.length!=48)throw new GeneralSecurityException("Expected OpenPGP SHA-384 digest");
+            Slot slot=slotFor(key);KeyType type=authorize(slot,key,"RFC 9980 ML-DSA-65 + Ed25519 signing");
+            if(type!=KeyType.ED25519)throw new GeneralSecurityException("Expected Ed25519 signing key");
+            byte[] signature=session.rawSignOrDecrypt(slot,type,digest);
+            if(signature.length!=64)throw new GeneralSecurityException("Invalid Ed25519 signature length");
+            return signature;
+        }catch(Exception e){clearSecrets();throw e;}
+    }
     public byte[] decapsulate(PublicKey key,byte[] ciphertext)throws Exception {
         try {KeyType type=authorize(slotFor(key),key,key.getAlgorithm()+" decryption");
             return session.decapsulate(slotFor(key),type,ciphertext);
         }catch(Exception e){clearSecrets();throw e;}
     }
     public byte[] derive(PublicKey key,PublicKey peer)throws Exception {
-        try {authorize(slotFor(key),key,"ECDH decryption");
+        try {authorize(slotFor(key),key,key instanceof java.security.interfaces.ECPublicKey?"ECDH decryption":"RFC 9980 ML-KEM-768 + X25519 decryption");
             return session.calculateSecret(slotFor(key),PublicKeyValues.fromPublicKey(peer));
         }catch(Exception e){clearSecrets();throw e;}
     }

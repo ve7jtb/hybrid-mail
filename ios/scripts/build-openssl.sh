@@ -1,14 +1,23 @@
 #!/bin/bash
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-source_dir="${1:?Pass the OpenSSL 3.6.5 source directory}"
+source_dir="${1:?Pass the pinned OpenSSL 3.5 LTS source directory}"
 source_dir="$(cd "$source_dir" && pwd)"
-expected=c8bd5a57108599ac650bbae77fcabe3109dab2e8
+source "$root/../scripts/openssl-source.env"
+expected="$OPENSSL_REVISION"
 if [[ "$(git -C "$source_dir" rev-parse HEAD)" != "$expected" ]]; then
-  echo "Expected OpenSSL 3.6.5 commit $expected" >&2; exit 1
+  echo "Expected pinned OpenSSL 3.5 LTS commit $expected" >&2; exit 1
 fi
-build_root="${2:-$root/.native-build}"
+build_root="${2:-$root/.native-build/$expected}"
+if [[ -d "$build_root" && ! -f "$build_root/source-revision" ]]; then
+  echo "Use a fresh build directory: source revision is not recorded" >&2; exit 1
+fi
+if [[ -f "$build_root/source-revision" && "$(cat "$build_root/source-revision")" != "$expected" ]]; then
+  echo "Use a fresh build directory for the updated OpenSSL source" >&2; exit 1
+fi
+[[ -z "$(git -C "$source_dir" status --porcelain --untracked-files=no)" ]] || { echo "OpenSSL source has tracked changes" >&2; exit 1; }
 mkdir -p "$build_root" "$root/Frameworks"
+printf "%s\n" "$expected" > "$build_root/source-revision"
 for variant in macos simulator device; do
   mkdir -p "$build_root/$variant"
   case "$variant" in

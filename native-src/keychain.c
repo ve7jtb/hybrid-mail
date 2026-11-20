@@ -30,7 +30,7 @@ static OSStatus writeItem(CFStringRef account,Boolean protected,CFDataRef data){
     CFDictionarySetValue(attrs,kSecValueData,data);
     OSStatus s=SecItemUpdate(q,attrs);
     if(s==errSecItemNotFound){
-        CFDictionarySetValue(q,kSecValueData,data);CFDictionarySetValue(q,kSecAttrLabel,CFSTR("PQ Mail Google OAuth refresh token"));
+        CFDictionarySetValue(q,kSecValueData,data);CFDictionarySetValue(q,kSecAttrLabel,(CFEqual(account,CFSTR("microsoft-session"))?CFSTR("PQ Mail Microsoft OAuth refresh token"):CFSTR("PQ Mail Google OAuth refresh token")));
         if(protected){
             CFErrorRef error=NULL;
             SecAccessControlRef acl=SecAccessControlCreateWithFlags(NULL,kSecAttrAccessibleWhenUnlockedThisDeviceOnly,kSecAccessControlUserPresence,&error);
@@ -42,7 +42,7 @@ static OSStatus writeItem(CFStringRef account,Boolean protected,CFDataRef data){
     CFRelease(q);CFRelease(attrs);return s;
 }
 int main(int argc,char **argv){@autoreleasepool {
-    if(argc!=3 || (strcmp(argv[2],"google-client") && strcmp(argv[2],"google-session") && strcmp(argv[2],"self-test")))return 1;
+    if(argc!=3 || (strcmp(argv[2],"google-client") && strcmp(argv[2],"google-session") && strcmp(argv[2],"microsoft-session") && strcmp(argv[2],"self-test")))return 1;
     CFStringRef account=CFStringCreateWithCString(NULL,argv[2],kCFStringEncodingUTF8);
     const char *op=argv[1];OSStatus s=errSecParam;CFDataRef data=NULL;
     if(!strcmp(op,"get") || !strcmp(op,"get-protected") || !strcmp(op,"probe-protected")){

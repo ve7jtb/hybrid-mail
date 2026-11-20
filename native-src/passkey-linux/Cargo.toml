@@ -1,0 +1,13 @@
+[package]
+name = "pqmail-passkey"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+[dependencies]
+yubikit = { git = "https://github.com/Yubico/yubikey-manager.git", rev = "f59e6fedb4f7a75da551ba4dea5d0c7863c8a2b4", default-features = false, features = ["hid"] }
+zeroize = "1.9"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+libc = "0.2"

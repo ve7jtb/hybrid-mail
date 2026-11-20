@@ -17,6 +17,9 @@ public final class ExternalMu {
         byte[] sign(PublicKey publicKey, byte[] mu) throws Exception;
         default Backend newOperation() { return this; }
         default void clearSecrets() {}
+        default byte[] signCompatibilityEcdsa(PublicKey key,byte[] digest)throws Exception{throw new GeneralSecurityException("Level 5 compatibility backend required");}
+        default byte[] signCompatibilityEd25519(PublicKey key,byte[] digest)throws Exception{throw new GeneralSecurityException("Backend lacks dedicated compatibility signing");}
+        default byte[] signEd25519(PublicKey key,byte[] digest)throws Exception{throw new GeneralSecurityException("This backend does not support Ed25519");}
         default byte[] signRsa(PublicKey publicKey, byte[] digest) throws Exception {
             throw new GeneralSecurityException("This adapter does not support token RSA-PSS");
         }
@@ -152,6 +155,7 @@ public final class ExternalMu {
     }
     /** Executable protocol: 3 UTF-8 lines on stdin, one base64 signature on stdout. No shell. */
     public static Backend executable(String executable) { return new ExecutableBackend(executable); }
+    static Backend certification(String executable){return new ExecutableBackend(executable,Map.of("PQMAIL_CERTIFICATION_SLOTS","86,87"));}
     @FunctionalInterface interface PinSource { char[] request()throws Exception; }
     static final class OperationPinCache {
         private char[] value;
@@ -164,26 +168,36 @@ public final class ExternalMu {
     }
     private static final class ExecutableBackend implements Backend {
         private final String executable;
+        private final Map<String,String> overrides;
         private final OperationPinCache pinCache=new OperationPinCache();
-        ExecutableBackend(String executable){this.executable=executable;}
-        public Backend newOperation(){return new ExecutableBackend(executable);}
+        ExecutableBackend(String executable){this(executable,Map.of());}
+        ExecutableBackend(String executable,Map<String,String> overrides){this.executable=executable;this.overrides=Map.copyOf(overrides);}
+        public Backend newOperation(){return new ExecutableBackend(executable,overrides);}
         public synchronized void clearSecrets(){pinCache.clear();}
-        private synchronized byte[] call(String algorithm,PublicKey pub,byte[] input)throws Exception{
+        private synchronized byte[] call(String algorithm,PublicKey pub,byte[] input)throws Exception{return call(algorithm,pub,input,overrides);}
+        private synchronized byte[] call(String algorithm,PublicKey pub,byte[] input,Map<String,String> config)throws Exception{
             boolean appPin=java.nio.file.Path.of(executable).getFileName().toString().equals("pkcs11-mu.py");
             try{
-                return invoke(executable,algorithm,pub,input,appPin?pinCache.copy(()->{TokenPresence.require(executable);return TokenPin.request(algorithm);}):null);
+                return invoke(executable,algorithm,pub,input,appPin?pinCache.copy(()->{TokenPresence.require(executable);return TokenPin.request(algorithm);}):null,false,config);
             }catch(Exception e){clearSecrets();throw e;}
         }
         public byte[] sign(PublicKey pub,byte[] mu)throws Exception{return call(pub.getAlgorithm(),pub,mu);}
         public byte[] signEcdsa(PublicKey pub,byte[] digest)throws Exception{return call(((java.security.interfaces.ECPublicKey)pub).getParams().getCurve().getField().getFieldSize()==384?"ECDSA-P384-SHA384":"ECDSA-P256-SHA256",pub,digest);}
+        public byte[] signCompatibilityEcdsa(PublicKey pub,byte[] digest)throws Exception{return call("ECDSA-P384-SHA384",pub,digest,Map.of("PQMAIL_LEVEL5_COMPATIBILITY","1"));}
+        public byte[] signCompatibilityEd25519(PublicKey pub,byte[] digest)throws Exception{return call("Ed25519",pub,digest,Map.of("PQMAIL_COMPATIBILITY_SLOT","88"));}
+        public byte[] signEd25519(PublicKey pub,byte[] digest)throws Exception{return call("Ed25519",pub,digest);}
         public byte[] signRsa(PublicKey pub,byte[] digest)throws Exception{return call("RSA3072-PSS-SHA256",pub,digest);}
     }
     private static byte[] invoke(String executable,String algorithm,PublicKey publicKey,byte[] mu,char[] pin)throws Exception{
         return invoke(executable,algorithm,publicKey,mu,pin,false);
     }
     static byte[] invoke(String executable,String algorithm,PublicKey publicKey,byte[] mu,char[] pin,boolean rawOutput) throws Exception {
+            return invoke(executable,algorithm,publicKey,mu,pin,rawOutput,Map.of());
+    }
+    static byte[] invoke(String executable,String algorithm,PublicKey publicKey,byte[] mu,char[] pin,boolean rawOutput,Map<String,String> overrides)throws Exception{
             boolean pinDialog=pin!=null;
             ProcessBuilder builder=DesktopState.process(executable).redirectError(pinDialog?ProcessBuilder.Redirect.PIPE:ProcessBuilder.Redirect.DISCARD);
+            builder.environment().putAll(overrides);
             if(pinDialog)builder.environment().put("HYBRID_MAIL_PIN_STDIN","1");
             Process p;
             try { p=builder.start(); } catch(Exception e){if(pin!=null)Arrays.fill(pin,'\0');throw e;}

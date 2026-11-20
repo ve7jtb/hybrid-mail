@@ -68,3 +68,21 @@ private-key operation in these paths; it is not a proof covering every future
 feature or upstream change. The 0.9.10 dependency match remains open and is not
 suppressed. Recheck when updating YubiKit; a major-version dependency override
 without upstream API/test changes is not an appropriate fix.
+
+## Local validation
+
+* All five required Bouncy Castle modules built with Gradle 9.9.1.
+* Android app and instrumentation APKs built with Gradle 9.9.1 and those jars.
+  The emulator run exercised 89 tests: 88 passed initially; the remaining test
+  lacked its RFC 9980 public fixtures in Git. The certificate and signature were
+  checked byte-for-byte against the published RFC, added to the test assets,
+  and the failed test then passed on rerun. They are standard public vectors,
+  not a user's key material.
+* Desktop Java regression suites passed; Python adapter tests passed (55 tests,
+  one optional skip). No physical token operation or email sending was required.
+* All three OpenSSL XCFramework slices built (Mac, iOS simulator, iOS device).
+  A linked version probe reported `OpenSSL 3.5.10-dev`. The iOS simulator app
+  built unsigned. Swift tests had 20 passes and two optional fixture-dependent
+  skips when running S/MIME interoperability; Bouncy Castle verified/decrypted
+  the iOS output for all six pure/hybrid profiles, and Swift verified/decrypted
+  the desktop input. Physical iOS hardware tests were not performed.

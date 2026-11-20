@@ -23,7 +23,7 @@ checkout() {
 }
 checkout mail-api 09b27cf52b4b382c55cc8736858456f3aa43b369
 checkout angus-mail d33de7563efdf5a3cb0691994500d6cad8aecafd
-checkout bc-java 6b4f58259d2b3ee8301fda1d6c8798f816abc5ea
+checkout bc-java fad147c4440df867930bd9d8c14e85fbaca1c377
 maven() { mvn -B -ntp "-Dmaven.repo.local=$M2" "$@"; }
 echo 'Building Jakarta Mail API (log: mail-api.log)…'
 maven -DskipTests -f "$DEPS/repos/mail-api/api/pom.xml" source:jar install > "$DEPS/logs/mail-api.log" 2>&1

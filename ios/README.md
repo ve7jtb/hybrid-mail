@@ -1,6 +1,6 @@
 # PQ Mail for iOS — S/MIME and OpenPGP preview
 
-Native SwiftUI app with **OpenSSL 3.6.5** for software cryptography and
+Native SwiftUI app with **OpenSSL 3.5 LTS (patched 3.5.10-dev snapshot)** for software cryptography and
 **YubiKit Swift 1.4.0 source** for NFC/USB-C transport and a bounded raw PIV adapter for PQ operations. Builds for
 Apple Silicon iOS Simulator and arm64 iOS devices, iOS 16+.
 
@@ -131,11 +131,13 @@ are not a claim of compatibility with every S/MIME implementation or older draft
 ## Build
 
 Use Xcode with Swift 6.1+ on Apple Silicon. OpenSSL source is pinned to
-`c8bd5a57108599ac650bbae77fcabe3109dab2e8` (3.6.5). Generated libraries and private
+`81162ed421d98f527f55bfff205994f53831223b` (3.5.10-dev, containing the November 2026 security fixes). Generated libraries and private
 test fixtures are not source files and must not be committed.
 
 ```sh
-git clone --depth 1 --branch openssl-3.6.5 https://github.com/openssl/openssl.git /tmp/pq-mail-openssl
+git init /tmp/pq-mail-openssl
+git -C /tmp/pq-mail-openssl fetch --depth 1 https://github.com/openssl/openssl.git 81162ed421d98f527f55bfff205994f53831223b
+git -C /tmp/pq-mail-openssl checkout --detach FETCH_HEAD
 cd ios
 bash scripts/build-openssl.sh /tmp/pq-mail-openssl
 swift test

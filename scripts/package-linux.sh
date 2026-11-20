@@ -2,6 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/check-java.sh
+source scripts/openssl-source.env
+cmp scripts/openssl-source.env .deps/openssl-install/pq-mail-source.env
 case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) echo 'Unsupported architecture' >&2; exit 1 ;; esac
 stage="$PWD/build/linux-stage"
 image="$PWD/build/linux-image"
@@ -13,7 +15,7 @@ cp adapters/*.py "$stage/adapters/"
 cp build/native/pqmail-passkey build/native/pqmail-pkcs11-sign build/native/hybrid-mail-provision build/native/hybrid-mail-credentials "$stage/native/bin/"
 cp native/*.so .deps/openssl-install/lib/libcrypto.so.3 .deps/openssl-install/lib/libssl.so.3 "$stage/native/lib/"
 cp .deps/openssl-install/bin/openssl "$stage/native/bin/"
-cp docs/THIRD-PARTY.txt docs/YUBIKIT-LICENSE.txt .deps/openssl-3.5.9/LICENSE.txt "$stage/notices/"
+cp docs/THIRD-PARTY.txt docs/YUBIKIT-LICENSE.txt ".deps/openssl-$OPENSSL_REVISION/LICENSE.txt" "$stage/notices/"
 patchelf --set-rpath '$ORIGIN/../lib' "$stage/native/bin/openssl"
 patchelf --set-rpath '$ORIGIN/../lib' "$stage/native/bin/pqmail-pkcs11-sign"
 for file in "$stage/native/lib/"*.so*; do patchelf --set-rpath '$ORIGIN' "$file"; done
@@ -27,7 +29,9 @@ helper_status=$?
 set -e
 [[ "$helper_status" == 1 && "$helper_output" == 'PQ Mail single-session signer failed at arguments; no retry' ]] || { echo 'Packaged signing helper load test failed' >&2; exit 1; }
 
-"$stage/native/bin/openssl" version
+"$stage/native/bin/openssl" version | tee "$out/openssl-version-$arch.txt"
+cp scripts/openssl-source.env "$stage/notices/openssl-source.env"
+cp scripts/openssl-source.env "$out/openssl-source.env"
 PKCS11_PROVIDER_MODULE="$stage/native/lib/libykcs11.so" "$stage/native/bin/openssl" list -providers -provider default -provider "$stage/native/lib/pkcs11.so"
 "$stage/native/bin/pqmail-passkey" --probe
 java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.LinuxPasskeyTest "$stage/native/bin/pqmail-passkey"

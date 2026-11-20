@@ -61,7 +61,7 @@ An [Android version](android/README.md) uses **YubiKit 3.3.0 directly over USB a
 
 ## iOS development preview
 
-The [native SwiftUI iOS preview](ios/README.md) uses **OpenSSL 3.6.5** for Level 2/3/5 pure and hybrid S/MIME, persistent password-protected `.p12` identities, and public YubiKey credential bundles. **OpenPGP is an alternative for Level 3 hybrid identities**, using draft-05 ML-DSA-65 + P-384 / ML-KEM-768 + P-384 profiles, separate OpenPGP public identities and PGP/MIME. Both formats share software primitives and the YubiKit NFC/USB-C raw PIV backend. Tests cover published OpenPGP vectors, simulator round trips, simulated hardware operations, and desktop S/MIME/PKCS#12 interoperability. **Physical iPhone YubiKey testing remains pending.** This local-file preview has no mail accounts/sending or attachments yet; see the iOS README for supported formats and limitations.
+The [native SwiftUI iOS preview](ios/README.md) uses **OpenSSL 3.5 LTS (patched 3.5.10-dev snapshot)** for Level 2/3/5 pure and hybrid S/MIME, persistent password-protected `.p12` identities, and public YubiKey credential bundles. **OpenPGP is an alternative for Level 3 hybrid identities**, using draft-05 ML-DSA-65 + P-384 / ML-KEM-768 + P-384 profiles, separate OpenPGP public identities and PGP/MIME. Both formats share software primitives and the YubiKit NFC/USB-C raw PIV backend. Tests cover published OpenPGP vectors, simulator round trips, simulated hardware operations, and desktop S/MIME/PKCS#12 interoperability. **Physical iPhone YubiKey testing remains pending.** This local-file preview has no mail accounts/sending or attachments yet; see the iOS README for supported formats and limitations.
 
 ## OpenPGP profiles
 
@@ -238,7 +238,7 @@ Dependencies are pinned to these public source revisions:
 |---|---|
 | [mail-api](https://github.com/ve7jtb/mail-api) | `09b27cf52b4b382c55cc8736858456f3aa43b369` |
 | [angus-mail](https://github.com/ve7jtb/angus-mail) | `d33de7563efdf5a3cb0691994500d6cad8aecafd` |
-| [bc-java](https://github.com/ve7jtb/bc-java) | `6b4f58259d2b3ee8301fda1d6c8798f816abc5ea` |
+| [bc-java](https://github.com/ve7jtb/bc-java) | `fad147c4440df867930bd9d8c14e85fbaca1c377` |
 
 Activation uses `jakarta.activation-api:2.2.0-M2` and `angus-activation:2.1.0-M1`. The dependency script keeps checkouts, caches and logs under `.deps/`, validates existing checkouts, and writes runtime jars to `lib/`. Set `HYBRID_DEPS_DIR` to change the cache location. Upstream dependency test suites are skipped; app tests run with `build.sh test`. Subsequent app-only builds use the local jars. Builds are not claimed to be byte-for-byte reproducible.
 
@@ -265,7 +265,7 @@ cd android
 # app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The build pins AGP 9.3.3, Gradle 9.7.1 and YubiKit 3.3.0. The APK supports API 26 and later; testing so far used a Pixel 10 running Android 17. This is a debug-signed preview. Android uses Activation 2.1.3 / Angus Activation 2.0.2 for runtime compatibility. See the [Android guide](android/README.md) for installation, device tests, storage behavior and limitations.
+The build pins AGP 9.3.3, Gradle 9.9.1 and YubiKit 3.3.0. The APK supports API 26 and later; testing so far used a Pixel 10 running Android 17. This is a debug-signed preview. Android uses Activation 2.1.3 / Angus Activation 2.0.2 for runtime compatibility. See the [Android guide](android/README.md) for installation, device tests, storage behavior and limitations.
 
 ### Compatibility with existing installations
 
@@ -332,7 +332,7 @@ This baseline includes the November Base64 intrinsic fix (CVE-2026-114938); see 
 
 ### Linux amd64 and ARM64
 
-Linux builds provide a `.deb` installer and a portable `.tar.gz` app image for each architecture. They target Ubuntu 24.04 or newer (glibc 2.39+), bundle patched Java 25.0.5.1, OpenSSL 3.5.9 LTS, the PKCS#11 provider/module and YubiKey provisioning helper. No system JDK or ykman is required. Install the Debian package with `sudo apt install ./PQ-Mail-1.2.1-Linux-amd64.deb` (use `arm64` for ARM). The desktop menu entry launches PQ Mail.
+Linux builds provide a `.deb` installer and a portable `.tar.gz` app image for each architecture. They target Ubuntu 24.04 or newer (glibc 2.39+), bundle patched Java 25.0.5.1, OpenSSL 3.5 LTS (patched 3.5.10-dev snapshot), the PKCS#11 provider/module and YubiKey provisioning helper. No system JDK or ykman is required. Install the Debian package with `sudo apt install ./PQ-Mail-1.2.1-Linux-amd64.deb` (use `arm64` for ARM). The desktop menu entry launches PQ Mail.
 
 The portable archive requires Python 3, PC/SC (`pcscd`, `libccid`, `libpcsclite1`), GTK/X11/font libraries and `libsecret-1-0`. Run `PQ Mail/bin/PQ Mail` after extraction. A graphical desktop session is required; Wayland desktops need XWayland for Java Swing. Enable the distribution’s PC/SC service/socket if it is not active. Do not run PQ Mail as root.
 
@@ -500,3 +500,5 @@ Selecting an already enrolled passkey while managing an unlocked vault is now an
 Build the helper with `PQ_MAIL_APPLE_TEAM` using `bash scripts/build-passkey-helper.sh`; set `PQ_MAIL_NATIVE_PASSKEYS=1` when packaging it. It needs the App ID `io.github.ve7jtb.pqmail.passkey`, the Associated Domains entitlement `webcredentials:ve7jtb.github.io`, and a matching nonexpired provisioning profile. Developer ID builds also require `PQ_MAIL_PASSKEY_PROFILE`. The RP's `.well-known/apple-app-site-association` must authorize the actual `TEAMID.io.github.ve7jtb.pqmail.passkey` identifier. Packaging checks the helper signature, profile, team, App ID and domain entitlement. Personal Teams cannot provision this capability. See [native passkey setup](docs/NATIVE-PASSKEYS.md).
 
 Desktop passkey troubleshooting: **Keys → Passkey browser** uses explicit **Use Google Chrome** / **Use default browser** buttons and confirms the saved choice. Browser network access is checked before any authenticator operation. A local connection error is not evidence of a missing passkey. If the browser cannot reach localhost, start a fresh request in Chrome and approve local-app access. HTTP callback acknowledgements are flushed before the listener shuts down.
+
+Build dependency security notes, exact source pins, and the remaining Rust RSA dependency finding are in [the November 2026 dependency review](docs/DEPENDENCY-SECURITY-2026-11.md).

@@ -90,7 +90,7 @@ Local stack provenance
     https://github.com/ve7jtb/mail-api
   Angus Mail 2.1.0-SNAPSHOT: d33de7563efdf5a3cb0691994500d6cad8aecafd
     https://github.com/ve7jtb/angus-mail
-  Bouncy Castle 1.88-SNAPSHOT: 6b4f58259d2b3ee8301fda1d6c8798f816abc5ea
+  Bouncy Castle 1.88-SNAPSHOT: fad147c4440df867930bd9d8c14e85fbaca1c377
     https://github.com/ve7jtb/bc-java
   Jakarta Activation API 2.2.0-M2; Angus Activation 2.1.0-M1.
   Library jars built/downloaded by the earlier local stack setup; copied into lib/.

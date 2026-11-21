@@ -4,7 +4,7 @@ import java.security.*;import java.util.*;import java.nio.file.*;
 import org.bouncycastle.openpgp.operator.jcajce.JcaPGPKeyConverter;
 /** Level 5 account's lower-strength v4 interoperability profile; no Level 5 claim for its KEM. */
 final class Level5Compatibility {
- static boolean supports(PublicIdentity own){return own.legacy==null&&own.signing.pq()==null;}
+ static boolean supports(PublicIdentity own){return own.legacy==null&&(own.signing.pq()==null||(own.primary[5]&255)==31);}
  static PublicKey key(org.bouncycastle.openpgp.PGPPublicKey k)throws Exception{return new JcaPGPKeyConverter().setProvider("BC").getPublicKey(k);}
  static PublicIdentity classical(PublicIdentity full)throws Exception{return classicalOnlyCompatibility(full);}
  static byte[] signature(byte[] data,int type,byte[] primary,byte[] extra,OpenPgp.Signer signer)throws Exception{

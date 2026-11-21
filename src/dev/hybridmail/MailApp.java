@@ -179,6 +179,16 @@ public final class MailApp extends JFrame {
             Identity id=identity;String path=adapter;
             job("Creating OpenPGP certificates; enter PINs and touch when requested…",()->createSelectedOpenPgp(id,path).description(),detail->{pgpStatus.setText(detail);offerBundleBackup();});
         }));
+        actions.add(button("Restore Level 5 software companion from YubiKey…",()->{
+            Identity id=identity;
+            if(JOptionPane.showConfirmDialog(this,"Restore the existing encrypted software companion?\nFull storage needs no PIN to restore its public certificate.\nUltra-compact storage needs a PIN and any required touch once on this host\nto reconstruct the public certificate, unless a verified public cache already exists.\nNo private keys or PINs are saved locally; contact trust is unchanged.","Restore Level 5 companion",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+            job("Checking signed companion manifest and live hardware keys…",()->{
+                OpenPgp.check(id!=null&&id.signingKey()==null&&OpenPgp.classical(id),"Select a Level 5 YubiKey identity first");
+                return CompanionDesktop.restore(state().directory(),id,Integer.parseInt(DesktopState.activeTokenSerial()),tokenAdapter(false),tokenAdapter(true),state().configuration());
+            },pgpStatus::setText);
+        }));
+        actions.add(button("Companion storage format…",this::companionStorageFormat));
+        actions.add(button("Recover interrupted companion backup…",this::recoverCompanionBackup));
         actions.add(button("Create Level 5 v4 compatibility certificates",()->{
             Identity id=identity;String path=adapter;
             job("Reading Level 5 compatibility keys and signing public certificates…",()->{
@@ -261,8 +271,9 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     DesktopState chatState()throws Exception{return state();}
     Identity chatIdentity(){return identity;}
     String chatGmailClient(){try{return GoogleOAuth.bundledClient().id();}catch(Exception e){return "";}}
-    ExternalMu.Backend chatSigning(){return adapter==null?null:ExternalMu.executable(adapter);}
-    ExternalKem.Backend chatDecryption(){return kemAdapter==null?null:ExternalKem.executable(kemAdapter);}
+    private CompanionOperation companionOperation(Identity id)throws Exception{return CompanionDesktop.operation(state().directory(),id,adapter,kemAdapter,state().configuration());}
+    ExternalMu.Backend chatSigning(){try{return CompanionDesktop.selected(state().directory(),identity)?companionOperation(identity):adapter==null?null:ExternalMu.executable(adapter);}catch(Exception e){throw new IllegalStateException(e);}}
+    ExternalKem.Backend chatDecryption(){try{return CompanionDesktop.selected(state().directory(),identity)?companionOperation(identity):kemAdapter==null?null:ExternalKem.executable(kemAdapter);}catch(Exception e){throw new IllegalStateException(e);}}
     void chatConfigure(){googleChatExperimentalSettings();}
     void chatContacts(){shell.showPage(4);refreshContacts();}
     void chatError(Throwable e){error(e);}
@@ -928,6 +939,29 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         char[] admin=managementKey();if(admin==null)return;
         String path=tokenAdapter(false);job("Recovering certificates and backing up bundle…",()->OpenPgpMigration.recover(state(),id,entries,ExternalMu.executable(path),ExternalMu.certification(path),OnKeyDesktop::new,admin),result->{pgpRecipient=null;pgpSigner=null;refreshContacts();refreshSaved();pgpStatus.setText(result);status.setText("OpenPGP certificate recovery and on-key backup completed.");});
     }catch(Exception e){error(e);}}
+    /** Storage savings are opt-in. Preparation may unwrap/reseal existing keys,
+     * but the measured replacement is reviewed before any card object is changed. */
+    private void companionStorageFormat(){try{
+        Identity id=identity;OpenPgp.check(id!=null&&id.signingKey()==null&&OpenPgp.classical(id),"Select a Level 5 YubiKey identity first");
+        Object[] options={"Keep full storage (default)","Prepare ultra-compact conversion","Cancel"};
+        int choice=JOptionPane.showOptionDialog(this,"Full storage keeps all public certificate signatures and supports PIN-free public restore.\nUltra-compact storage frees space by omitting supported self-issued signature values.\nA new host needs the YubiKey PIN and any required touch once to reconstruct its public certificate.\nCA-issued and third-party-certified material is never stripped. Keys, fingerprints and touch policies stay unchanged.\n\nPreparation requests PIN authorization but does not write the card.","Companion storage format",JOptionPane.DEFAULT_OPTION,JOptionPane.QUESTION_MESSAGE,null,options,options[0]);
+        if(choice!=1)return;
+        int serial=Integer.parseInt(DesktopState.activeTokenSerial());
+        job("Preparing ultra-compact companion; existing keys only…",()->CompanionDesktop.prepareUltra(state().directory(),id,serial,tokenAdapter(false),tokenAdapter(true),state().configuration()),upgrade->{
+            if(JOptionPane.showConfirmDialog(this,upgrade.review(),"Review ultra-compact backup",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+            char[] management=managementKey();if(management==null)return;
+            job("Backing up companion locally, then replacing its single bank…",()->{try{return CompanionDesktop.commitUltra(state().directory(),id,upgrade,management);}finally{Arrays.fill(management,'\0');}},pgpStatus::setText);
+        });
+    }catch(Exception e){error(e);}}
+    private void recoverCompanionBackup(){try{
+        Identity id=identity;OpenPgp.check(id!=null&&id.signingKey()==null&&OpenPgp.classical(id),"Select the matching Level 5 YubiKey identity first");
+        JFileChooser chooser=new JFileChooser(state().directory().resolve("companion-backups").toFile());chooser.setDialogTitle("Select the interrupted ultra-compact backup directory");chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        if(chooser.showOpenDialog(this)!=JFileChooser.APPROVE_OPTION)return;
+        Path recovery=chooser.getSelectedFile().toPath();
+        if(JOptionPane.showConfirmDialog(this,"Resume the staged companion backup after checking this key and all saved objects?\nNo keys or certificate signatures will be regenerated.\nRecovery directory: "+recovery,"Recover companion backup",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return;
+        char[] management=managementKey();if(management==null)return;
+        job("Checking and resuming the saved companion replacement…",()->{try{return CompanionDesktop.resumeUltra(state().directory(),id,recovery,management);}finally{Arrays.fill(management,'\0');}},pgpStatus::setText);
+    }catch(Exception e){error(e);}}
     private char[] managementKey(){
         JPasswordField field=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default AES-192 management key");
         JPanel p=new JPanel(new GridLayout(0,1));p.add(new JLabel("Management key authorizes public storage / migration. It is not the PIN."));p.add(field);p.add(factory);
@@ -953,7 +987,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
                 }
                 var profiles=OnKeyBundle.collect(entries,state().directory());int signer=0;for(int i=0;i<entries.size();i++)if(entries.get(i).identity().signingCert().getPublicKey() instanceof org.bouncycastle.jcajce.CompositePublicKey)signer=i;
                 state().activateIdentity(entries.get(signer).identity());byte[] encoded=OnKeyBundle.sign(profiles,signer,ExternalMu.executable(tokenAdapter(false)));
-                try(var card=new OnKeyDesktop(entries.get(0).serial())){OnKeyStorage.save(card,encoded,admin);}return "Public certificates and configuration saved and read-back verified on YubiKey.";
+                try(var card=new OnKeyDesktop(entries.get(0).serial())){OnKeyStorage.saveSingle(card,encoded,admin,state().directory().resolve("certificate-bundle-backups"));}return "One compressed certificate bundle saved and verified on YubiKey. Local recovery backup saved in certificate-bundle-backups.";
             }finally{Arrays.fill(admin,'\0');if(identity!=null)state().activateIdentity(identity);}
         },result->{refreshSaved();status.setText(result);});
     }catch(Exception e){error(e);}}
@@ -1028,7 +1062,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         if(send&&JOptionPane.showConfirmDialog(this,"Send this "+((pgp?pgpEncrypt:r!=null)?"signed and encrypted":"signed, unencrypted")+" message with "+files.size()+" attachment(s) to "+t+"?","Send message",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){Arrays.fill(a.password,'\0');return;}
         job(send?"Signing and sending…":"Signing and saving…",()->{
             try {
-                MimeMessage m=pgp?MailEngine.parse(OpenPgp.composeForRecipient(id,OpenPgp.loadOwn(state().directory(),id),pgpTo,pgpEncrypt,f,t,s,b,html,backend)):MailEngine.composeFormatted(id,f,t,s,b,html,r,backend,files);
+                MimeMessage m=pgp?MailEngine.parse(OpenPgp.composeForRecipient(id,OpenPgp.loadOwn(state().directory(),id),pgpTo,pgpEncrypt,f,t,s,b,html,CompanionDesktop.selected(state().directory(),id)?companionOperation(id):backend)):MailEngine.composeFormatted(id,f,t,s,b,html,r,backend,files);
                 if(send){if(a.host.equals("graph.microsoft.com")){try(var api=new MicrosoftGraph(this::microsoftCredential)){api.verifyAccount(a.user);api.send(m);}}else if(a.oauth){try(var api=new GmailApi(this::googleCredential)){api.verifyAccount(a.user);api.send(m);}}else MailEngine.send(m,a.host,a.port,a.user,new String(a.password),false);}
                 else Files.write(file,MailEngine.encode(m),StandardOpenOption.CREATE_NEW);
                 return send?"Message sent":"Saved "+file.getFileName();
@@ -1051,7 +1085,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             // Decryption is performed once; selecting among saved signer certificates must not repeat a PIN operation.
             if(encrypted&&candidates.size()>1)throw new IOException("Multiple OpenPGP signer certificates match From. Select the sender under Certificates before decrypting.");
             Exception failure=null;
-            for(var signer:candidates)try{var opened=OpenPgp.open(encoded,signer,own,id,kemAdapter==null?null:ExternalKem.executable(kemAdapter));opened=new OpenPgp.Opened(opened.text(),opened.email(),opened.fingerprint(),opened.encrypted(),signer.matchesEmail(mailbox),opened.profile(),opened.postQuantum(),opened.html());return new ReadResult(opened.display(),null,message.getSubject(),opened,signer.matchesEmail(mailbox)?mailbox:null,signer);}catch(Exception e){failure=e;}
+            for(var signer:candidates)try{var opened=OpenPgp.open(encoded,signer,own,id,CompanionDesktop.selected(state().directory(),id)?companionOperation(id):kemAdapter==null?null:ExternalKem.executable(kemAdapter));opened=new OpenPgp.Opened(opened.text(),opened.email(),opened.fingerprint(),opened.encrypted(),signer.matchesEmail(mailbox),opened.profile(),opened.postQuantum(),opened.html());return new ReadResult(opened.display(),null,message.getSubject(),opened,signer.matchesEmail(mailbox)?mailbox:null,signer);}catch(Exception e){failure=e;}
             throw failure==null?new IOException("No matching OpenPGP signer certificate"):failure;
         }
         message=MailEngine.normalizeSmime(message);

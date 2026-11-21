@@ -173,9 +173,9 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
         object_id = ec_object_id("88")
     certification = os.environ.get("PQMAIL_CERTIFICATION_SLOTS", "")
     if certification:
-        if certification != "86,87" or algorithm not in ("ML-DSA-65", "Ed25519"):
+        if certification != "86,87" or algorithm not in ("ML-DSA-65", "ML-DSA-87", "Ed25519"):
             raise AdapterError("Invalid certification slot configuration")
-        object_id = ec_object_id("86" if algorithm == "ML-DSA-65" else "87")
+        object_id = ec_object_id("86" if algorithm in ("ML-DSA-65", "ML-DSA-87") else "87")
     helper=Path(executable).with_name("pqmail-pkcs11-sign.exe" if os.name=="nt" else "pqmail-pkcs11-sign")
     if pin is not None and helper.is_file():
         return single_process_sign(helper,spki,mu,provider,module,serial,object_id,algorithm,pin,run)

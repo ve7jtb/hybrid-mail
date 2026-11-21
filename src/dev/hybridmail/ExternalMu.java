@@ -19,6 +19,7 @@ public final class ExternalMu {
         default void clearSecrets() {}
         default byte[] signCompatibilityEcdsa(PublicKey key,byte[] digest)throws Exception{throw new GeneralSecurityException("Level 5 compatibility backend required");}
         default byte[] signCompatibilityEd25519(PublicKey key,byte[] digest)throws Exception{throw new GeneralSecurityException("Backend lacks dedicated compatibility signing");}
+        default byte[] signEd448(PublicKey key,byte[] digest)throws Exception{throw new GeneralSecurityException("Ed448 companion/native backend required");}
         default byte[] signEd25519(PublicKey key,byte[] digest)throws Exception{throw new GeneralSecurityException("This backend does not support Ed25519");}
         default byte[] signRsa(PublicKey publicKey, byte[] digest) throws Exception {
             throw new GeneralSecurityException("This adapter does not support token RSA-PSS");

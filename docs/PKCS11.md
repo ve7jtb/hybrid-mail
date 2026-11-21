@@ -104,7 +104,6 @@ The included Yubico module patch also corrects the DER PrintableString length
 for `curve25519` (10 bytes, not 11); otherwise the OpenSSL provider rejects
 CKA_EC_PARAMS for X25519. A native unit test covers this encoding.
 
-
 ## Scoped discovery and single-process signing
 
 The signing adapter sets `YKCS11_DISCOVERY=metadata` and
@@ -132,15 +131,11 @@ readiness and PIN delivery without a device. The module's discovery tests and
 adapter tests cover slot selection, inherited-environment cleanup, key binding,
 PIN clearing, timeout handling and no fallback after failure.
 
-`scripts/build-pkcs11-signer.sh` builds and software-tests the helper on macOS,
-Linux and Windows/MSYS2 against the selected `HYBRID_OPENSSL_ROOT`. Mac packaging,
-Linux native builds and both Windows CI architectures invoke it. Windows uses
-QueryPerformanceCounter for phase timing and the CRT environment API for PIN
-callback selection. The helper
+`package.sh` invokes `scripts/build-pkcs11-signer.sh` to compile the Mac helper
+and run its software tests against the selected `HYBRID_OPENSSL_ROOT`. The helper
 is signed alongside the existing native binaries and uses bundle-relative
-OpenSSL loading. Windows/Linux packages require the helper and run software verification plus
-a loader smoke test using staged libraries. Physical YubiKey testing on those
-platforms remains separate from these CI checks. No Android/iOS backend changes are
+OpenSSL loading. Windows/Linux helper packaging is not enabled by this change;
+those builds retain their existing signer. No Android/iOS backend changes are
 required. See the README for measured Mac results and physical touch-required
 slot 9c validation.
 

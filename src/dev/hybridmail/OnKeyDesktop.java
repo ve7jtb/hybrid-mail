@@ -11,8 +11,9 @@ final class OnKeyDesktop implements OpenPgpMigration.Card {
     private final BufferedReader reader;
     private final Writer writer;
     private final ExecutorService reads=Executors.newSingleThreadExecutor();
-    OnKeyDesktop(int serial)throws Exception{
-        process=new ProcessBuilder(TokenProvision.helper().toString(),"objects",Integer.toString(serial)).start();
+    OnKeyDesktop(int serial)throws Exception{this(serial,TokenProvision.helper());}
+    OnKeyDesktop(int serial,java.nio.file.Path helper)throws Exception{
+        process=new ProcessBuilder(helper.toString(),"objects",Integer.toString(serial)).start();
         reader=new BufferedReader(new InputStreamReader(process.getInputStream(),StandardCharsets.UTF_8));writer=new OutputStreamWriter(process.getOutputStream(),StandardCharsets.UTF_8);
     }
     private JsonElement call(JsonObject request)throws Exception{

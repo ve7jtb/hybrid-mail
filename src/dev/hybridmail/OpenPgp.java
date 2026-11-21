@@ -87,7 +87,7 @@ public final class OpenPgp {
         check(value.length==32,"Expected 32-byte 25519 public key");
         return KeyFactory.getInstance(signing?"Ed25519":"X25519","BC").generatePublic(new X509EncodedKeySpec(new SubjectPublicKeyInfo(new AlgorithmIdentifier(new ASN1ObjectIdentifier(signing?"1.3.101.112":"1.3.101.110")),value).getEncoded()));
     }
-    static int algorithm(Keys k,boolean signing){return k.pq==null?(signing?19:18):modern(k)?(signing?30:35):(signing?41:37);}
+    static int algorithm(Keys k,boolean signing){return k.pq==null?(signing?19:18):modern(k)?(signing?(raw(k.ec).length==57?31:30):(raw(k.ec).length==56?36:35)):(signing?41:37);}
     public static boolean rfc9980(PublicIdentity own){return own.legacy==null&&modern(own.signing);}
 
     static final byte[] X25519_OID=b(10,0x2b,6,1,4,1,0x97,0x55,1,5,1);
@@ -114,7 +114,7 @@ public final class OpenPgp {
     static byte[] der(byte[] fixed)throws Exception{check(fixed.length==96,"Invalid ECDSA size");return new DERSequence(new ASN1Encodable[]{new ASN1Integer(new BigInteger(1,slice(fixed,0,48))),new ASN1Integer(new BigInteger(1,slice(fixed,48,96)))}).getEncoded();}
     static void verifyDigest(byte[] sig,byte[] digest,Keys keys)throws Exception {
         if(keys.pq==null){Reader r=new Reader(sig);BigInteger x=new BigInteger(1,mpi(r,384)),y=new BigInteger(1,mpi(r,384));check(r.left()==0,"Trailing ECDSA signature");Signature v=Signature.getInstance("NONEwithECDSA","BC");v.initVerify(keys.ec);v.update(digest);check(v.verify(new DERSequence(new ASN1Encodable[]{new ASN1Integer(x),new ASN1Integer(y)}).getEncoded()),"Invalid OpenPGP ECDSA signature");return;}
-        if(modern(keys)){check(sig.length==3373,"Invalid RFC 9980 signature size");Signature ed=Signature.getInstance("Ed25519","BC");ed.initVerify(keys.ec);ed.update(digest);check(ed.verify(slice(sig,0,64)),"Invalid OpenPGP Ed25519 signature");Signature ml=Signature.getInstance("ML-DSA-65","BC");ml.initVerify(keys.pq);ml.update(digest);check(ml.verify(slice(sig,64,sig.length)),"Invalid OpenPGP ML-DSA signature");return;}
+        if(modern(keys)){boolean strong=raw(keys.ec).length==57;int edSize=strong?114:64;check(sig.length==(strong?4741:3373),"Invalid RFC 9980 signature size");Signature ed=Signature.getInstance(strong?"Ed448":"Ed25519","BC");ed.initVerify(keys.ec);ed.update(digest);check(ed.verify(slice(sig,0,edSize)),"Invalid OpenPGP Ed25519 signature");Signature ml=Signature.getInstance(strong?"ML-DSA-87":"ML-DSA-65","BC");ml.initVerify(keys.pq);ml.update(digest);check(ml.verify(slice(sig,edSize,sig.length)),"Invalid OpenPGP ML-DSA signature");return;}
         check(sig.length==3405,"Invalid OpenPGP hybrid signature length");
         Signature ec=Signature.getInstance("NONEwithECDSA","BC");ec.initVerify(keys.ec);ec.update(digest);check(ec.verify(der(slice(sig,0,96))),"Invalid OpenPGP ECDSA signature");
         Signature ml=Signature.getInstance("ML-DSA-65","BC");ml.initVerify(keys.pq);ml.update(digest);check(ml.verify(slice(sig,96,sig.length)),"Invalid OpenPGP ML-DSA signature");
@@ -125,7 +125,7 @@ public final class OpenPgp {
     }
     static Signer signer(Identity id,ExternalMu.Backend backend,Keys keys)throws Exception {
         check(supported(id),"Select a Level 3 or Level 5 hybrid identity for OpenPGP");
-        if(modern(keys)){check(backend!=null,"RFC 9980 extra keys require the YubiKey backend");return digest->{Signature s=Signature.getInstance("ML-DSA-65",ExternalMu.PROVIDER);s.initSign(new ExternalMu.TokenKey(keys.pq,backend));s.update(digest);byte[] ml=s.sign(),ed=backend.signEd25519(keys.ec,digest),signature=cat(ed,ml);verifyDigest(signature,digest,keys);return signature;};}
+        if(modern(keys)){check(backend!=null,"RFC 9980 extra keys require the YubiKey backend");return digest->{boolean strong=raw(keys.ec).length==57;Signature s=Signature.getInstance(strong?"ML-DSA-87":"ML-DSA-65",ExternalMu.PROVIDER);s.initSign(new ExternalMu.TokenKey(keys.pq,backend));s.update(digest);byte[] ml=s.sign(),ed=strong?backend.signEd448(keys.ec,digest):backend.signEd25519(keys.ec,digest),signature=cat(ed,ml);verifyDigest(signature,digest,keys);return signature;};}
         return digest->{
             if(keys.pq==null){byte[] sig;if(backend!=null)sig=backend.signEcdsa(keys.ec,digest);else{check(id.signingKey() instanceof CompositePrivateKey,"Unlock software identity or select token backend");Signature v=Signature.getInstance("NONEwithECDSA","BC");v.initSign(((CompositePrivateKey)id.signingKey()).getPrivateKeys().get(1),RANDOM);v.update(digest);sig=v.sign();}byte[] fixed=fixed(sig),encoded=cat(mpi(slice(fixed,0,48)),mpi(slice(fixed,48,96)));verifyDigest(encoded,digest,keys);return encoded;}
             byte[] ml,ec;
@@ -139,8 +139,8 @@ public final class OpenPgp {
     }
     static Request request(byte[] data,int type,byte[] fp,byte[] extra)throws Exception{return request(data,type,fp,extra,41);}
     static Request request(byte[] data,int type,byte[] fp,byte[] extra,int algorithm)throws Exception {
-        byte[] salt=random(24),subs=cat(sub(2,n(now(),4)),sub(33,cat(b(6),fp)),extra),header=cat(b(6,type,algorithm,9),n(subs.length,4),subs);
-        return new Request(header,salt,hash("SHA-384",cat(salt,data,header,b(6,255),n(header.length,4))));
+        boolean strong=algorithm==31;byte[] salt=random(strong?32:24),subs=cat(sub(2,n(now(),4)),sub(33,cat(b(6),fp)),extra),header=cat(b(6,type,algorithm,strong?10:9),n(subs.length,4),subs);
+        return new Request(header,salt,hash(strong?"SHA-512":"SHA-384",cat(salt,data,header,b(6,255),n(header.length,4))));
     }
     record Checked(Map<Integer,byte[]> subs,byte[] salt,int hash){}
     static Checked verify(byte[] body,byte[] data,int type,byte[] key)throws Exception {
@@ -265,11 +265,18 @@ public final class OpenPgp {
     static void match(PublicIdentity pgp,Identity id)throws Exception{
         if(id.softwareOpenPgp()!=null){id.softwareOpenPgp().match(pgp);return;}
         check(pgp.legacy==null,"A v4 certificate is for recipients and incoming verification only");check(supported(id),"Select a Level 3 or Level 5 hybrid identity");Keys s=identityKeys(id,true),e=identityKeys(id,false);
-        if(rfc9980(pgp)){check(Identity.HYBRID_65_P384_SIGN.equals(id.signatureAlgorithm())&&pgp.email.equals(email(id))&&Arrays.equals(raw(s.pq),raw(pgp.signing.pq))&&Arrays.equals(raw(e.pq),raw(pgp.encryption.pq)),"RFC 9980 identity does not match selected PQ keys/email");return;}
+        if(rfc9980(pgp)){s=keys(id.signingCert().getPublicKey());e=keys(id.encryptionCert().getPublicKey());check((Identity.HYBRID_65_P384_SIGN.equals(id.signatureAlgorithm())||Identity.HYBRID_87_SIGN.equals(id.signatureAlgorithm()))&&pgp.email.equals(email(id))&&Arrays.equals(raw(s.pq),raw(pgp.signing.pq))&&Arrays.equals(raw(e.pq),raw(pgp.encryption.pq)),"RFC 9980 identity does not match selected PQ keys/email");return;}
         check(pgp.email.equals(email(id))&&Arrays.equals(s.pq==null?null:raw(s.pq),pgp.signing.pq==null?null:raw(pgp.signing.pq))&&Arrays.equals(raw(s.ec),raw(pgp.signing.ec))&&Arrays.equals(e.pq==null?null:raw(e.pq),pgp.encryption.pq==null?null:raw(pgp.encryption.pq))&&Arrays.equals(raw(e.ec),raw(pgp.encryption.ec)),"OpenPGP identity does not match selected keys/email");
     }
     static Path ownPath(Path root,Identity id)throws Exception{check(supported(id),"OpenPGP supports Level 3 hybrid or Level 5 classical P-384");return root.resolve("openpgp").resolve(hex(hash("SHA-256",cat(id.signingCert().getEncoded(),id.encryptionCert().getEncoded())))+".asc");}
-    public static PublicIdentity loadOwn(Path root,Identity id)throws Exception{if(id.softwareOpenPgp()!=null)return id.softwareOpenPgp().own();Path p=ownPath(root,id);check(Files.isRegularFile(p),"Create or import your OpenPGP public identity first");check(Files.size(p)<=128*1024,"Public identity too large");PublicIdentity own=new PublicIdentity(Files.readAllBytes(p));match(own,id);Path compat=p.resolveSibling(p.getFileName()+".v4");if(Files.exists(compat)){own.compatibility=new PublicIdentity(Files.readAllBytes(compat));checkCompatibility(own,own.compatibility);}return own;}
+    public static PublicIdentity loadOwn(Path root,Identity id)throws Exception{
+        if(id.softwareOpenPgp()!=null)return id.softwareOpenPgp().own();Path p=ownPath(root,id);PublicIdentity own;
+        // A fresh on-key companion restore has its own validated public cache;
+        // it must not depend on an unrelated older NIST .asc file being present.
+        if(CompanionDesktop.selected(root,id))own=CompanionDesktop.own(root,id);
+        else{check(Files.isRegularFile(p),"Create or import your OpenPGP public identity first");check(Files.size(p)<=128*1024,"Public identity too large");own=new PublicIdentity(Files.readAllBytes(p));}
+        match(own,id);Path compat=p.resolveSibling(p.getFileName()+".v4");if(Files.exists(compat)){own.compatibility=new PublicIdentity(Files.readAllBytes(compat));checkCompatibility(own,own.compatibility);}return own;
+    }
     public static PublicIdentity saveOwn(Path root,Identity id,byte[] input)throws Exception{PublicIdentity own=new PublicIdentity(input);match(own,id);Path p=ownPath(root,id);if(Files.exists(p)){var previous=loadOwn(root,id);check(Arrays.equals(fingerprint(previous.primary),fingerprint(own.signingBody()))&&Arrays.equals(fingerprint(previous.subkey),fingerprint(own.subkey)),"A different OpenPGP identity is already saved");}Files.createDirectories(p.getParent());Path tmp=Files.createTempFile(p.getParent(),"pgp-",".tmp");try{Files.write(tmp,own.export());Files.move(tmp,p,StandardCopyOption.REPLACE_EXISTING);}finally{Files.deleteIfExists(tmp);}return own;}
     public static PublicIdentity createOwn(Path root,Identity id,ExternalMu.Backend backend)throws Exception{if(id.softwareOpenPgp()!=null)return id.softwareOpenPgp().own();Path p=ownPath(root,id);return Files.exists(p)?loadOwn(root,id):saveOwn(root,id,create(id,backend).export());}
     public static PublicIdentity replaceOwn(Path root,Identity id,PublicIdentity own)throws Exception{
@@ -277,7 +284,7 @@ public final class OpenPgp {
         if(Files.exists(p)){var previous=loadOwn(root,id);Path backup=p.resolveSibling(p.getFileName()+"."+previous.fingerprint()+".backup");if(!Files.exists(backup))Files.copy(p,backup);}
         Path tmp=Files.createTempFile(p.getParent(),"pgp-",".tmp");try{Files.write(tmp,own.export());Files.move(tmp,p,StandardCopyOption.REPLACE_EXISTING);}finally{Files.deleteIfExists(tmp);}return own;
     }
-    static byte[] combine(byte[] pq,byte[] ec,byte[] point,byte[] recipient)throws Exception{boolean x=point.length==32;check(pq.length==32&&ec.length==(x?32:48)&&point.length==(x?32:97)&&recipient.length==point.length,"Invalid KEM components");check(!Arrays.equals(ec,new byte[ec.length]),"Invalid zero ECDH shared secret");return hash("SHA3-256",cat(pq,ec,point,recipient,b(x?35:37),bytes("OpenPGPCompositeKDFv1"),b(21)));}
+    static byte[] combine(byte[] pq,byte[] ec,byte[] point,byte[] recipient)throws Exception{boolean strong=point.length==56,x=point.length==32||strong;check(pq.length==32&&ec.length==(x?point.length:48)&&point.length==(x?(strong?56:32):97)&&recipient.length==point.length,"Invalid KEM components");check(!Arrays.equals(ec,new byte[ec.length]),"Invalid zero ECDH shared secret");return hash("SHA3-256",cat(pq,ec,point,recipient,b(x?(strong?36:35):37),bytes("OpenPGPCompositeKDFv1"),b(21)));}
     record Encapsulation(byte[] ciphertext,byte[] kek){}
     static Encapsulation encapsulate(PublicIdentity recipient)throws Exception{
         if(recipient.encryption.pq==null){KeyPairGenerator g=KeyPairGenerator.getInstance("EC","BC");g.initialize(new ECGenParameterSpec("secp384r1"),RANDOM);KeyPair pair=g.generateKeyPair();byte[] secret=derive(pair.getPrivate(),recipient.encryption.ec);try{return new Encapsulation(raw(pair.getPublic()),ecKdf(secret,recipient.subkey));}finally{wipe(secret);}}
@@ -285,11 +292,11 @@ public final class OpenPgp {
         KeyPairGenerator gen=KeyPairGenerator.getInstance(modern(recipient.encryption)?"X25519":"EC","BC");if(!modern(recipient.encryption))gen.initialize(new ECGenParameterSpec("secp384r1"),RANDOM);KeyPair ephemeral=gen.generateKeyPair();byte[] ec=derive(ephemeral.getPrivate(),recipient.encryption.ec),share=pq.getSecret(),point=raw(ephemeral.getPublic());
         try{return new Encapsulation(cat(point,pq.getEncapsulation()),combine(share,ec,point,raw(recipient.encryption.ec)));}finally{wipe(ec);wipe(share);pq.destroy();}
     }
-    static byte[] derive(PrivateKey key,PublicKey peer)throws Exception{KeyAgreement ka=KeyAgreement.getInstance(peer instanceof java.security.interfaces.ECPublicKey?"ECDH":"X25519","BC");ka.init(key);ka.doPhase(peer,true);return ka.generateSecret();}
+    static byte[] derive(PrivateKey key,PublicKey peer)throws Exception{KeyAgreement ka=KeyAgreement.getInstance(peer instanceof java.security.interfaces.ECPublicKey?"ECDH":raw(peer).length==56?"X448":"X25519","BC");ka.init(key);ka.doPhase(peer,true);return ka.generateSecret();}
     static byte[] ecKdf(byte[] secret,byte[] subkey)throws Exception{check(secret.length==48,"Invalid P-384 shared secret");return slice(hash("SHA-384",cat(n(1,4),secret,P384_OID,b(18,3,1,9,8),bytes("Anonymous Sender    "),fingerprint(subkey))),0,24);}
     static byte[] recover(byte[] ct,Identity id,ExternalKem.Backend backend,PublicIdentity own)throws Exception {
-        if(classical(id)){check(ct.length==97,"Invalid P-384 ciphertext");PublicKey peer=ec(ct);ExternalKem.Backend op=backend==null?null:backend.newOperation();byte[] secret=null;try{secret=op!=null?op.derive(identityKeys(id,false).ec,peer):derive(((CompositePrivateKey)id.encryptionKey()).getPrivateKeys().get(1),peer);return ecKdf(secret,own.subkey);}finally{wipe(secret);if(op!=null)op.clearSecrets();}}
-        boolean x=rfc9980(own);int pointSize=x?32:97;check(supported(id)&&ct.length==1088+pointSize,"Invalid OpenPGP recipient/ciphertext");Keys pub=own.encryption;byte[] point=slice(ct,0,pointSize);PublicKey peer=x?curve25519(point,false):ec(point);byte[] pq=null,ec=null;ExternalKem.Backend op=backend==null?null:backend.newOperation();
+        if(classical(id)&&!rfc9980(own)){check(ct.length==97,"Invalid P-384 ciphertext");PublicKey peer=ec(ct);ExternalKem.Backend op=backend==null?null:backend.newOperation();byte[] secret=null;try{secret=op!=null?op.derive(identityKeys(id,false).ec,peer):derive(((CompositePrivateKey)id.encryptionKey()).getPrivateKeys().get(1),peer);return ecKdf(secret,own.subkey);}finally{wipe(secret);if(op!=null)op.clearSecrets();}}
+        boolean x=rfc9980(own),strong=algorithm(own.encryption,false)==36;int pointSize=strong?56:x?32:97;check(supported(id)&&ct.length==(strong?1568:1088)+pointSize,"Invalid OpenPGP recipient/ciphertext");Keys pub=own.encryption;byte[] point=slice(ct,0,pointSize);PublicKey peer=strong?Level5Companion.decodePublic(new SubjectPublicKeyInfo(new AlgorithmIdentifier(new ASN1ObjectIdentifier("1.3.101.111")),point).getEncoded()):x?curve25519(point,false):ec(point);byte[] pq=null,ec=null;ExternalKem.Backend op=backend==null?null:backend.newOperation();
         try{if(op!=null){pq=op.decapsulate(pub.pq,slice(ct,pointSize,ct.length));ec=op.derive(pub.ec,peer);}else{check(!x,"RFC 9980 extra keys require the YubiKey backend");check(id.encryptionKey() instanceof CompositePrivateKey,"Unlock software identity or select token backend");var priv=((CompositePrivateKey)id.encryptionKey()).getPrivateKeys();pq=new MLKEMExtractor((MLKEMPrivateKeyParameters)PrivateKeyFactory.createKey(priv.get(0).getEncoded())).extractSecret(slice(ct,pointSize,ct.length));ec=derive(priv.get(1),peer);}return combine(pq,ec,point,raw(pub.ec));}finally{wipe(pq);wipe(ec);if(op!=null)op.clearSecrets();}
     }
     static byte[] wrap(boolean encrypt,byte[] key,byte[] input)throws Exception{Cipher c=Cipher.getInstance("AESWrap","BC");c.init(encrypt?Cipher.ENCRYPT_MODE:Cipher.DECRYPT_MODE,new SecretKeySpec(key,"AES"));return c.doFinal(input);}
@@ -314,11 +321,11 @@ public final class OpenPgp {
         byte[] open(byte[] kek)throws Exception{byte[] session=wrap(false,kek,wrapped);try{if(ct.length==97){check(session.length==40&&Arrays.equals(session,paddedSession(slice(session,0,32))),"Invalid ECDH session checksum/padding");byte[] key=slice(session,0,32);wipe(session);session=key;}check(session.length==32,"Invalid session key");return decryptSeipd(encrypted,session);}finally{wipe(session);}}
     }
     static Envelope envelope(byte[] data,PublicIdentity own)throws Exception {
-        List<Packet> p=packets(data);check(p.stream().map(Packet::tag).toList().equals(List.of(1,18)),"Expected one recipient and v2 encrypted payload");Reader r=new Reader(p.get(0).body);check(Arrays.equals(r.take(3),b(6,33,6))&&Arrays.equals(r.take(32),fingerprint(own.subkey))&&r.one()==algorithm(own.encryption,false),"OpenPGP recipient does not match selected identity");byte[] ct=own.encryption.pq==null?mpi(r,776):r.take(rfc9980(own)?1120:1185);if(rfc9980(own))curve25519(slice(ct,0,32),false);else ec(slice(ct,0,97));int wrapped=own.encryption.pq==null?48:40;check(r.one()==wrapped&&r.left()==wrapped,"Invalid wrapped session key");byte[] encrypted=p.get(1).body;check(encrypted.length>=68&&encrypted[0]==2&&encrypted[1]==9&&(encrypted[2]==2||encrypted[2]==3)&&(encrypted[3]&255)<=16,"Unsupported encrypted payload");return new Envelope(ct,r.take(wrapped),encrypted);
+        List<Packet> p=packets(data);check(p.stream().map(Packet::tag).toList().equals(List.of(1,18)),"Expected one recipient and v2 encrypted payload");Reader r=new Reader(p.get(0).body);check(Arrays.equals(r.take(3),b(6,33,6))&&Arrays.equals(r.take(32),fingerprint(own.subkey))&&r.one()==algorithm(own.encryption,false),"OpenPGP recipient does not match selected identity");byte[] ct=own.encryption.pq==null?mpi(r,776):r.take(algorithm(own.encryption,false)==36?1624:rfc9980(own)?1120:1185);if(algorithm(own.encryption,false)==36){check(ct.length==1624,"Invalid Level 5 ciphertext");}else if(rfc9980(own))curve25519(slice(ct,0,32),false);else ec(slice(ct,0,97));int wrapped=own.encryption.pq==null?48:40;check(r.one()==wrapped&&r.left()==wrapped,"Invalid wrapped session key");byte[] encrypted=p.get(1).body;check(encrypted.length>=68&&encrypted[0]==2&&encrypted[1]==9&&(encrypted[2]==2||encrypted[2]==3)&&(encrypted[3]&255)<=16,"Unsupported encrypted payload");return new Envelope(ct,r.take(wrapped),encrypted);
     }
     static byte[] signed(byte[] plain,PublicIdentity own,Signer signer)throws Exception {
         Request req=request(plain,0,fingerprint(own.signingBody()),b(),own.signingBody()[5]&255);byte[] sig=signer.sign(req.digest);
-        return cat(frame(4,cat(b(6,0,9,own.signingBody()[5]&255,24),req.salt,fingerprint(own.signingBody()),b(1))),frame(11,cat(b(98,0),n(0,4),plain)),frame(2,req.finish(sig)));
+        return cat(frame(4,cat(b(6,0,req.header[3]&255,own.signingBody()[5]&255,req.salt.length),req.salt,fingerprint(own.signingBody()),b(1))),frame(11,cat(b(98,0),n(0,4),plain)),frame(2,req.finish(sig)));
     }
     static byte[] openSigned(byte[] data,PublicIdentity signer)throws Exception {
         if(signer.v6!=null)return new LegacyOpenPgp(signer.encoded,6).openSigned(data);
@@ -332,10 +339,47 @@ public final class OpenPgp {
         for(String line:unfolded.split("\r\n")){int colon=line.indexOf(':');check(colon>0,"Invalid MIME header");String key=line.substring(0,colon).toLowerCase(Locale.ROOT);check(!h.containsKey(key)||!List.of("content-type","content-transfer-encoding","from").contains(key),"Duplicate MIME header");h.put(key,line.substring(colon+1).trim());}return new Mime(h,bytes(s.substring(split+4)));
     }
     static byte[] decoded(Mime m)throws Exception{String encoding=m.headers.getOrDefault("content-transfer-encoding","7bit").toLowerCase(Locale.ROOT);if(encoding.equals("quoted-printable"))return LegacyOpenPgp.bounded(jakarta.mail.internet.MimeUtility.decode(new ByteArrayInputStream(m.body),encoding));if(encoding.equals("base64"))return Base64.getDecoder().decode(new String(m.body,StandardCharsets.US_ASCII).replaceAll("\\s",""));check(List.of("7bit","8bit","binary").contains(encoding),"Unsupported MIME transfer encoding");return m.body;}
-    public static boolean isOpenPgp(byte[] message){try{String c=mime(message).headers.getOrDefault("content-type","").toLowerCase(Locale.ROOT);return c.contains("application/pgp-encrypted")||c.contains("application/pgp-signature");}catch(Exception e){return false;}}
+    /** Recover only the exact two-leaf MIME rewrite observed on Gmail delivery.
+     * The outer envelope is untrusted: never merge its text or extra attachments
+     * into verified content. Cryptographic integrity/signature checks still run
+     * through open() before any decrypted body is returned to the caller.
+     */
+    static byte[] transportMime(byte[] message)throws Exception {
+        Mime root=mime(message);
+        if(!new ContentType(root.headers.getOrDefault("content-type","text/plain")).getBaseType().equalsIgnoreCase("multipart/mixed"))return message;
+        MimeMessage parsed=MailEngine.parse(message);
+        Object content=parsed.getContent();
+        if(!(content instanceof jakarta.mail.Multipart parts)||parts.getCount()!=2)return message;
+        jakarta.mail.BodyPart control=null,cipher=null;
+        for(int i=0;i<2;i++){
+            var part=parts.getBodyPart(i);
+            // Duplicate structural headers and nested MIME are ambiguous.
+            for(String header:List.of("Content-Type","Content-Transfer-Encoding")){
+                String[] values=part.getHeader(header);check(values==null||values.length==1,"Ambiguous rewritten PGP/MIME headers");
+            }
+            if(part.isMimeType("application/pgp-encrypted")&&control==null)control=part;
+            else if((part.isMimeType("text/plain")||part.isMimeType("application/octet-stream"))&&cipher==null)cipher=part;
+            else return message;
+        }
+        if(control==null||cipher==null)return message;
+        byte[] version;try(var in=control.getInputStream()){version=in.readNBytes(65);}
+        check(version.length<=64&&new String(version,StandardCharsets.US_ASCII).trim().equals("Version: 1"),"Invalid rewritten PGP/MIME version");
+        byte[] encoded;try(var in=cipher.getInputStream()){encoded=in.readNBytes(LIMIT+1);}
+        check(encoded.length<=LIMIT,"Rewritten ciphertext exceeds limit");
+        for(byte value:encoded)check((value&255)<128,"Non-ASCII rewritten ciphertext");
+        String armor=new String(encoded,StandardCharsets.US_ASCII).strip();
+        String begin="-----BEGIN PGP MESSAGE-----",end="-----END PGP MESSAGE-----";
+        check((armor.startsWith(begin+"\r\n")||armor.startsWith(begin+"\n"))&&armor.endsWith(end)&&armor.indexOf(begin)==armor.lastIndexOf(begin)&&armor.indexOf(end)==armor.lastIndexOf(end),"Ambiguous rewritten ciphertext");
+        String boundary="pqmail-recovered-"+UUID.randomUUID();
+        StringBuilder headers=new StringBuilder();
+        for(var h:root.headers.entrySet())if(!Set.of("content-type","content-transfer-encoding","mime-version").contains(h.getKey()))headers.append(h.getKey()).append(": ").append(h.getValue()).append("\r\n");
+        headers.append("MIME-Version: 1.0\r\nContent-Type: multipart/encrypted; protocol=\"application/pgp-encrypted\"; boundary=\"").append(boundary).append("\"\r\n\r\n--").append(boundary).append("\r\nContent-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n--").append(boundary).append("\r\nContent-Type: application/octet-stream\r\n\r\n");
+        return cat(bytes(headers.toString()),bytes(armor),bytes("\r\n--"+boundary+"--\r\n"));
+    }
+    public static boolean isOpenPgp(byte[] message){try{String c=mime(transportMime(message)).headers.getOrDefault("content-type","").toLowerCase(Locale.ROOT);return c.contains("application/pgp-encrypted")||c.contains("application/pgp-signature");}catch(Exception e){return false;}}
     record Parts(Mime root,byte[] first,byte[] second,boolean encrypted){}
     static Parts parts(byte[] message)throws Exception {
-        Mime root=mime(message);String ct=root.headers.getOrDefault("content-type","");boolean encrypted=ct.toLowerCase(Locale.ROOT).contains("application/pgp-encrypted");check(ct.toLowerCase(Locale.ROOT).startsWith(encrypted?"multipart/encrypted;":"multipart/signed;"),"Invalid PGP/MIME type");
+        Mime root=mime(transportMime(message));String ct=root.headers.getOrDefault("content-type","");boolean encrypted=ct.toLowerCase(Locale.ROOT).contains("application/pgp-encrypted");check(ct.toLowerCase(Locale.ROOT).startsWith(encrypted?"multipart/encrypted;":"multipart/signed;"),"Invalid PGP/MIME type");
         String boundary=null;for(String parameter:ct.split(";")){String p=parameter.trim();if(p.toLowerCase(Locale.ROOT).startsWith("boundary=")){check(boundary==null,"Duplicate MIME boundary");boundary=p.substring(9);if(boundary.startsWith("\"")&&boundary.endsWith("\""))boundary=boundary.substring(1,boundary.length()-1);}}
         check(boundary!=null&&boundary.length()>0&&boundary.length()<=70,"Invalid MIME boundary");
         String[] fields=new String(root.body,StandardCharsets.UTF_8).split(java.util.regex.Pattern.quote("--"+boundary),-1);check(fields.length==4&&fields[3].startsWith("--"),"Expected two MIME parts");byte[][] bodies=new byte[2][];

@@ -6,6 +6,12 @@ PQ Mail is an experimental post-quantum mail application supporting **S/MIME and
 
 New on-key certificate backups use lossless compression on desktop, Android and iOS. Existing uncompressed banks are read only for migration; signatures and fingerprints are unchanged. See [compressed storage and platform limits](docs/ON-KEY-CERTIFICATES.md#compressed-on-key-storage).
 
+The desktop/Sequoia development build also supports a **Level 5 encrypted software companion**: new Ed448/X448 components are wrapped through the existing P-384 slot 82 while ML-DSA-87 and ML-KEM-1024 remain on the YubiKey. A physical test on November 21, 2026 passed fresh compressed restore, signing and decryption in both implementations, preserving all existing keys and touch policies. Lossless compression reduced the companion from 46,412 to 39,163 bytes and increased actual free card storage from 18.0 to 25.8 KiB. Software components are exposed in host memory during use; this is not native hardware custody. See [format, tests and security tradeoffs](docs/LEVEL5-COMPANION.md). This companion path is not yet an Android/iOS feature; an optional **ultra-compact** mode now stores authenticated certificate templates and reconstructs self-signatures once on a new host, then verifies and caches only the public certificate. Full storage remains the default. Ultra-compact conversion, interrupted-write recovery and Java/Sequoia interoperability are tested in software; its physical-card conversion test is still pending. Third-party certifications and unsupported certificate structures require full storage.
+
+
+The [Independent Submission draft](docs/internet-drafts/draft-bradley-pqmail-certificate-bundle-00.md) specifies the current single-bank public bundle and encrypted companion formats, with [rendered HTML](https://ve7jtb.github.io/pq-mail/spec/draft-bradley-pqmail-certificate-bundle-00.html) and an [xml2rfc/idnits validation report](docs/internet-drafts/validation-report.md). Its proposed future slot layout is separate from the implemented mapping; other smart cards need their own supported mapping and storage binding.
+
+A separate [Level 3 PRF companion proposal](docs/LEVEL3-PRF-COMPANION-PROPOSAL.md) describes hardware Ed25519/X25519 with software PQ seeds for classical-only cards. It is a design proposal, not implemented provisioning. Normal lossless compression remains the default.
 
 ## Experimental Google Chat
 
@@ -14,6 +20,8 @@ The desktop app can connect to Google Chat, browse conversations, and send or op
 For your own source build, download the Desktop client JSON from your separate Chat project and set `PQ_MAIL_CHAT_CLIENT_JSON=/absolute/path/to/client.json` when running `./build.sh`. The build script packages only client registration metadata, never user tokens. No Chat client JSON is committed; entering only a client ID in Settings does not replace the bundled configuration.
 
 Chat OAuth refresh tokens are stored exclusively in the **PRF-encrypted vault**, bound to the account and client. Unlock the vault to connect; access tokens stay in memory and are cleared on lock. There is no plaintext or Keychain fallback for Chat. Pin a hybrid v6 OpenPGP identity whose certified email matches the Chat account. Recipient selection shows saved certificates and trust bound to the email and full primary fingerprint; encryption requires a trusted hybrid v6 recipient or the pinned self identity.
+
+In **Google Chat → Send bundle**, the subject has its own full-width field labeled **Subject (inside encrypted bundle)**. It is inside the protected payload, not the visible Chat caption. Turning encryption off changes the label to **Subject (inside signed bundle)** and explains that the subject is readable.
 
 Each bundle uses two linked Chat messages: one public `pq-mail-sender-key.pgp` certificate, followed by one `message.pgp` payload referencing it. Google rejects multiple non-media attachments in a single message. The receiver checks that the certificate reference stays in the same conversation and has the same Google sender, then verifies the OpenPGP signature separately. Receiving a certificate never automatically saves or trusts it. Google and conversation members can see the public certificate and transport metadata; signed From, To, Subject, body and files are inside the bundle and encrypted when encryption is selected. Verified HTML is rendered locally without remote images or active content.
 
@@ -58,6 +66,24 @@ The viewer removes sender CSS, JavaScript, forms, frames and other active conten
 In **Compose**, enable **Use formatting** for bold, italic, underline, headings, bulleted/numbered lists and website links. Clipboard content is pasted as text. Formatted S/MIME and PGP/MIME messages include both UTF-8 plain text and HTML inside the signed MIME entity, and inside encryption when enabled. Switching back to plain text asks before discarding formatting. Outgoing file attachments remain S/MIME-only.
 
 Regression tests cover local rendering with zero resource requests, unsafe links/active markup, document clearing, original-MIME tamper rejection, and signed/encrypted round trips retaining both MIME alternatives and S/MIME attachments. These are synthetic software tests, not a new live Gmail/Proton interoperability result.
+
+### Gmail OpenPGP interoperability
+
+A two-way live Gmail test on November 20, 2026 passed between PQ Mail's Level 3
+YubiKey identity and the standalone [gws + Sequoia app](https://github.com/ve7jtb/gws-sequoia-chat)
+using an existing software identity. Both sides decrypted and verified hybrid
+ML-DSA-65 + Ed25519 signatures with ML-KEM-768 + X25519 encryption. Existing keys
+and touch policies were unchanged.
+
+Gmail rewrote the outbound `multipart/encrypted` envelope into `multipart/mixed`
+while retaining the ciphertext. The reader now recognizes only the observed
+unambiguous two-part structure: a PGP version-control part and a single armored
+ciphertext part. Additional parts, surrounding text and multiple armor blocks
+are rejected. Only decrypted, signature-verified inner content is displayed;
+outer mail headers remain unauthenticated. The metadata-only inbox filter cannot
+identify this rewritten format, and Gmail classified the synthetic test as Spam;
+the diagnostic read it by exact Message-ID without moving it or changing labels.
+
 
 ## Demonstration videos
 

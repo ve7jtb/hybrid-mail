@@ -16,6 +16,7 @@
 #include <openssl/x509.h>
 #include <openssl/crypto.h>
 #include <openssl/provider.h>
+#include <openssl/err.h>
 
 /* Opt-in phase durations only: never PINs, keys, messages, or APDU data. */
 static void timing(const char *phase) {
@@ -139,11 +140,13 @@ int main(int argc,char **argv) {
     timing("pin-input");
     stage="private key check";priv=load_key(private_uri,OSSL_STORE_INFO_PKEY,ui,&pin);if(!priv||!matches(priv,expected))goto done;
     timing("private-key-check");
-    stage="sign";
+    ERR_clear_error();stage="sign initialization";
     if(ed) {
         md=EVP_MD_CTX_new();if(!md||EVP_DigestSignInit_ex(md,NULL,NULL,NULL,"provider=pkcs11",priv,NULL)!=1||EVP_DigestSign(md,signature,&len,input,inlen)!=1)goto done;
     } else {
-        ctx=EVP_PKEY_CTX_new_from_pkey(NULL,priv,"provider=pkcs11");if(!ctx||EVP_PKEY_sign_init(ctx)<=0||!configure(ctx,alg)||EVP_PKEY_sign(ctx,signature,&len,input,inlen)<=0)goto done;
+        ctx=EVP_PKEY_CTX_new_from_pkey(NULL,priv,"provider=pkcs11");if(!ctx||EVP_PKEY_sign_init(ctx)<=0)goto done;
+        stage="sign parameters";if(!configure(ctx,alg))goto done;
+        stage="sign";if(EVP_PKEY_sign(ctx,signature,&len,input,inlen)<=0)goto done;
     }
     timing("sign");
     stage="verify";
@@ -154,7 +157,16 @@ int main(int argc,char **argv) {
     rc=0;
  done:
     timing("before-cleanup");
-    if(rc)fprintf(stderr,"PQ Mail single-session signer failed at %s; no retry\n",stage);
+    if(rc){
+        fprintf(stderr,"PQ Mail single-session signer failed at %s; no retry\n",stage);
+        /* Only public error codes and fixed library reason strings; never error data. */
+        unsigned long error;unsigned count=0;
+        while((error=ERR_get_error()) && count++<8){
+            const char *reason=ERR_reason_error_string(error);
+            fprintf(stderr,"PQMAIL_ERROR %08lX %s\n",error,reason?reason:"unknown");
+        }
+        fprintf(stderr,"PQMAIL_PIN_CALLBACKS %u\n",pin.callbacks);
+    }
     if(getenv("PQMAIL_SIGN_TIMINGS"))fprintf(stderr,"PQMAIL_PIN_CALLBACKS %u\n",pin.callbacks);
     OPENSSL_cleanse(&pin,sizeof(pin));EVP_MD_CTX_free(md);EVP_PKEY_CTX_free(ctx);
     EVP_PKEY_free(pub);EVP_PKEY_free(priv);EVP_PKEY_free(expected);UI_destroy_method(ui);OSSL_PROVIDER_unload(p11);OSSL_PROVIDER_unload(def);OPENSSL_cleanup();timing("cleanup");return rc;

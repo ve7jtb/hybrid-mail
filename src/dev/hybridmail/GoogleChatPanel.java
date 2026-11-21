@@ -39,7 +39,29 @@ final class GoogleChatPanel extends JPanel {
         list.setCellRenderer(new DefaultListCellRenderer(){public Component getListCellRendererComponent(JList<?> l,Object v,int i,boolean s,boolean f){super.getListCellRendererComponent(l,v,i,s,f);putClientProperty("html.disable",Boolean.TRUE);setText(String.valueOf(v));return this;}});
         spaces.setRenderer(new DefaultListCellRenderer(){public Component getListCellRendererComponent(JList<?> l,Object v,int i,boolean s,boolean f){super.getListCellRendererComponent(l,v,i,s,f);putClientProperty("html.disable",Boolean.TRUE);setText(v==null?"Select an existing Chat conversation":v.toString());return this;}});
         JPanel reading=new JPanel(new BorderLayout(6,6));JScrollPane rows=new JScrollPane(list);rows.setPreferredSize(new Dimension(600,130));reading.add(rows,BorderLayout.NORTH);reading.add(view);reading.add(row(button("Open / verify bundle",this::open),button("Save verified sender certificate",this::saveCertificate),button("Review trust…",host::chatContacts),button("Save decrypted attachment…",this::saveFile)),BorderLayout.SOUTH);
-        JPanel writing=new JPanel(new BorderLayout(6,6));JPanel fields=new JPanel(new GridLayout(0,1,0,4));fields.add(row(new JLabel("Recipient email (inside signed bundle)"),recipient,button("Find saved certificates",this::refreshKeys)));fields.add(row(new JLabel("Recipient certificate"),keys));fields.add(row(new JLabel("Subject"),subject,encrypt));writing.add(fields,BorderLayout.NORTH);writing.add(composer);
+        JPanel writing=new JPanel(new BorderLayout(6,6));
+        JPanel fields=new JPanel(new BorderLayout(0,6));
+        JPanel recipients=new JPanel(new GridLayout(0,1,0,4));
+        recipients.add(row(new JLabel("Recipient email (inside signed bundle)"),recipient,button("Find saved certificates",this::refreshKeys)));
+        recipients.add(row(new JLabel("Recipient certificate"),keys));fields.add(recipients,BorderLayout.NORTH);
+        // Give the subject its own full-width row, rather than letting a FlowLayout
+        // hide it among recipient and encryption controls at ordinary window sizes.
+        JPanel subjectPanel=new JPanel(new BorderLayout(0,6));
+        subjectPanel.setBorder(BorderFactory.createEmptyBorder(8,6,4,6));
+        JLabel subjectLabel=new JLabel();subjectLabel.setFont(subjectLabel.getFont().deriveFont(Font.BOLD,16f));subjectLabel.setLabelFor(subject);
+        subject.setFont(subject.getFont().deriveFont(18f));subject.setMargin(new Insets(8,10,8,10));
+        JLabel subjectHelp=new JLabel();
+        Runnable updateSubjectLabel=()->{
+            String label=encrypt.isSelected()?"Subject (inside encrypted bundle)":"Subject (inside signed bundle)";
+            String help=encrypt.isSelected()?"Shown after decryption in PQ Mail; not included in the Google Chat caption.":"Signed but not encrypted; anyone who downloads the bundle can read it.";
+            subjectLabel.setText(label);subjectHelp.setText(help);
+            subject.getAccessibleContext().setAccessibleName(label);subject.getAccessibleContext().setAccessibleDescription(help);
+            subject.setToolTipText(help);
+        };
+        encrypt.addActionListener(e->updateSubjectLabel.run());updateSubjectLabel.run();
+        subjectPanel.add(subjectLabel,BorderLayout.NORTH);subjectPanel.add(subject,BorderLayout.CENTER);subjectPanel.add(subjectHelp,BorderLayout.SOUTH);
+        fields.add(subjectPanel,BorderLayout.CENTER);fields.add(row(encrypt),BorderLayout.SOUTH);
+        writing.add(fields,BorderLayout.NORTH);writing.add(composer);
         JPanel bottom=new JPanel(new GridLayout(0,1));fileList.setVisibleRowCount(2);bottom.add(new JScrollPane(fileList));bottom.add(row(button("Add attachments…",this::addFiles),button("Remove selected",()->{for(Path p:fileList.getSelectedValuesList())files.removeElement(p);}),button("Sign and send bundle…",this::send)));writing.add(bottom,BorderLayout.SOUTH);
         JTabbedPane content=new JTabbedPane();content.addTab("Conversation",reading);content.addTab("Send bundle",writing);add(content);
         for(JLabel label:List.of(status))label.putClientProperty("html.disable",Boolean.TRUE);

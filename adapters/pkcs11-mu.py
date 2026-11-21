@@ -45,6 +45,49 @@ def ec_object_id(slot):
     return "%" + format(slots[slot.lower()],"02X")
 
 
+def polyfill_mode():
+    """Select only the closed Level 3 classical-card mapping.
+
+    A certificate cannot name arbitrary commands or override another profile.
+    Generic PKCS11_* slot defaults are ignored by this explicit profile; named
+    compatibility/certification profiles conflict and must be cleared by callers.
+    """
+    value=os.environ.get("PQMAIL_LEVEL3_POLYFILL")
+    certification=os.environ.get("PQMAIL_POLYFILL_CERTIFICATION")
+    if value is None:
+        if certification is not None:
+            raise AdapterError("Polyfill certification requires the Level 3 polyfill profile")
+        return False
+    if value!="1" or (certification is not None and certification!="1"):
+        raise AdapterError("Invalid Level 3 polyfill profile flag")
+    if any(os.environ.get(name) for name in ("PQMAIL_LEVEL5_COMPATIBILITY","PQMAIL_COMPATIBILITY_SLOT","PQMAIL_CERTIFICATION_SLOTS")):
+        raise AdapterError("Conflicting token profiles for Level 3 polyfill")
+    return True
+
+
+def signing_object_id(algorithm,ec_slot):
+    if polyfill_mode():
+        if algorithm!="Ed25519":
+            raise AdapterError("Level 3 polyfill keeps ML-DSA signing in software")
+        # 9c is permitted only in this closed profile, without weakening the
+        # historical ec_object_id guard that reserves it for token ML-DSA.
+        return "%05" if os.environ.get("PQMAIL_POLYFILL_CERTIFICATION")=="1" else "%02"
+    object_id="%02" if algorithm.startswith("ML-DSA-") else ec_object_id("84" if algorithm=="Ed25519" else ec_slot)
+    if os.environ.get("PQMAIL_LEVEL5_COMPATIBILITY"):
+        if os.environ["PQMAIL_LEVEL5_COMPATIBILITY"]!="1" or algorithm!="ECDSA-P384-SHA384":raise AdapterError("Invalid Level 5 compatibility signing operation")
+        object_id=ec_object_id("88")
+    compatibility=os.environ.get("PQMAIL_COMPATIBILITY_SLOT","")
+    if compatibility:
+        if compatibility!="88" or algorithm!="Ed25519":raise AdapterError("Invalid compatibility slot")
+        object_id=ec_object_id("88")
+    certification=os.environ.get("PQMAIL_CERTIFICATION_SLOTS","")
+    if certification:
+        if certification!="86,87" or algorithm not in ("ML-DSA-65","ML-DSA-87","Ed25519"):
+            raise AdapterError("Invalid certification slot configuration")
+        object_id=ec_object_id("86" if algorithm in ("ML-DSA-65","ML-DSA-87") else "87")
+    return object_id
+
+
 def config_path(value):
     if (os.name!="nt" and "\\" in value) or not Path(value).is_absolute() or any(c in value for c in '\r\n"$'):
         raise AdapterError("Provider/module paths must be absolute and contain no config metacharacters")
@@ -82,14 +125,17 @@ def child_environment(config_file, object_id=None):
 def export_traditional(executable, provider, module, serial, slot, terminal, ml=False):
     if not serial.isdecimal() or not Path(executable).is_absolute():
         raise AdapterError("Set explicit token serial and absolute OpenSSL path")
-    uri="pkcs11:serial="+serial+";id="+("%02" if ml else ec_object_id(slot))+";type=public"
+    polyfill=polyfill_mode()
+    if polyfill and ml:raise AdapterError("Level 3 polyfill has no on-device ML-DSA key")
+    selected=signing_object_id("Ed25519",slot) if polyfill else "%02" if ml else ec_object_id(slot)
+    uri="pkcs11:serial="+serial+";id="+selected+";type=public"
     with tempfile.TemporaryDirectory(prefix="hybrid-mail-ec-public-") as temporary:
         folder=Path(temporary);config=folder/"openssl.cnf";public=folder/"public.der"
         config.write_text(configuration(provider,module,public=True),encoding="utf-8")
         result=subprocess.run([executable,"pkey","-provider","default","-provider","pkcs11",
                                "-pubin","-in",uri,"-pubout","-outform","DER","-out",str(public)],
                               stdin=terminal,stderr=terminal,stdout=subprocess.DEVNULL,env=child_environment(config),timeout=30)
-        if result.returncode or not public.exists() or not (1900<=public.stat().st_size<=2650 if ml else 80<=public.stat().st_size<=500):
+        if result.returncode or not public.exists() or not (public.stat().st_size==44 if polyfill else 1900<=public.stat().st_size<=2650 if ml else 80<=public.stat().st_size<=500):
             raise AdapterError("Cannot export conventional public key from configured slot")
         return public.read_bytes()
 
@@ -155,6 +201,14 @@ def validate_signature_length(algorithm,size):
 
 
 def sign(spki, mu, executable, provider, module, serial, terminal, run=subprocess.run, algorithm="ML-DSA-65", ec_slot="", pin=None):
+    # A rejected profile/key/configuration must clear the supplied PIN just as
+    # a failed private operation does. The CLI also clears its buffer on exit.
+    try:return _sign(spki,mu,executable,provider,module,serial,terminal,run,algorithm,ec_slot,pin)
+    finally:
+        if pin is not None:pin[:]=b"\0"*len(pin)
+
+
+def _sign(spki, mu, executable, provider, module, serial, terminal, run, algorithm, ec_slot, pin):
     if not serial.isdecimal():
         raise AdapterError("Set PKCS11_SERIAL to the intended token serial")
     if not Path(executable).is_absolute():
@@ -163,19 +217,7 @@ def sign(spki, mu, executable, provider, module, serial, terminal, run=subproces
     # The Yubico module maps PIV signature slot 9c to binary CKA_ID 02.
     if algorithm not in ("ML-DSA-44", "ML-DSA-65", "ML-DSA-87", "ECDSA-P256-SHA256", "ECDSA-P384-SHA384", "RSA3072-PSS-SHA256", "Ed25519"):
         raise AdapterError("Unsupported signing algorithm")
-    object_id = "%02" if algorithm.startswith("ML-DSA-") else ec_object_id("84" if algorithm=="Ed25519" else ec_slot)
-    if os.environ.get("PQMAIL_LEVEL5_COMPATIBILITY"):
-        if os.environ["PQMAIL_LEVEL5_COMPATIBILITY"]!="1" or algorithm!="ECDSA-P384-SHA384":raise AdapterError("Invalid Level 5 compatibility signing operation")
-        object_id=ec_object_id("88")
-    compatibility = os.environ.get("PQMAIL_COMPATIBILITY_SLOT", "")
-    if compatibility:
-        if compatibility != "88" or algorithm != "Ed25519":raise AdapterError("Invalid compatibility slot")
-        object_id = ec_object_id("88")
-    certification = os.environ.get("PQMAIL_CERTIFICATION_SLOTS", "")
-    if certification:
-        if certification != "86,87" or algorithm not in ("ML-DSA-65", "ML-DSA-87", "Ed25519"):
-            raise AdapterError("Invalid certification slot configuration")
-        object_id = ec_object_id("86" if algorithm in ("ML-DSA-65", "ML-DSA-87") else "87")
+    object_id=signing_object_id(algorithm,ec_slot)
     helper=Path(executable).with_name("pqmail-pkcs11-sign.exe" if os.name=="nt" else "pqmail-pkcs11-sign")
     if pin is not None and helper.is_file():
         return single_process_sign(helper,spki,mu,provider,module,serial,object_id,algorithm,pin,run)

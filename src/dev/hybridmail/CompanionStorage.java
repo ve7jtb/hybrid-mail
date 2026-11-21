@@ -21,9 +21,17 @@ final class CompanionStorage {
     static byte[] load(OnKeyBundle.Card card)throws Exception{
         byte[] manifest=card.get(BASE);check(manifest!=null&&manifest.length==44,"No complete encrypted companion on this key");var in=new DataInputStream(new ByteArrayInputStream(manifest));check(Arrays.equals(in.readNBytes(8),bytes("PQCIDX01")),"Unknown companion manifest");int size=in.readInt();byte[] digest=in.readNBytes(32);check(size>0&&size<=Level5Companion.MAX,"Invalid companion size");var out=new ByteArrayOutputStream();
         for(int i=0;i<(size+CHUNK-1)/CHUNK;i++){byte[] chunk=card.get(BASE+i+1);check(chunk!=null&&chunk.length==12+Math.min(CHUNK,size-i*CHUNK),"Incomplete companion; restore local ciphertext backup");var r=new DataInputStream(new ByteArrayInputStream(chunk));check(Arrays.equals(r.readNBytes(8),bytes("PQCCHK01"))&&r.readInt()==i,"Wrong companion chunk");out.write(r.readAllBytes());}
-        byte[] encoded=out.toByteArray();check(MessageDigest.isEqual(hash("SHA-256",encoded),digest),"Companion digest mismatch");check(Arrays.equals(card.get(BASE),manifest),"Companion changed while reading");Level5Companion.inspect(encoded,card.serial(),hardware(card));return encoded;
+        byte[] encoded=out.toByteArray();check(MessageDigest.isEqual(hash("SHA-256",encoded),digest),"Companion digest mismatch");check(Arrays.equals(card.get(BASE),manifest),"Companion changed while reading");inspectOnCard(card,encoded);return encoded;
     }
     static int storedSize(byte[] encoded){return encoded.length+44+12*((encoded.length+CHUNK-1)/CHUNK);}
+    /** Dispatch only on a bounded format discriminator, then authenticate every
+     * field against the live keys. A serial or unverified manifest is not trust. */
+    static void inspectOnCard(OnKeyBundle.Card card,byte[] encoded)throws Exception{
+        byte[] expanded=CompanionEncoding.unpack(encoded);var in=new DataInputStream(new ByteArrayInputStream(expanded));byte[] body=Level5Companion.field(in);
+        check(body.length>=8,"Truncated companion body");
+        if(Arrays.equals(Arrays.copyOf(body,8),bytes("PQMCP003")))Level3Companion.inspect(encoded,card.serial(),Level3PolyfillDesktop.hardware(card));
+        else Level5Companion.inspect(encoded,card.serial(),hardware(card));
+    }
 
     /** Re-encode the SAME authenticated envelope in the smaller storage format.
      * No private operation, key generation or certificate change is involved.
@@ -165,7 +173,7 @@ final class CompanionStorage {
      * locally backed-up ciphertext. Existing different companions are preserved. */
     static void save(OnKeyBundle.Card card,byte[] encoded,char[] management,Path recovery)throws Exception{
         try{
-            Level5Companion.inspect(encoded,card.serial(),hardware(card));
+            inspectOnCard(card,encoded);
             var expected=new LinkedHashMap<Integer,byte[]>();
             for(int i=0;i<(encoded.length+CHUNK-1)/CHUNK;i++){var b=new ByteArrayOutputStream();var o=new DataOutputStream(b);o.write(bytes("PQCCHK01"));o.writeInt(i);o.write(encoded,i*CHUNK,Math.min(CHUNK,encoded.length-i*CHUNK));expected.put(BASE+1+i,b.toByteArray());}
             var b=new ByteArrayOutputStream();var o=new DataOutputStream(b);o.write(bytes("PQCIDX01"));o.writeInt(encoded.length);o.write(hash("SHA-256",encoded));expected.put(BASE,b.toByteArray());
@@ -176,6 +184,7 @@ final class CompanionStorage {
             if(Files.exists(recovery))check(Arrays.equals(Files.readAllBytes(recovery),encoded),"Recovery file differs");
             else{try(var channel=FileChannel.open(recovery,StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE)){var bytes=ByteBuffer.wrap(encoded);while(bytes.hasRemaining())channel.write(bytes);channel.force(true);}}
             check(Arrays.equals(Files.readAllBytes(recovery),encoded),"Recovery backup read-back failed");
+            syncDirectory(recovery.getParent());
             card.authenticate(management);
             for(var entry:expected.entrySet()){byte[] old=card.get(entry.getKey());check(old==null||Arrays.equals(old,entry.getValue()),"Card changed since preflight");if(old==null)card.put(entry.getKey(),entry.getValue());check(Arrays.equals(card.get(entry.getKey()),entry.getValue()),"Companion write read-back failed; retain local ciphertext for explicit resume");}
             check(Arrays.equals(load(card),encoded),"Committed companion restore mismatch");

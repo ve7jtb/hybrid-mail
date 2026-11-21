@@ -122,6 +122,7 @@ public final class DesktopState {
         try{save();}catch(Exception e){values.clear();values.putAll(before);throw e;}
         for(String file:List.of("signing.cer","signing.pem","encryption.cer","encryption.pem"))Files.deleteIfExists(folder.resolve(file));
         if(pgp!=null)Files.deleteIfExists(pgp);
+        if(identity.level3Polyfill())Files.deleteIfExists(Level3PolyfillDesktop.path(directory,identity));
         try(var files=Files.list(folder)){if(files.findAny().isEmpty())Files.delete(folder);}
     }
     public void rememberSoftwareProfiles(List<Identity> profiles,Path file,String name)throws Exception{
@@ -145,6 +146,7 @@ public final class DesktopState {
         // Old password-protected copies remain as recovery backups; never silently destroy user files.
     }
     public List<CertificateBundle.Entry> certificateBundle(Identity selected)throws Exception{
+        if(selected!=null&&selected.level3Polyfill())throw new IOException("Use the Level 3 encrypted companion for restore, or export its OpenPGP public certificate for contacts");
         if(selected==null||selected.signingKey()!=null)throw new IOException("Select a saved YubiKey identity to share its pure/hybrid certificates");
         String serial=get("identity."+identityId(selected)+".token.serial","");if(serial.isBlank())throw new IOException("Selected identity has no YubiKey serial");
         List<CertificateBundle.Entry> result=new ArrayList<>();

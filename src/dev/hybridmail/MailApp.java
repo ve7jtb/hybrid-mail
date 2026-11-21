@@ -271,9 +271,13 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     DesktopState chatState()throws Exception{return state();}
     Identity chatIdentity(){return identity;}
     String chatGmailClient(){try{return GoogleOAuth.bundledClient().id();}catch(Exception e){return "";}}
-    private CompanionOperation companionOperation(Identity id)throws Exception{return CompanionDesktop.operation(state().directory(),id,adapter,kemAdapter,state().configuration());}
-    ExternalMu.Backend chatSigning(){try{return CompanionDesktop.selected(state().directory(),identity)?companionOperation(identity):adapter==null?null:ExternalMu.executable(adapter);}catch(Exception e){throw new IllegalStateException(e);}}
-    ExternalKem.Backend chatDecryption(){try{return CompanionDesktop.selected(state().directory(),identity)?companionOperation(identity):kemAdapter==null?null:ExternalKem.executable(kemAdapter);}catch(Exception e){throw new IllegalStateException(e);}}
+    // Both companion types get an operation-scoped backend. Selecting the
+    // software-PQ layout never routes its ML components to a classical token.
+    private boolean companionSelected(Identity id)throws Exception{return id!=null&&(id.level3Polyfill()||CompanionDesktop.selected(state().directory(),id));}
+    private ExternalMu.Backend companionSigning(Identity id)throws Exception{return id.level3Polyfill()?Level3PolyfillDesktop.operation(state().directory(),id,adapter,kemAdapter,state().configuration()):CompanionDesktop.operation(state().directory(),id,adapter,kemAdapter,state().configuration());}
+    private ExternalKem.Backend companionDecryption(Identity id)throws Exception{return id.level3Polyfill()?Level3PolyfillDesktop.operation(state().directory(),id,adapter,kemAdapter,state().configuration()):CompanionDesktop.operation(state().directory(),id,adapter,kemAdapter,state().configuration());}
+    ExternalMu.Backend chatSigning(){try{return companionSelected(identity)?companionSigning(identity):adapter==null?null:ExternalMu.executable(adapter);}catch(Exception e){throw new IllegalStateException(e);}}
+    ExternalKem.Backend chatDecryption(){try{return companionSelected(identity)?companionDecryption(identity):kemAdapter==null?null:ExternalKem.executable(kemAdapter);}catch(Exception e){throw new IllegalStateException(e);}}
     void chatConfigure(){googleChatExperimentalSettings();}
     void chatContacts(){shell.showPage(4);refreshContacts();}
     void chatError(Throwable e){error(e);}
@@ -590,7 +594,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         saved.add(button("Open software identity",()->openSaved((DesktopState.SavedIdentity)softwareIdentities.getSelectedItem())));p.add(saved);
         p.add(left(button("Create software identity…",this::generate),button("Import software PKCS#12…",this::load)));
         p.add(left(button("Protect / upgrade software identity…",this::protectSoftwareIdentity),button("Export passkey-wrapped identity…",this::exportIdentityTransfer),button("Import passkey-wrapped identity…",this::importIdentityTransfer)));
-        p.add(section("2  YubiKey identities",new JLabel("Private keys stay on the bound YubiKey. Each identity remembers its serial and slots.")));
+        p.add(section("2  YubiKey identities",new JLabel("Hardware keys stay on the bound YubiKey; software-PQ companions are unwrapped only in memory.")));
         JPanel hardware=new JPanel(new FlowLayout(FlowLayout.LEFT));hardware.add(yubikeyIdentities);
         hardware.add(button("Select YubiKey identity",()->openSaved((DesktopState.SavedIdentity)yubikeyIdentities.getSelectedItem())));
         hardware.add(button("Forget YubiKey identity…",this::forgetYubiKeyIdentity));p.add(hardware);
@@ -608,6 +612,8 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         pendingHelp.setToolTipText("Help: resume interrupted YubiKey setup");
         pendingHelp.getAccessibleContext().setAccessibleName("Help about resuming interrupted YubiKey setup");
         p.add(left(button("Create identity on empty YubiKey…",this::provisionYubiKey),button("Resume interrupted setup…",this::finishTokenCertificates),pendingHelp));
+        p.add(left(button("Create Level 3 software-PQ identity on empty YubiKey…",this::createLevel3Polyfill)));
+        p.add(left(button("Resume Level 3 software-PQ setup…",this::resumeLevel3Polyfill),button("Restore Level 3 software-PQ companion from YubiKey…",this::restoreLevel3Polyfill)));
         p.add(left(button("Export selected signing certificate…",()->export(true)),button("Export selected encryption certificate…",()->export(false))));
         p.add(left(button("Share certificates…",this::shareCertificates),button("Import certificate bundle from file…",()->{Path file=choose(false,"Import certificate bundle from file (.pqcert)");if(file!=null)importCertificateBundle(file);})));
         p.add(left(button("Back up certificate bundle to YubiKey…",()->onKeyAction(false)),button("Restore certificate bundle from YubiKey…",this::importOnKey)));
@@ -639,12 +645,22 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         try{savedIdentities.removeAllItems();softwareIdentities.removeAllItems();yubikeyIdentities.removeAllItems();outgoingIdentity.removeAllItems();if(desktopState==null)return;
             String selected=desktopState.get("selected.identity","");
             for(var saved:desktopState.selectableIdentities()){savedIdentities.addItem(saved);(saved.passwordRequired()?softwareIdentities:yubikeyIdentities).addItem(saved);if(outgoingAllowed(saved))outgoingIdentity.addItem(saved);if(saved.id().equals(selected)){savedIdentities.setSelectedItem(saved);(saved.passwordRequired()?softwareIdentities:yubikeyIdentities).setSelectedItem(saved);if(outgoingAllowed(saved))outgoingIdentity.setSelectedItem(saved);}}
-            if(usePgp()&&(identity==null||!Identity.HYBRID_65_P384_SIGN.equals(identity.signatureAlgorithm())))outgoingIdentity.setSelectedIndex(-1);
+            if(identity==null||(usePgp()?!OpenPgp.supported(identity):identity.level3Polyfill()))outgoingIdentity.setSelectedIndex(-1);
         }finally{syncingOutgoing=false;}
     }
     private boolean outgoingAllowed(DesktopState.SavedIdentity saved){
-        if(!usePgp())return true;
-        try{return Identity.HYBRID_65_P384_SIGN.equals(Identity.readCertificate(desktopState.directory().resolve("identities").resolve(saved.id()).resolve("signing.cer")).getPublicKey().getAlgorithm());}catch(Exception e){return false;}
+        // A software profile's certificates can themselves be vault protected.
+        // Offer it for loading and enforce capability on the loaded identity.
+        if(saved.passwordRequired())return true;
+        try{
+            // Read public selector metadata only. Filtering must not unlock a
+            // software vault or ask for a PIN merely to draw the dropdown.
+            Path folder=desktopState.directory().resolve("identities").resolve(saved.id());
+            var signing=Identity.readCertificate(folder.resolve("signing.cer"));
+            var encryption=Files.exists(folder.resolve("encryption.cer"))?Identity.readCertificate(folder.resolve("encryption.cer")):null;
+            var publicIdentity=new Identity(signing,null,encryption,null,null);
+            return usePgp()?OpenPgp.supported(publicIdentity):!publicIdentity.level3Polyfill();
+        }catch(Exception e){return !usePgp()&&saved.passwordRequired();}
     }
     private static String certificateEmail(X509Certificate certificate)throws Exception{
         var names=certificate.getSubjectAlternativeNames();if(names!=null)for(var name:names)if(Integer.valueOf(1).equals(name.get(0)))return name.get(1).toString();return "(no email SAN)";
@@ -716,6 +732,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     private void reissueTokenCertificates(){
         try{
             if(identity==null||identity.signingKey()!=null)throw new IOException("Select a saved YubiKey identity first");
+            requireSmimeIdentity("Update S/MIME certificate email");
             DesktopState settings=state();JTextField email=new JTextField(settings.get("google.email",from.getText()),30);
             JTextField extraEmails=new JTextField(30);
             JPanel prompt=new JPanel(new GridLayout(0,1,0,8));prompt.add(new JLabel("Primary email address for your YubiKey certificates"));prompt.add(email);
@@ -751,6 +768,60 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
                 status.setText("New email certificates saved (DER and PEM). Token keys unchanged. No email sent.");offerBundleBackup();
             });
         }catch(Exception e){error(e);}
+    }
+    /** This opt-in profile explicitly separates wire security from storage
+     * protection. Detection happens before any credential or creation dialog. */
+    private void createLevel3Polyfill(){
+        job("Checking the inserted YubiKey and empty PIV slots…",TokenProvision::detectPolyfillEmpty,serial->{try{
+            JTextField email=new JTextField(from.getText()),extra=new JTextField();
+            JPanel form=new JPanel(new GridLayout(0,1,0,8));
+            form.add(new JLabel("Inserted YubiKey serial: "+serial+" · all user PIV slots empty"));
+            form.add(new JLabel("Primary email address"));form.add(email);form.add(new JLabel("Additional email addresses (up to 2, comma-separated; reserves PIV storage)"));form.add(extra);
+            form.add(new JLabel("<html>OpenPGP v6: ML-DSA-65 + Ed25519 signing and ML-KEM-768 + X25519 encryption.<br>Ed25519 certification 82, signing 9c, and X25519 decryption 9d require PIN and touch.<br>Dedicated P-384 wrapping key 83 requires PIN, with no touch.</html>"));
+            form.add(new JLabel("<html>PQ private seeds are software keys in an encrypted on-key companion.<br>Protection at rest is classical P-384. Unwrapped software keys exist in process memory<br>and can be exposed by a compromised host, memory dumps or swap.<br>This profile supports OpenPGP v6 only; it does not create S/MIME or v4 certificates.</html>"));
+            form.add(new JLabel("No existing keys are overwritten. FIDO and other applications are unchanged."));
+            if(JOptionPane.showConfirmDialog(this,form,"Create Level 3 software-PQ identity",JOptionPane.OK_CANCEL_OPTION,JOptionPane.WARNING_MESSAGE)!=JOptionPane.OK_OPTION)return;
+            String address=email.getText().trim();OpenPgp.validateEmail(address);var emails=new java.util.ArrayList<String>();emails.add(address);emails.addAll(Identity.additionalEmails(address,extra.getText()));OpenPgp.check(emails.size()<=3,"This companion supports at most three email addresses to reserve PIV storage. No keys have been created.");
+            char[][] credentials=polyfillCredentials(serial,false);if(credentials==null)return;
+            Path folder=state().directory().resolve("token-setups").resolve("level3-polyfill-"+java.util.UUID.randomUUID());
+            job("Creating keys and the encrypted companion; enter PINs and touch when requested…",()->{
+                try{return Level3PolyfillSetup.create(state(),serial,emails,folder,credentials[0],credentials[1]);}
+                finally{for(char[] value:credentials)Arrays.fill(value,'\0');}
+            },this::selectedLevel3Polyfill);
+        }catch(Exception e){error(e);}});
+    }
+    private char[][] polyfillCredentials(String serial,boolean resume){
+        JPasswordField pin=new JPasswordField(),management=new JPasswordField();JCheckBox factory=new JCheckBox("Use factory-default management key",true);
+        JPanel form=new JPanel(new GridLayout(0,1,0,8));form.add(new JLabel((resume?"Resume interrupted setup":"Provision four keys and back up companion")+" on YubiKey "+serial));
+        form.add(new JLabel("Existing keys are checked and preserved. Recovery only generates missing keys in empty slots."));
+        form.add(new JLabel("YubiKey PIN for provisioning"));form.add(pin);form.add(factory);form.add(new JLabel("Management key (hex; not the PIN)"));form.add(management);
+        form.add(new JLabel("Certificate signing uses separate PIN dialogs. Touch when the YubiKey flashes."));
+        try{if(JOptionPane.showConfirmDialog(this,form,resume?"Resume software-PQ setup":"Authorize software-PQ setup",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION)return null;
+            return new char[][]{pin.getPassword(),factory.isSelected()?"010203040506070801020304050607080102030405060708".toCharArray():management.getPassword()};
+        }finally{pin.setText("");management.setText("");}
+    }
+    private void resumeLevel3Polyfill(){try{
+        JFileChooser chooser=new JFileChooser(state().directory().resolve("token-setups").toFile());chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);chooser.setDialogTitle("Choose interrupted Level 3 software-PQ setup directory");
+        if(chooser.showOpenDialog(this)!=JFileChooser.APPROVE_OPTION)return;Path folder=chooser.getSelectedFile().toPath();
+        String serial=Integer.toString(Level3PolyfillSetup.plan(folder).serial());
+        char[][] credentials=polyfillCredentials(serial,true);if(credentials==null)return;
+        job("Checking the journal and resuming interrupted software-PQ setup…",()->{try{return Level3PolyfillSetup.resume(state(),folder,credentials[0],credentials[1]);}finally{for(char[] value:credentials)Arrays.fill(value,'\0');}},this::selectedLevel3Polyfill);
+    }catch(Exception e){error(e);}}
+    private void restoreLevel3Polyfill(){
+        job("Reading and validating the on-key software-PQ companion (no PIN)…",()->{
+            // Discover once, then bind the complete read to that serial so a
+            // different inserted key cannot supply a replacement mid-restore.
+            int serial;try(var card=new OnKeyDesktop(0)){serial=card.serial();}
+            return Level3PolyfillDesktop.readCard(serial);
+        },loaded->{try{
+            var env=loaded.env();JTextArea review=new JTextArea("YubiKey "+env.serial()+"\n\n"+env.own().description()+"\n\nHardware: certification Ed25519 82; signing Ed25519 9c; decryption X25519 9d; wrapping P-384 83.\nPQ components are encrypted software keys, unwrapped only in memory after PIN authorization.\nProtection at rest is classical P-384. Host compromise, memory dumps and swap remain risks.\n\nRestore saves public certificates and encrypted companion only. Contact trust is unchanged.",16,76);review.setEditable(false);review.setLineWrap(true);review.setWrapStyleWord(true);
+            if(JOptionPane.showConfirmDialog(this,new JScrollPane(review),"Restore Level 3 software-PQ companion",JOptionPane.OK_CANCEL_OPTION,JOptionPane.WARNING_MESSAGE)!=JOptionPane.OK_OPTION)return;
+            job("Saving public identity and encrypted companion…",()->Level3PolyfillDesktop.install(state(),loaded),this::selectedLevel3Polyfill);
+        }catch(Exception e){error(e);}});
+    }
+    private void selectedLevel3Polyfill(Identity created){
+        setIdentity(created);refreshSaved();try{from.setText(certificateEmail(created.signingCert()));}catch(Exception e){error(e);}
+        status.setText("Level 3 software-PQ OpenPGP identity ready; encrypted companion is on the YubiKey. Keys → Restore Level 3 software-PQ companion imports it on another host.");
     }
     private void provisionYubiKey(){
         job("Detecting inserted YubiKey and checking all PIV slots…",TokenProvision::detectEmpty,this::provisionDetectedYubiKey);
@@ -914,10 +985,13 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         try{if(desktopState!=null)desktopState.activateIdentity(id);}catch(Exception e){error(e);return;}identity=id;
         if(desktopState!=null){adapter=id.signingKey()==null?tokenAdapter(false):null;kemAdapter=id.encryptionKey()==null&&id.encryptionCert()!=null?tokenAdapter(true):null;}
         try{if(OpenPgp.supported(id))pgpRecipients.remember(OpenPgp.loadOwn(state().directory(),id));}catch(Exception ignored){}
-        identityLabel.setText(id.signatureAlgorithm()+" · "+id.signingCert().getSubjectX500Principal());status.setText("Identity ready. Import a recipient certificate to encrypt.");}
+        identityLabel.setText((id.level3Polyfill()?"Level 3 OpenPGP · software PQ + YubiKey Ed25519/X25519":id.signatureAlgorithm())+" · "+id.signingCert().getSubjectX500Principal());
+        if(id.level3Polyfill()){mailFormat.setSelectedIndex(1);status.setText("OpenPGP-only identity ready. PQ seeds are unwrapped in memory; YubiKey touch is required for signing and decryption.");}
+        else status.setText("Identity ready. Import a recipient certificate to encrypt.");}
 
     private OpenPgp.PublicIdentity createSelectedOpenPgp(Identity id,String path)throws Exception{
         if(id==null)throw new IOException("Select an identity first");
+        if(id.level3Polyfill())return OpenPgp.loadOwn(state().directory(),id);
         if(id.signingKey()!=null||!Identity.HYBRID_65_P384_SIGN.equals(id.signatureAlgorithm())||Files.exists(OpenPgp.ownPath(state().directory(),id)))return OpenPgp.createOwn(state().directory(),id,path==null?null:ExternalMu.executable(path));
         var entries=state().certificateBundle(id);int serial=entries.getFirst().serial();var keys=new java.util.HashMap<String,java.security.PublicKey>();
         try(var card=new OnKeyDesktop(serial)){
@@ -969,10 +1043,11 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         char[] result=choice==JOptionPane.OK_OPTION?(factory.isSelected()?"010203040506070801020304050607080102030405060708".toCharArray():field.getPassword()):null;field.setText("");return result;
     }
     private void offerBundleBackup(){
-        if(identity==null||identity.signingKey()!=null)return;
+        if(identity==null||identity.signingKey()!=null||identity.level3Polyfill())return;
         if(JOptionPane.showOptionDialog(this,"Back up the current certificate bundle to this YubiKey now?\nIncludes pure/hybrid S/MIME certificates, any saved OpenPGP public identity,\nserial and slot mappings. This regenerates the bundle; it does not generate keys.\nNo private keys, PINs or account credentials are backed up.","Back up certificate bundle",JOptionPane.DEFAULT_OPTION,JOptionPane.QUESTION_MESSAGE,null,new Object[]{"Back up now","Not now"},"Back up now")==0)onKeyAction(false);
     }
     private void onKeyAction(boolean migrate){try{
+        requireSmimeIdentity("Back up public S/MIME certificate bundle");
         var entries=state().certificateBundle(identity);String review=CertificateBundle.review(entries)+"\nSaved OpenPGP public identities: "+OnKeyBundle.collect(entries,state().directory()).stream().filter(p->p.pgp().length>0).count();
         String explanation=migrate?"Move the existing ECDSA private key from 9a to empty 83, preserving its public key. Update all matching local mappings. No key generation. If interrupted, inspect/recover before retrying. Save the on-key bundle again afterward.":"Regenerate a signed bundle from the current saved S/MIME certificates, OpenPGP public identities and slot mappings, then back it up on this YubiKey. Anyone holding the key can read them. No passwords, OAuth credentials or trust settings are included. A full key can reject this write; the previous bank is retained.";
         JTextArea text=new JTextArea(explanation+"\n\n"+review,18,76);text.setEditable(false);text.setLineWrap(true);text.setWrapStyleWord(true);
@@ -998,7 +1073,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
     }catch(Exception e){error(e);}});}
 
     private void shareCertificates(){
-        try{var entries=state().certificateBundle(identity);JTextArea review=new JTextArea(CertificateBundle.review(entries),18,76);review.setEditable(false);review.setLineWrap(true);review.setWrapStyleWord(true);
+        try{requireSmimeIdentity("Share S/MIME certificate bundle");var entries=state().certificateBundle(identity);JTextArea review=new JTextArea(CertificateBundle.review(entries),18,76);review.setEditable(false);review.setLineWrap(true);review.setWrapStyleWord(true);
             Object[] options=System.getProperty("os.name").startsWith("Mac")?new Object[]{"Share…","Save bundle…","Cancel"}:new Object[]{"Save bundle…","Cancel"};
             int choice=JOptionPane.showOptionDialog(this,new JScrollPane(review),"Share public certificate profiles",JOptionPane.DEFAULT_OPTION,JOptionPane.PLAIN_MESSAGE,null,options,options[0]);if(choice<0||choice==options.length-1)return;
             byte[] bytes=CertificateBundle.encode(entries);
@@ -1016,8 +1091,12 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             }catch(Exception e){error(e);}
         });
     }
+    private void requireSmimeIdentity(String action)throws IOException{
+        if(identity!=null&&identity.level3Polyfill())throw new IOException(action+" is unavailable for an OpenPGP-only companion. Export the public key from OpenPGP → Export my OpenPGP public key. The encrypted companion is backed up separately on the YubiKey.");
+    }
     private void export(boolean signing) {
         if(identity==null){error(new IOException("Load an identity first"));return;}
+        try{requireSmimeIdentity("Export S/MIME certificate");}catch(IOException e){error(e);return;}
         X509Certificate c=signing?identity.signingCert():identity.encryptionCert();if(c==null){error(new IOException("No certificate available"));return;}
         Path file=chooseSave("Export public certificate", signing?"signing-certificate.pem":"encryption-certificate.pem", "pem", "cer");if(file==null)return;
         job("Exporting certificate…",()->{Files.write(file,file.getFileName().toString().toLowerCase().endsWith(".pem")?DesktopState.pem(c):c.getEncoded(),StandardOpenOption.CREATE_NEW);return "Certificate exported";},status::setText);
@@ -1043,13 +1122,15 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             if(!Identity.matchesEmail(identity.signingCert(),from.getText().trim()))throw new IOException("From address does not match your signing certificate");
             if(!usePgp()&&encrypt.isSelected()&&!Identity.matchesEmail(recipient,to.getText().trim())){tabs.setSelectedIndex(4);throw new IOException("Choose an encryption certificate matching the To address, or turn off optional encryption to send signed-only mail");}
         }catch(Exception e){error(e);return;}
-        if(usePgp()&&(!Identity.HYBRID_65_P384_SIGN.equals(identity.signatureAlgorithm())||!attachmentModel.isEmpty())){error(new IOException("Outgoing OpenPGP requires a Level 3 hybrid signing identity and plain text. Use S/MIME for attachments."));return;}
+        if(!usePgp()&&identity.level3Polyfill()){error(new IOException("This identity supports OpenPGP only. Choose OpenPGP or select an S/MIME identity."));return;}
+        if(usePgp()&&(!OpenPgp.supported(identity)||!attachmentModel.isEmpty())){error(new IOException("Select a supported OpenPGP identity. Attachments in this Compose view currently require an S/MIME identity."));return;}
         if(usePgp())refreshPgpChoices();
         if(usePgp()&&encrypt.isSelected()&&(pgpRecipient==null||!pgpRecipient.matchesEmail(to.getText().trim())||!pgpRecipient.canEncrypt())){error(new IOException("Wait for a matching, usable recipient key in Compose, or import it from the OpenPGP tab."));tabs.setSelectedIndex(5);return;}
         if(encrypt.isSelected()&&(usePgp()?!pgpRecipient.quantumEncryption():!CryptoWarnings.pq(recipient.getPublicKey(),false))){
             String algorithm=usePgp()?pgpRecipient.encryptionDescription():recipient.getPublicKey().getAlgorithm();
             if(JOptionPane.showOptionDialog(this,CryptoWarnings.encryption(algorithm),"Non-PQ encryption",JOptionPane.DEFAULT_OPTION,JOptionPane.WARNING_MESSAGE,null,new Object[]{"Cancel","Encrypt anyway"},"Cancel")!=1)return;
         }
+        if(usePgp()&&identity.level3Polyfill()&&pgpRecipient!=null&&pgpRecipient.version()==4){error(new IOException("This Level 3 software-PQ identity has a v6 hybrid certificate only. Select a recipient's v6 certificate or a separate identity with v4 compatibility certificates."));return;}
         if(usePgp()&&pgpRecipient!=null&&pgpRecipient.version()==4&&JOptionPane.showConfirmDialog(this,"This recipient has a v4 certificate. Use classical compatibility signing (P-521 for Level 5 software; P-384 for Level 5 YubiKey; Ed25519 for Level 3)?\nYour v4 and v6 public certificates will be attached, including a classical-only v4 copy for migrated identities.\nThese compatibility signatures are not post-quantum resistant.","v4 compatibility signing",JOptionPane.OK_CANCEL_OPTION,JOptionPane.WARNING_MESSAGE)!=JOptionPane.OK_OPTION)return;
         final boolean pgp=usePgp(),pgpEncrypt=encrypt.isSelected();final OpenPgp.PublicIdentity pgpTo=pgpRecipient;
         Path file=send?null:chooseSave("Save signed message", "message.eml", "eml");if(!send&&file==null)return;
@@ -1062,7 +1143,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
         if(send&&JOptionPane.showConfirmDialog(this,"Send this "+((pgp?pgpEncrypt:r!=null)?"signed and encrypted":"signed, unencrypted")+" message with "+files.size()+" attachment(s) to "+t+"?","Send message",JOptionPane.OK_CANCEL_OPTION)!=JOptionPane.OK_OPTION){Arrays.fill(a.password,'\0');return;}
         job(send?"Signing and sending…":"Signing and saving…",()->{
             try {
-                MimeMessage m=pgp?MailEngine.parse(OpenPgp.composeForRecipient(id,OpenPgp.loadOwn(state().directory(),id),pgpTo,pgpEncrypt,f,t,s,b,html,CompanionDesktop.selected(state().directory(),id)?companionOperation(id):backend)):MailEngine.composeFormatted(id,f,t,s,b,html,r,backend,files);
+                MimeMessage m=pgp?MailEngine.parse(OpenPgp.composeForRecipient(id,OpenPgp.loadOwn(state().directory(),id),pgpTo,pgpEncrypt,f,t,s,b,html,companionSelected(id)?companionSigning(id):backend)):MailEngine.composeFormatted(id,f,t,s,b,html,r,backend,files);
                 if(send){if(a.host.equals("graph.microsoft.com")){try(var api=new MicrosoftGraph(this::microsoftCredential)){api.verifyAccount(a.user);api.send(m);}}else if(a.oauth){try(var api=new GmailApi(this::googleCredential)){api.verifyAccount(a.user);api.send(m);}}else MailEngine.send(m,a.host,a.port,a.user,new String(a.password),false);}
                 else Files.write(file,MailEngine.encode(m),StandardOpenOption.CREATE_NEW);
                 return send?"Message sent":"Saved "+file.getFileName();
@@ -1085,7 +1166,7 @@ google.add(button("Test "+credentialStore()+"",()->job("Testing "+credentialStor
             // Decryption is performed once; selecting among saved signer certificates must not repeat a PIN operation.
             if(encrypted&&candidates.size()>1)throw new IOException("Multiple OpenPGP signer certificates match From. Select the sender under Certificates before decrypting.");
             Exception failure=null;
-            for(var signer:candidates)try{var opened=OpenPgp.open(encoded,signer,own,id,CompanionDesktop.selected(state().directory(),id)?companionOperation(id):kemAdapter==null?null:ExternalKem.executable(kemAdapter));opened=new OpenPgp.Opened(opened.text(),opened.email(),opened.fingerprint(),opened.encrypted(),signer.matchesEmail(mailbox),opened.profile(),opened.postQuantum(),opened.html());return new ReadResult(opened.display(),null,message.getSubject(),opened,signer.matchesEmail(mailbox)?mailbox:null,signer);}catch(Exception e){failure=e;}
+            for(var signer:candidates)try{var opened=OpenPgp.open(encoded,signer,own,id,companionSelected(id)?companionDecryption(id):kemAdapter==null?null:ExternalKem.executable(kemAdapter));opened=new OpenPgp.Opened(opened.text(),opened.email(),opened.fingerprint(),opened.encrypted(),signer.matchesEmail(mailbox),opened.profile(),opened.postQuantum(),opened.html());return new ReadResult(opened.display(),null,message.getSubject(),opened,signer.matchesEmail(mailbox)?mailbox:null,signer);}catch(Exception e){failure=e;}
             throw failure==null?new IOException("No matching OpenPGP signer certificate"):failure;
         }
         message=MailEngine.normalizeSmime(message);

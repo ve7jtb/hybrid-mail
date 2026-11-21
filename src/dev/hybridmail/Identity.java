@@ -33,6 +33,18 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
     public static final String HYBRID_1024_KEM = "MLKEM1024-ECDH-P384-SHA3-256";
     public static final String PURE_KEM = "ML-KEM-768";
     public static final String HYBRID_KEM = "MLKEM768-ECDH-P256-SHA3-256";
+    /** These signed public carriers index an OpenPGP-only companion. They never
+     * authorize pure S/MIME operations with the software PQ components. */
+    static final String POLYFILL_URI="https://github.com/ve7jtb/pq-mail/profile/level3-polyfill/v1/";
+    static String polyfillFingerprint(X509Certificate certificate){
+        try{String found=null;var names=certificate.getSubjectAlternativeNames();if(names!=null)for(var name:names){
+            if(Integer.valueOf(6).equals(name.get(0))&&name.get(1).toString().startsWith(POLYFILL_URI)){
+                String value=name.get(1).toString().substring(POLYFILL_URI.length());
+                if(found!=null||!value.matches("[a-f0-9]{64}"))return null;found=value;
+            }
+        }return found;}catch(Exception e){return null;}
+    }
+    public boolean level3Polyfill(){return signingCert!=null&&encryptionCert!=null&&polyfillFingerprint(signingCert)!=null&&Objects.equals(polyfillFingerprint(signingCert),polyfillFingerprint(encryptionCert));}
     public String signatureAlgorithm() {
         PublicKey key=signingCert.getPublicKey();
         if(key instanceof java.security.interfaces.RSAPublicKey)return "SHA256withRSA";
@@ -152,6 +164,7 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         return new Identity(sc,null,kc,null,null);
     }
     public ContentSigner signer(ExternalMu.Backend backend) throws Exception {
+        if(level3Polyfill())throw new GeneralSecurityException("This software-PQ companion is OpenPGP-only; select an S/MIME identity");
         signingCert.checkValidity();
         if (backend == null) {
             if (signingKey == null) throw new GeneralSecurityException("No software signing key; configure external adapter");
@@ -267,6 +280,7 @@ public record Identity(X509Certificate signingCert, PrivateKey signingKey,
         ExternalKem.validatePublicKey(key);
     }
     public static void validateCertificatePurpose(X509Certificate certificate,String role)throws Exception{
+        if(polyfillFingerprint(certificate)!=null)throw new GeneralSecurityException("OpenPGP companion metadata is not an S/MIME credential");
         certificate.checkValidity();boolean[] usage=certificate.getKeyUsage();
         int bit=role.equals("signing")?0:certificate.getPublicKey() instanceof java.security.interfaces.ECPublicKey?4:2;
         if(usage!=null&&(usage.length<=bit||!usage[bit]))throw new GeneralSecurityException("Certificate does not permit "+role);

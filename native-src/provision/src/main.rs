@@ -10,6 +10,10 @@ fn touch_policy(slot:Slot)->TouchPolicy {
  match slot {Slot::Signature|Slot::KeyManagement|Slot::Retired3|Slot::Retired5=>TouchPolicy::Always,_=>TouchPolicy::Never}
 }
 fn key_touch_policy(slot:Slot,_algorithm:KeyType)->TouchPolicy {
+ // The reverse-polyfill certification key is Ed25519 in 82. Its separate
+ // P-384 wrapping key in 83 deliberately remains PIN-protected/no-touch.
+ // Existing profiles use P-384 in 82, so their policies are unchanged.
+ if slot==Slot::Retired1 && _algorithm==KeyType::Ed25519 {return TouchPolicy::Always;}
  // Slots 88/89 perform standalone classical operations for both Level 3 and Level 5.
  if slot==Slot::Retired3 && _algorithm==KeyType::Ed25519 {return TouchPolicy::Never;}
  if matches!(slot,Slot::Retired7|Slot::Retired8) {TouchPolicy::Always}else{touch_policy(slot)}
@@ -49,6 +53,14 @@ fn require_empty(card:&mut impl Card)->Result<()> {
  Ok(())
 }
 fn plan(profile:&str)->Result<Vec<(Slot,KeyType)>> {
+ // This is a distinct classical-card layout, not a weakened PQ-token profile.
+ // Software PQ keys never pass through this provisioning helper.
+ if profile=="level3-polyfill" {return Ok(vec![
+  (Slot::Retired1,KeyType::Ed25519),
+  (Slot::Signature,KeyType::Ed25519),
+  (Slot::KeyManagement,KeyType::X25519),
+  (Slot::Retired2,KeyType::EccP384),
+ ]);}
  let (ml,kem,ec)=match profile {
   "level2"=>(KeyType::MlDsa44,KeyType::MlKem768,KeyType::EccP256),
   "level3"|"level3-openpgp"=>(KeyType::MlDsa65,KeyType::MlKem768,KeyType::EccP384),
@@ -83,7 +95,23 @@ fn resume_generation(card:&mut impl Card,profile:&str,saved:&std::collections::H
 fn save_public(folder:&Path,slot:Slot,der:&[u8])->Result<()> {
  let path=folder.join(format!("{:02x}-public.der",slot as u8));
  let mut f=fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|_|"Cannot create public-key journal entry; stopped")?;
- f.write_all(der).and_then(|_|f.sync_all()).map_err(|_|"Cannot save public key; inspect partial provisioning".into())
+ f.write_all(der).and_then(|_|f.sync_all()).map_err(|_|"Cannot save public key; inspect partial provisioning")?;
+ // A durable file without a durable directory entry is not a recovery journal.
+ // Unix requires the directory entry to be flushed separately. Existing
+ // Windows provisioning keeps its file sync_all path; Windows support for the
+ // new polyfill profile is gated below until directory durability is tested.
+ #[cfg(unix)] {sync_directory(folder)?;}
+ Ok(())
+}
+fn sync_directory(folder:&Path)->Result<()> {
+ fs::File::open(folder).and_then(|f|f.sync_all()).map_err(|_|"Cannot make provisioning journal durable; inspect partial provisioning".into())
+}
+fn require_firmware(version:yubikit::core::Version,profile:&str)->Result<()> {
+ // Only the explicit reverse-polyfill and bounded object transport work on
+ // classical cards. All pre-existing on-device PQ profiles still require 6.x.
+ let classical=profile=="level3-polyfill"||profile=="objects";
+ let supported=if classical{version>=yubikit::core::Version(5,7,0)}else{version.0>=6};
+ if supported {Ok(())}else{Err(if classical{"YubiKey firmware 5.7 or later is required"}else{"PQC YubiKey firmware 6 or later is required"}.into())}
 }
 // Read the actual beta version before opening PIV, as ykman does. The
 // override only applies to the development placeholder, and is reset per reader.
@@ -99,7 +127,7 @@ fn open_piv(conn:PcscSmartCardConnection)->Result<PivSession<PcscSmartCardConnec
 }
 fn main_inner()->Result<()> {
  let args:Vec<String>=env::args().collect();
- if args.len()==2&&args[1]=="detect" {
+ if args.len()==2&&["detect","detect-polyfill"].contains(&args[1].as_str()) {
   let mut found=None;
   for reader in list_readers().map_err(|_|"Cannot enumerate smart card readers")? {
    let conn=PcscSmartCardConnection::new(&reader,true).map_err(|_|"Cannot access an inserted smart card; close other token applications and insert only the intended YubiKey")?;
@@ -109,12 +137,12 @@ fn main_inner()->Result<()> {
    found=Some((serial,piv));
   }
   let (serial,mut card)=found.ok_or("No accessible YubiKey detected; insert the key to provision")?;
-  if card.version().0<6{return Err("PQC YubiKey firmware 6 or later is required".into());}
+  require_firmware(card.version(),if args[1]=="detect-polyfill"{"level3-polyfill"}else{"level5"})?;
   require_empty(&mut card)?;
   println!("{serial}");return Ok(());
  }
- if args.len()!=3&&args.len()!=5{return Err("Expected check SERIAL or create SERIAL pure|hybrid OUTPUT".into());}
- let object=args[1]=="objects";let resume=args[1]=="resume";let create=args[1]=="create"||resume;let read=args[1]=="read";if !object&&!create&&!read&&args[1]!="check"{return Err("Invalid operation".into());}
+ if args.len()!=3&&args.len()!=5{return Err("Expected check/check-polyfill SERIAL or create SERIAL PROFILE OUTPUT".into());}
+ let object=args[1]=="objects";let resume=args[1]=="resume";let create=args[1]=="create"||resume;let read=args[1]=="read";if !object&&!create&&!read&&!["check","check-polyfill"].contains(&args[1].as_str()){return Err("Invalid operation".into());}
  let serial:u32=args[2].parse().map_err(|_|"Invalid device serial")?;
  let mut found=None;
  for reader in list_readers().map_err(|_|"Cannot enumerate smart card readers")? {
@@ -123,18 +151,23 @@ fn main_inner()->Result<()> {
   if serial==0||piv.get_serial().ok()==Some(serial){if found.is_some(){return Err("Insert only one YubiKey".into());}found=Some(piv);if serial!=0{break;}}
  }
  let mut card=found.ok_or("Required YubiKey not found or busy; connect the specified serial and close other token applications")?;
- if card.version().0<6{return Err("PQC YubiKey firmware 6 or later is required".into());}
+ let profile=if object{"objects"}else if args[1]=="check-polyfill"{"level3-polyfill"}else if (create||read)&&args.len()==5{args[3].as_str()}else{"level5"};
+ require_firmware(card.version(),profile)?;
+ if profile=="level3-polyfill"&&serial==0{return Err("Level 3 polyfill requires the explicit intended serial".into());}
+ // Other platforms can restore/use the profile. Creating it on Windows needs
+ // a verified directory-journal implementation, not a best-effort claim.
+ #[cfg(windows)] if create&&profile=="level3-polyfill" {return Err("Level 3 polyfill provisioning requires a host with durable directory journals".into());}
  if object {return objects(&mut card);}
  if read {
-  if args.len()!=5||!["pure","hybrid","level2","level3","level3-openpgp","level5"].contains(&args[3].as_str()){return Err("Invalid read profile".into());}
+  if args.len()!=5||!["pure","hybrid","level2","level3","level3-openpgp","level3-polyfill","level5"].contains(&args[3].as_str()){return Err("Invalid read profile".into());}
   let mut slots=vec![Slot::Signature,Slot::KeyManagement];if args[3]!="pure"{slots.extend([if Path::new(&args[4]).join("83-public.der").exists(){Slot::Retired2}else{Slot::Authentication},Slot::Retired1]);}
   if args[3]=="level5"{slots.extend([Slot::Retired3,Slot::Retired4,Slot::Retired7,Slot::Retired8]);}
-  if args[3]=="level3-openpgp"{slots=plan(&args[3])?.iter().map(|(s,_)|*s).collect();}
+  if args[3]=="level3-openpgp"||args[3]=="level3-polyfill"{slots=plan(&args[3])?.iter().map(|(s,_)|*s).collect();}
   let mut public=serde_json::Map::new();
   for slot in slots{let m=card.get_slot_metadata(slot).map_err(|_|"Cannot read pending key metadata")?;let der=m.public_key.to_spki().map_err(|_|"Cannot encode public key")?;
    let name=format!("{:02x}",slot as u8);let expected=fs::read(Path::new(&args[4]).join(format!("{name}-public.der"))).map_err(|_|"Missing saved public key")?;
    if der!=expected||!m.generated{return Err("Pending setup does not match this YubiKey's generated keys".into());}
-   if Path::new(&args[4]).join("provisioning.json").exists(){let alg=plan(&args[3])?.into_iter().find(|(s,_)|*s==slot).ok_or("Unexpected setup slot")?.1;if !card.verify(slot,alg,&der)?{return Err("Pending key algorithm or policy differs".into());}}public.insert(name,serde_json::Value::String(STANDARD.encode(der)));
+   if args[3]=="level3-polyfill"||Path::new(&args[4]).join("provisioning.json").exists(){let alg=plan(&args[3])?.into_iter().find(|(s,_)|*s==slot).ok_or("Unexpected setup slot")?.1;if !card.verify(slot,alg,&der)?{return Err("Pending key algorithm or policy differs".into());}}public.insert(name,serde_json::Value::String(STANDARD.encode(der)));
   }println!("{}",serde_json::Value::Object(public));return Ok(());
  }
  if !create {require_empty(&mut card)?;println!("EMPTY");return Ok(());}
@@ -150,6 +183,10 @@ fn main_inner()->Result<()> {
   require_empty(&mut card)?;fs::create_dir(folder).map_err(|_|"Choose a new public setup directory")?;
   let mut f=fs::OpenOptions::new().write(true).create_new(true).open(folder.join("provisioning.json")).map_err(|_|"Cannot create setup journal")?;
   f.write_all(journal.to_string().as_bytes()).and_then(|_|f.sync_all()).map_err(|_|"Cannot persist setup journal")?;
+  #[cfg(unix)] {
+   sync_directory(folder)?;
+   if let Some(parent)=folder.parent(){sync_directory(parent)?;}
+  }
  }
  // Read provisioning credentials only after the empty check, never from args/env.
  let mut input=Zeroizing::new(String::new());io::stdin().take(2049).read_to_string(&mut input).map_err(|_|"Cannot read credentials")?;
@@ -189,12 +226,15 @@ fn objects(card:&mut PivSession<PcscSmartCardConnection>)->Result<()> {
     let meta=card.get_management_key_metadata().map_err(|_|"Cannot read management key metadata")?;
     card.authenticate(&ManagementKey::new(meta.key_type,&raw).map_err(|_|"Management key length mismatch")?).map_err(|_|"Management authentication failed; no retry")?;return Ok(serde_json::Value::Null);}
    if op=="certification-empty"{
+    require_firmware(card.version(),"level3-openpgp")?;
     if !card.empty(Slot::Retired5)?||!card.empty(Slot::Retired6)?||!card.empty(Slot::Retired7)?||!card.empty(Slot::Retired8)?{return Err("Migration slots 86-89 contain a key or certificate; generation refused".into());}
     return Ok(serde_json::Value::Null);}
    if op=="certification-generate"{
+    require_firmware(card.version(),"level3-openpgp")?;
     if !card.empty(Slot::Retired5)?||!card.empty(Slot::Retired6)?||!card.empty(Slot::Retired7)?||!card.empty(Slot::Retired8)?{return Err("Migration slots 86-89 must both be empty; no keys changed".into());}
     let generated=generate_certification(card)?;let mut out=serde_json::Map::new();for (slot,der) in generated{out.insert(slot,serde_json::json!(STANDARD.encode(der)));}return Ok(serde_json::Value::Object(out));}
    if op=="move"{
+    require_firmware(card.version(),"level3-openpgp")?;
     if !card.empty(Slot::Retired2)?{return Err("Slot 83 key or certificate is occupied; migration refused".into());}
     let before=card.get_slot_metadata(Slot::Authentication).map_err(|_|"Missing 9a key")?;
     if ![KeyType::EccP256,KeyType::EccP384].contains(&before.key_type){return Err("Migration supports only ECDSA P-256/P-384".into());}
@@ -252,6 +292,32 @@ fn main(){if let Err(error)=main_inner(){eprintln!("{error}");std::process::exit
    if !der.is_empty(){saved.insert(slot,der);}
    assert!(resume_generation(&mut f,"level3-openpgp",&saved,|_,_|Ok(())).is_err());assert!(f.generated.is_empty());
   }
+ }
+ #[test]fn polyfill_has_separate_roles_and_explicit_policies(){
+  let p=plan("level3-polyfill").unwrap();
+  assert_eq!(p,vec![(Slot::Retired1,KeyType::Ed25519),(Slot::Signature,KeyType::Ed25519),(Slot::KeyManagement,KeyType::X25519),(Slot::Retired2,KeyType::EccP384)]);
+  for (slot,alg) in p {assert_eq!(key_touch_policy(slot,alg),if slot==Slot::Retired2{TouchPolicy::Never}else{TouchPolicy::Always});}
+  // Scope the extra presence rule to the new Ed25519 key, preserving 82's
+  // existing P-384 no-touch behavior in every hardware-PQ profile.
+  assert_eq!(key_touch_policy(Slot::Retired1,KeyType::EccP384),TouchPolicy::Never);
+ }
+ #[test]fn polyfill_empty_check_covers_every_ordinary_slot(){
+  for slot in Slot::key_slots(){let mut card=Fake{occupied:HashSet::from([slot as u8]),generated:vec![],algorithms:vec![],fail:false};assert!(generate(&mut card,"level3-polyfill",|_,_|Ok(())).is_err());assert!(card.generated.is_empty());}
+ }
+ #[test]fn polyfill_partial_provisioning_resumes_only_recorded_keys(){
+  let mut card=Fake{occupied:HashSet::new(),generated:vec![],algorithms:vec![],fail:false};let mut saved=std::collections::HashMap::new();
+  assert!(generate(&mut card,"level3-polyfill",|slot,der|{saved.insert(slot as u8,der);if saved.len()==2{Err("simulated interruption".into())}else{Ok(())}}).is_err());
+  assert_eq!(card.generated,vec![0x82,0x9c]);
+  let mut completed=saved.clone();resume_generation(&mut card,"level3-polyfill",&saved,|slot,der|{completed.insert(slot as u8,der);Ok(())}).unwrap();
+  assert_eq!(card.generated,vec![0x82,0x9c,0x9d,0x83]);
+  resume_generation(&mut card,"level3-polyfill",&completed,|_,_|panic!("Generated after complete journal")).unwrap();
+  completed.insert(0x82,vec![2]);assert!(resume_generation(&mut card,"level3-polyfill",&completed,|_,_|Ok(())).is_err());
+  assert_eq!(card.generated.len(),4);
+ }
+ #[test]fn classical_firmware_is_scoped_to_polyfill_and_objects(){
+  use yubikit::core::Version;
+  for profile in ["level3-polyfill","objects"]{assert!(require_firmware(Version(5,8,0),profile).is_ok());assert!(require_firmware(Version(5,7,0),profile).is_ok());assert!(require_firmware(Version(5,6,0),profile).is_err());}
+  for profile in ["pure","hybrid","level2","level3","level3-openpgp","level5"]{assert!(require_firmware(Version(5,8,0),profile).is_err());assert!(require_firmware(Version(6,0,0),profile).is_ok());}
  }
 
 }

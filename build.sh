@@ -58,7 +58,7 @@ if [[ "${1:-}" == test ]]; then
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.FormattedComposeTest
   java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' dev.hybridmail.Level5CompatibilityTest
   # Companion tests use synthetic keys and fake storage, never a physical card.
-  for companion_test in Level5CompanionTest CompanionEncodingTest CompanionCompactTest UltraCertificateTest CompanionUltraStorageTest CompanionDesktopTest; do
+  for companion_test in Level5CompanionTest CompanionEncodingTest CompanionCompactTest UltraCertificateTest CompanionUltraStorageTest CompanionDesktopTest Level3CompanionTest TokenPolyfillProvisionTest Level3PolyfillDesktopTest Level3ManagementTest; do
     java -Djava.awt.headless=true -cp 'build/hybrid-mail.jar:lib/*' "dev.hybridmail.$companion_test"
   done
   python3 -m unittest discover -s tests -v

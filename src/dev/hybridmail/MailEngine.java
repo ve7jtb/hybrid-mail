@@ -64,6 +64,7 @@ public final class MailEngine {
     }
     public static MimeMessage composeAttachments(Identity id,String from,String to,String subject,String text,
             X509Certificate recipient,ExternalMu.Backend external,List<Attachment> files,String html)throws Exception {
+        if(id.level3Polyfill())throw new GeneralSecurityException("This companion is OpenPGP-only; select an S/MIME identity");
         InternetAddress sender = new InternetAddress(from, true); sender.validate();
         InternetAddress receiver = new InternetAddress(to, true); receiver.validate();
         if (!Identity.matchesEmail(id.signingCert(), sender.getAddress())) throw new GeneralSecurityException("From address does not match signing certificate");

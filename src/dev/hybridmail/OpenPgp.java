@@ -103,7 +103,7 @@ public final class OpenPgp {
     }
     static byte[] keyBody(Keys k,boolean signing,long created){byte[] material=k.pq==null?cat(P384_OID,mpi(raw(k.ec)),signing?b():b(3,1,9,8)):cat(raw(k.ec),raw(k.pq));return cat(b(6),n(created,4),b(algorithm(k,signing)),n(material.length,4),material);}
     public static boolean classical(Identity id){return id!=null&&Identity.HYBRID_87_SIGN.equals(id.signatureAlgorithm())&&id.encryptionCert()!=null&&Identity.HYBRID_1024_KEM.equals(id.encryptionCert().getPublicKey().getAlgorithm());}
-    public static boolean supported(Identity id){return id!=null&&id.softwareOpenPgp()!=null||classical(id)||(id!=null&&Identity.HYBRID_65_P384_SIGN.equals(id.signatureAlgorithm())&&id.encryptionCert()!=null&&Identity.HYBRID_768_P384_KEM.equals(id.encryptionCert().getPublicKey().getAlgorithm()));}
+    public static boolean supported(Identity id){return id!=null&&(id.softwareOpenPgp()!=null||id.level3Polyfill())||classical(id)||(id!=null&&Identity.HYBRID_65_P384_SIGN.equals(id.signatureAlgorithm())&&id.encryptionCert()!=null&&Identity.HYBRID_768_P384_KEM.equals(id.encryptionCert().getPublicKey().getAlgorithm()));}
     static Keys identityKeys(Identity id,boolean signing)throws Exception{Keys k=keys((signing?id.signingCert():id.encryptionCert()).getPublicKey());return classical(id)?new Keys(null,k.ec):k;}
     static String profile(Keys keys){return modern(keys)&&raw(keys.ec).length==57?"OpenPGP RFC 9980 Level 5 · ML-DSA-87 + Ed448 / ML-KEM-1024 + X448":modern(keys)?"OpenPGP RFC 9980 · ML-DSA-65 + Ed25519 / ML-KEM-768 + X25519":keys.pq==null?"OpenPGP classical P-384 (not post-quantum)":"OpenPGP Level 3 hybrid — experimental NIST/Brainpool draft-05";}
     static Keys keys(PublicKey key)throws Exception{check(key instanceof CompositePublicKey,"Composite key required");var list=((CompositePublicKey)key).getPublicKeys();check(list.size()==2,"Invalid composite key");return new Keys(list.get(0),list.get(1));}
@@ -264,12 +264,14 @@ public final class OpenPgp {
     }
     static void match(PublicIdentity pgp,Identity id)throws Exception{
         if(id.softwareOpenPgp()!=null){id.softwareOpenPgp().match(pgp);return;}
+        if(id.level3Polyfill()){check(pgp.legacy==null&&pgp.separated()&&algorithm(pgp.signing,true)==30&&algorithm(pgp.encryption,false)==35&&pgp.fingerprint().equalsIgnoreCase(Identity.polyfillFingerprint(id.signingCert()))&&pgp.matchesEmail(email(id)),"Polyfill certificate identity mismatch");Level5Companion.same(pgp.signing.pq(),id.signingCert().getPublicKey());Level5Companion.same(pgp.encryption.pq(),id.encryptionCert().getPublicKey());return;}
         check(pgp.legacy==null,"A v4 certificate is for recipients and incoming verification only");check(supported(id),"Select a Level 3 or Level 5 hybrid identity");Keys s=identityKeys(id,true),e=identityKeys(id,false);
         if(rfc9980(pgp)){s=keys(id.signingCert().getPublicKey());e=keys(id.encryptionCert().getPublicKey());check((Identity.HYBRID_65_P384_SIGN.equals(id.signatureAlgorithm())||Identity.HYBRID_87_SIGN.equals(id.signatureAlgorithm()))&&pgp.email.equals(email(id))&&Arrays.equals(raw(s.pq),raw(pgp.signing.pq))&&Arrays.equals(raw(e.pq),raw(pgp.encryption.pq)),"RFC 9980 identity does not match selected PQ keys/email");return;}
         check(pgp.email.equals(email(id))&&Arrays.equals(s.pq==null?null:raw(s.pq),pgp.signing.pq==null?null:raw(pgp.signing.pq))&&Arrays.equals(raw(s.ec),raw(pgp.signing.ec))&&Arrays.equals(e.pq==null?null:raw(e.pq),pgp.encryption.pq==null?null:raw(pgp.encryption.pq))&&Arrays.equals(raw(e.ec),raw(pgp.encryption.ec)),"OpenPGP identity does not match selected keys/email");
     }
     static Path ownPath(Path root,Identity id)throws Exception{check(supported(id),"OpenPGP supports Level 3 hybrid or Level 5 classical P-384");return root.resolve("openpgp").resolve(hex(hash("SHA-256",cat(id.signingCert().getEncoded(),id.encryptionCert().getEncoded())))+".asc");}
     public static PublicIdentity loadOwn(Path root,Identity id)throws Exception{
+        if(id.level3Polyfill())return Level3PolyfillDesktop.own(root,id);
         if(id.softwareOpenPgp()!=null)return id.softwareOpenPgp().own();Path p=ownPath(root,id);PublicIdentity own;
         // A fresh on-key companion restore has its own validated public cache;
         // it must not depend on an unrelated older NIST .asc file being present.
@@ -278,7 +280,7 @@ public final class OpenPgp {
         match(own,id);Path compat=p.resolveSibling(p.getFileName()+".v4");if(Files.exists(compat)){own.compatibility=new PublicIdentity(Files.readAllBytes(compat));checkCompatibility(own,own.compatibility);}return own;
     }
     public static PublicIdentity saveOwn(Path root,Identity id,byte[] input)throws Exception{PublicIdentity own=new PublicIdentity(input);match(own,id);Path p=ownPath(root,id);if(Files.exists(p)){var previous=loadOwn(root,id);check(Arrays.equals(fingerprint(previous.primary),fingerprint(own.signingBody()))&&Arrays.equals(fingerprint(previous.subkey),fingerprint(own.subkey)),"A different OpenPGP identity is already saved");}Files.createDirectories(p.getParent());Path tmp=Files.createTempFile(p.getParent(),"pgp-",".tmp");try{Files.write(tmp,own.export());Files.move(tmp,p,StandardCopyOption.REPLACE_EXISTING);}finally{Files.deleteIfExists(tmp);}return own;}
-    public static PublicIdentity createOwn(Path root,Identity id,ExternalMu.Backend backend)throws Exception{if(id.softwareOpenPgp()!=null)return id.softwareOpenPgp().own();Path p=ownPath(root,id);return Files.exists(p)?loadOwn(root,id):saveOwn(root,id,create(id,backend).export());}
+    public static PublicIdentity createOwn(Path root,Identity id,ExternalMu.Backend backend)throws Exception{if(id.level3Polyfill())return loadOwn(root,id);if(id.softwareOpenPgp()!=null)return id.softwareOpenPgp().own();Path p=ownPath(root,id);return Files.exists(p)?loadOwn(root,id):saveOwn(root,id,create(id,backend).export());}
     public static PublicIdentity replaceOwn(Path root,Identity id,PublicIdentity own)throws Exception{
         match(own,id);Path p=ownPath(root,id);Files.createDirectories(p.getParent());
         if(Files.exists(p)){var previous=loadOwn(root,id);Path backup=p.resolveSibling(p.getFileName()+"."+previous.fingerprint()+".backup");if(!Files.exists(backup))Files.copy(p,backup);}
@@ -440,6 +442,7 @@ public final class OpenPgp {
         if(id.softwareOpenPgp()!=null)return id.softwareOpenPgp().compose(own,selected,encrypted,from,to,subject,text,html);
         check(!encrypted||selected!=null,"Select a recipient certificate before encrypting");validateEmail(to);validateEmail(from);check(subject.length()<=500&&!subject.contains("\r")&&!subject.contains("\n"),"Invalid subject");
         if(selected==null||selected.version()!=4)return compose(id,own,encrypted?selected:null,from,to,subject,text,html,backend);
+        check(!id.level3Polyfill(),"This Level 3 polyfill has no separate v4 compatibility keys; select a v6 recipient or another identity");
         match(own,id);check(selected.matchesEmail(to),"Recipient address mismatch");check(own.email.equalsIgnoreCase(from),"Sender address mismatch");
         if(classical(id))return Level5Compatibility.compose(id,own,selected,encrypted,from,to,subject,text,html,backend);
         check(rfc9980(own)&&backend!=null,"Ed25519 compatibility signing requires your RFC 9980 YubiKey identity (Ed25519 slot 84). Select that identity before sending to a v4 recipient.");

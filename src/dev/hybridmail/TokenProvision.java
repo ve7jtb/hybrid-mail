@@ -7,11 +7,28 @@ import java.util.concurrent.*;
 import java.security.*;
 import java.security.spec.X509EncodedKeySpec;
 import com.google.gson.*;
+import com.google.gson.stream.*;
+import org.bouncycastle.asn1.*;
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 /** Native helper owns one exclusive PIV connection for empty check and generation. */
 final class TokenProvision {
-    static Path helper(){Path p=DesktopState.resources().resolve(DesktopState.windows()?"native/bin/hybrid-mail-provision.exe":"native/bin/hybrid-mail-provision");return Files.isExecutable(p)?p:DesktopState.resources().resolve("native-src/provision/target/release/hybrid-mail-provision");}
+    static Path helper(){
+        // An explicit local test helper avoids replacing the installed app just
+        // to exercise a new provisioning profile. It is never read from a card.
+        String override=System.getProperty("pqmail.provision.helper");
+        if(override!=null){Path p=Path.of(override);if(!p.isAbsolute()||!Files.isRegularFile(p)||!Files.isExecutable(p))throw new IllegalArgumentException("Provisioning helper must be an absolute executable file");return p;}
+        Path p=DesktopState.resources().resolve(DesktopState.windows()?"native/bin/hybrid-mail-provision.exe":"native/bin/hybrid-mail-provision");return Files.isExecutable(p)?p:DesktopState.resources().resolve("native-src/provision/target/release/hybrid-mail-provision");
+    }
     static String run(String serial,String operation,String profile,Path folder,char[] pin,char[] management)throws Exception{
-        if(!operation.equals("detect")&&!serial.matches("[0-9]+"))throw new IOException("Enter the intended YubiKey serial");
+        // Cover validation and process-start failures as well as normal exit:
+        // credentials supplied by a dialog must not survive any failed path.
+        try{return runProcess(serial,operation,profile,folder,pin,management);}
+        finally{if(pin!=null)Arrays.fill(pin,'\0');if(management!=null)Arrays.fill(management,'\0');}
+    }
+    private static String runProcess(String serial,String operation,String profile,Path folder,char[] pin,char[] management)throws Exception{
+        boolean detect=operation.equals("detect")||operation.equals("detect-polyfill");
+        if(!Set.of("detect","detect-polyfill","check","check-polyfill","create","resume","read").contains(operation))throw new IOException("Unknown provisioning operation");
+        if(!detect&&(serial==null||!serial.matches("[0-9]+")))throw new IOException("Enter the intended YubiKey serial");
         boolean create=operation.equals("create")||operation.equals("resume");
         if(create){
             boolean valid=pin!=null&&pin.length>=6&&pin.length<=8&&management!=null&&(management.length==32||management.length==48||management.length==64);
@@ -20,7 +37,7 @@ final class TokenProvision {
             if(!valid){if(pin!=null)Arrays.fill(pin,'\0');if(management!=null)Arrays.fill(management,'\0');throw new IOException("Use a 6–8 character ASCII YubiKey PIN and a valid hexadecimal management key");}
         }
         List<String> command=new ArrayList<>(List.of(helper().toString(),operation));
-        if(!operation.equals("detect"))command.add(serial);
+        if(!detect)command.add(serial);
         if(create||operation.equals("read"))command.addAll(List.of(profile,folder.toString()));
         Process process=new ProcessBuilder(command).start();var pool=Executors.newFixedThreadPool(2);
         try{
@@ -34,6 +51,69 @@ final class TokenProvision {
     static String detectEmpty()throws Exception{
         String serial=run("","detect","",null,null,null).trim();
         if(!serial.matches("[0-9]+"))throw new IOException("Cannot identify the inserted YubiKey");return serial;
+    }
+    // Reverse-polyfill creation is deliberately separate from TokenProfile:
+    // these four hardware keys are classical and contain no PQ private seeds.
+    static final String POLYFILL_PROFILE="level3-polyfill";
+    static final List<String> POLYFILL_SLOTS=List.of("82","9c","9d","83");
+    static String detectPolyfillEmpty()throws Exception{
+        String serial=run("","detect-polyfill","",null,null,null).trim();
+        requirePolyfillSerial(serial);return serial;
+    }
+    static void checkPolyfill(String serial)throws Exception{
+        requirePolyfillSerial(serial);
+        if(!run(serial,"check-polyfill",POLYFILL_PROFILE,null,null,null).trim().equals("EMPTY"))throw new IOException("Could not establish empty YubiKey state");
+    }
+    static Map<String,PublicKey> createPolyfill(String serial,Path folder,char[] pin,char[] management)throws Exception{
+        try{requirePolyfillSerial(serial);return decodePolyfill(run(serial,"create",POLYFILL_PROFILE,folder,pin,management));}
+        finally{if(pin!=null)Arrays.fill(pin,'\0');if(management!=null)Arrays.fill(management,'\0');}
+    }
+    static Map<String,PublicKey> resumePolyfill(String serial,Path folder,char[] pin,char[] management)throws Exception{
+        // Resume never silently creates a new journal. The native helper must
+        // match every already-created public key and policy before continuing.
+        try{requirePolyfillSerial(serial);return decodePolyfill(run(serial,"resume",POLYFILL_PROFILE,folder,pin,management));}
+        finally{if(pin!=null)Arrays.fill(pin,'\0');if(management!=null)Arrays.fill(management,'\0');}
+    }
+    static Map<String,PublicKey> readPolyfill(String serial,Path folder)throws Exception{
+        requirePolyfillSerial(serial);return decodePolyfill(run(serial,"read",POLYFILL_PROFILE,folder,null,null));
+    }
+    static boolean allPolyfillKeysSaved(Path folder){
+        if(!Files.isRegularFile(folder.resolve("provisioning.json")))return false;
+        for(String slot:POLYFILL_SLOTS)if(!Files.isRegularFile(folder.resolve(slot+"-public.der")))return false;
+        return true;
+    }
+    private static void requirePolyfillSerial(String serial)throws IOException{
+        try{if(serial==null||!serial.matches("[1-9][0-9]{0,9}")||Long.parseLong(serial)>0xffffffffL)throw new IOException("Specify the intended YubiKey serial for Level 3 polyfill");}
+        catch(NumberFormatException e){throw new IOException("Invalid YubiKey serial",e);}
+    }
+    static Map<String,PublicKey> decodePolyfill(String output)throws Exception{
+        if(output==null||output.length()>32768)throw new IOException("Invalid polyfill public-key output");
+        Map<String,PublicKey> keys=new LinkedHashMap<>();Set<String> encodings=new HashSet<>();
+        // Streaming parsing rejects duplicate JSON properties instead of letting
+        // a later value silently replace an earlier public-key assertion.
+        try(JsonReader json=new JsonReader(new StringReader(output))){
+            json.setStrictness(Strictness.STRICT);json.beginObject();
+            while(json.hasNext()){
+                String slot=json.nextName();
+                if(!POLYFILL_SLOTS.contains(slot)||keys.containsKey(slot)||json.peek()!=JsonToken.STRING)throw new IOException("Unexpected or duplicated polyfill slot");
+                String text=json.nextString();byte[] der=Base64.getDecoder().decode(text);
+                if(!Base64.getEncoder().encodeToString(der).equals(text)||!encodings.add(text))throw new IOException("Noncanonical or duplicated polyfill public key");
+                SubjectPublicKeyInfo spki=SubjectPublicKeyInfo.getInstance(ASN1Primitive.fromByteArray(der));
+                if(!Arrays.equals(der,spki.getEncoded("DER"))||spki.getPublicKeyData().getPadBits()!=0)throw new IOException("Invalid polyfill public-key encoding");
+                String algorithm;
+                if(slot.equals("83")){
+                    algorithm="EC";
+                    if(!spki.getAlgorithm().getAlgorithm().getId().equals("1.2.840.10045.2.1")||!(spki.getAlgorithm().getParameters() instanceof ASN1ObjectIdentifier curve)||!curve.getId().equals("1.3.132.0.34")||spki.getPublicKeyData().getOctets().length!=97||spki.getPublicKeyData().getOctets()[0]!=4)throw new IOException("Wrapping slot 83 must contain named-curve P-384");
+                }else{
+                    algorithm=slot.equals("9d")?"X25519":"Ed25519";
+                    String oid=slot.equals("9d")?"1.3.101.110":"1.3.101.112";
+                    if(!spki.getAlgorithm().getAlgorithm().getId().equals(oid)||spki.getAlgorithm().getParameters()!=null||spki.getPublicKeyData().getOctets().length!=32)throw new IOException("Wrong algorithm in polyfill slot "+slot);
+                }
+                keys.put(slot,KeyFactory.getInstance(algorithm,"BC").generatePublic(new X509EncodedKeySpec(der)));
+            }
+            json.endObject();if(json.peek()!=JsonToken.END_DOCUMENT||!keys.keySet().equals(Set.copyOf(POLYFILL_SLOTS)))throw new IOException("Incomplete polyfill public-key output");
+        }catch(IllegalArgumentException|IllegalStateException e){throw new IOException("Invalid polyfill public-key output",e);}
+        return Collections.unmodifiableMap(keys);
     }
     static void check(String serial)throws Exception{if(!run(serial,"check","level5",null,null,null).trim().equals("EMPTY"))throw new IOException("Could not establish empty YubiKey state");}
     static Map<String,PublicKey> create(String serial,TokenProfile profile,Path folder,char[] pin,char[] management)throws Exception{

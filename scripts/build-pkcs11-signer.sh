@@ -9,8 +9,9 @@ case "$(uname -s)" in
   *) echo 'Unsupported platform' >&2; exit 1 ;;
 esac
 mkdir -p build/native build/tests
-for source in native-src/pkcs11-sign.c tests/test_pkcs11_sign.c; do
+for source in native-src/pkcs11-sign.c tests/test_pkcs11_sign.c native-src/pkcs11-kem.c tests/test_pkcs11_kem.c; do
   if [[ "$source" == native-src/* ]]; then output="build/native/pqmail-pkcs11-sign$extension"; else output="build/tests/test-pkcs11-sign$extension"; fi
+  if [[ "$source" == *kem.c ]]; then output="${output/sign/kem}"; fi
   case "$platform" in
     mac) link=("$prefix/lib/libcrypto.3.dylib" '-Wl,-rpath,@executable_path/../lib') ;;
     linux) link=(-L "$prefix/lib" -lcrypto '-Wl,-rpath,$ORIGIN/../lib') ;;
@@ -23,4 +24,10 @@ case "$platform" in
   mac) OPENSSL_CONF=/dev/null DYLD_LIBRARY_PATH="$prefix/lib" build/tests/test-pkcs11-sign ;;
   linux) OPENSSL_CONF=/dev/null LD_LIBRARY_PATH="$prefix/lib" build/tests/test-pkcs11-sign ;;
   windows) OPENSSL_CONF=NUL PATH="$prefix/bin:$PATH" build/tests/test-pkcs11-sign.exe ;;
+esac
+
+case "$platform" in
+  mac) OPENSSL_CONF=/dev/null DYLD_LIBRARY_PATH="$prefix/lib" build/tests/test-pkcs11-kem ;;
+  linux) OPENSSL_CONF=/dev/null LD_LIBRARY_PATH="$prefix/lib" build/tests/test-pkcs11-kem ;;
+  windows) OPENSSL_CONF=NUL PATH="$prefix/bin:$PATH" build/tests/test-pkcs11-kem.exe ;;
 esac

@@ -82,4 +82,28 @@ class KemAdapterTest(unittest.TestCase):
         def timeout(command,**kwargs):calls.append(command);raise subprocess.TimeoutExpired(command,30)
         with self.assertRaises(subprocess.TimeoutExpired):KEM.recover('ML-KEM-768',b'p'*1206,b'c'*1088,'/openssl','/provider','/module','123456','9d',pin,timeout)
         self.assertEqual(pin,bytearray(6));self.assertEqual(len(calls),1)
+    def test_single_process_failure_reports_only_bounded_diagnostics(self):
+        result=subprocess.CompletedProcess([],1,stderr=(
+            b'PIN=654321; private diagnostic /secret/path\n'
+            b'PQ Mail single-session decryption failed at PIN input; no retry\n'
+            b'PQMAIL_ERROR 03000096 operation not supported for this keytype\n'
+            b'PQMAIL_KEM_STEP derive-set-peer\n'
+            b'PQMAIL_KEM_STEP secret 654321\n'
+            b'PQMAIL_PIN_CALLBACKS 0\n'
+            b'PQMAIL_PIN_CALLBACKS 0\n'
+            b'PQMAIL_ERROR 03000096 /secret/path\n'
+            b'error:03000096:lib:func:secret 654321\n'))
+        message=KEM.single_process_failure(result,'ECDH-P384')
+        self.assertIn('failed at PIN input; no retry',message)
+        self.assertIn('PQMAIL_ERROR 03000096 operation not supported for this keytype',message)
+        self.assertEqual(message.count('PQMAIL_PIN_CALLBACKS'),1)
+        self.assertIn('PQMAIL_KEM_STEP derive-set-peer',message)
+        self.assertEqual(message.count('PQMAIL_KEM_STEP'),1)
+        self.assertNotIn('654321',message);self.assertNotIn('/secret/path',message)
+        self.assertNotIn('error:',message)
+    def test_single_process_failure_rejects_unknown_or_injected_stage(self):
+        for raw in (None,'not bytes',b'PQ Mail single-session decryption failed at secret 654321; no retry\n',
+                    b'PQ Mail single-session decryption failed at recover /secret/path; no retry\n'):
+            message=KEM.single_process_failure(subprocess.CompletedProcess([],1,stderr=raw),'X25519')
+            self.assertEqual(message,'Single-process PKCS#11 X25519 failed; no retry')
 if __name__=='__main__':unittest.main()

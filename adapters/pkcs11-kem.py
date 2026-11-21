@@ -4,6 +4,7 @@ import base64
 import hmac
 import importlib.util
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -40,6 +41,7 @@ def read_request(stream):
 
 def export_public(executable,provider,module,serial,slot,algorithm,run=subprocess.run):
     check_config(executable,serial)
+    if _common.polyfill_mode() and slot!=selected_slot(algorithm):raise AdapterError('Wrong Level 3 polyfill slot')
     uri='pkcs11:serial='+serial+';id='+object_id(slot)+';type=public'
     with tempfile.TemporaryDirectory(prefix='hybrid-mail-kem-public-') as directory:
         folder=Path(directory);config=folder/'openssl.cnf';public=folder/'public.der'
@@ -65,16 +67,50 @@ def single_process_recover(helper,algorithm,public,data,provider,module,serial,s
         result=run([str(helper),algorithm,'pkcs11:serial='+serial+';id='+object_id(slot)+';type=',str(expected),str(incoming)],
                    input=bytes(pin)+b'\n',stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                    env=_common.child_environment(config,object_id(slot)),timeout=100,start_new_session=True)
-        if result.returncode:raise AdapterError('Single-process PKCS#11 '+algorithm+' failed; no retry'+_common.safe_openssl_error(result))
+        if result.returncode:raise AdapterError(single_process_failure(result,algorithm))
         if len(result.stdout)!=(48 if algorithm=='ECDH-P384' else 32):raise AdapterError('Invalid token shared secret length')
         return result.stdout
 
 
+def single_process_failure(result,algorithm):
+    """Expose fixed helper stages and public error codes, never raw stderr.
+
+    The previous OpenSSL-only parser discarded the helper's failure stage,
+    making failures before PIN input indistinguishable from private-operation
+    failures. A closed stage list also rejects injected paths or input data.
+    """
+    raw=getattr(result,'stderr',b'')
+    if not isinstance(raw,bytes):raw=b''
+    raw=raw[:32768]
+    stages=(b'arguments',b'input',b'PIN callback setup',b'providers',b'public key check',
+            b'PIN input',b'private key check',b'recover',b'output')
+    prefix=b'PQ Mail single-session decryption failed at '
+    suffix=b'; no retry'
+    steps=(b'key-type',b'context',b'ciphertext-length',b'decapsulate-init',b'decapsulate',
+           b'peer-decode',b'peer-check',b'derive-init',b'derive-set-peer',b'derive',b'secret-length')
+    stage='';details=[];callbacks=False;recovery_step=False
+    for line in raw.splitlines():
+        if line.startswith(prefix) and line.endswith(suffix):
+            value=line[len(prefix):-len(suffix)]
+            if value in stages and not stage:stage=' at '+value.decode('ascii')
+        elif len(details)<8 and re.fullmatch(rb'PQMAIL_ERROR [0-9A-F]{8,16} [A-Za-z0-9 _()-]{1,120}',line):
+            details.append(line.decode('ascii'))
+        elif not callbacks and re.fullmatch(rb'PQMAIL_PIN_CALLBACKS [0-9]{1,4}',line):
+            details.append(line.decode('ascii'));callbacks=True
+        elif not recovery_step and line.startswith(b'PQMAIL_KEM_STEP ') and line[16:] in steps:
+            details.append(line.decode('ascii'));recovery_step=True
+    return 'Single-process PKCS#11 '+algorithm+' failed'+stage+'; no retry'+('; '+'; '.join(details) if details else '')
+
+
 def recover(algorithm,public,data,executable,provider,module,serial,slot,pin,run=subprocess.run):
-    check_config(executable,serial)
-    if algorithm not in ('ML-KEM-768','ML-KEM-1024','ECDH-P256','ECDH-P384','X25519'):raise AdapterError('Unsupported private operation')
-    if not 6<=len(pin)<=8 or any(c<32 or c>126 for c in pin):raise AdapterError('Invalid PIN input format')
     try:
+        check_config(executable,serial)
+        if algorithm not in ('ML-KEM-768','ML-KEM-1024','ECDH-P256','ECDH-P384','X25519'):raise AdapterError('Unsupported private operation')
+        if not 6<=len(pin)<=8 or any(c<32 or c>126 for c in pin):raise AdapterError('Invalid PIN input format')
+        # Do not accept a direct caller's slot override for this closed layout.
+        # Its ML-KEM secret key is software; the device only performs X25519 and
+        # no-touch P-384 wrapping-key operations.
+        if _common.polyfill_mode() and slot!=selected_slot(algorithm):raise AdapterError('Wrong Level 3 polyfill slot')
         helper=Path(executable).with_name('pqmail-pkcs11-kem.exe' if os.name=='nt' else 'pqmail-pkcs11-kem')
         if helper.is_file():
             return single_process_recover(helper,algorithm,public,data,provider,module,serial,slot,pin,run)
@@ -105,6 +141,10 @@ def recover(algorithm,public,data,executable,provider,module,serial,slot,pin,run
 
 
 def selected_slot(algorithm):
+    if _common.polyfill_mode():
+        if os.environ.get('PQMAIL_POLYFILL_CERTIFICATION') is not None:raise AdapterError('Certification profile cannot decrypt')
+        if algorithm not in ('X25519','ECDH-P384'):raise AdapterError('Level 3 polyfill keeps ML-KEM decapsulation in software')
+        return '9d' if algorithm=='X25519' else '83'
     slot=os.environ.get('PKCS11_KEM_SLOT' if algorithm.startswith('ML-KEM-') else 'PKCS11_ECDH_SLOT','')
     if algorithm=='X25519':slot='85'
     if os.environ.get('PQMAIL_COMPATIBILITY_SLOT'):
@@ -121,8 +161,9 @@ def main():
         values=[os.environ.get(n,'') for n in ('OPENSSL_BIN','PKCS11_PROVIDER','PKCS11_MODULE','PKCS11_SERIAL')]
         if not all(values):raise AdapterError('Set OpenSSL, provider, module and token serial configuration')
         if sys.argv[1:] in (['--export-mlkem'],['--export-ecdh']):
-            algorithm='ML-KEM-768' if sys.argv[1]=='--export-mlkem' else 'ECDH-P256'
-            slot=os.environ.get('PKCS11_KEM_SLOT' if algorithm.startswith('ML-KEM-') else 'PKCS11_ECDH_SLOT','')
+            polyfill=_common.polyfill_mode()
+            algorithm='ML-KEM-768' if sys.argv[1]=='--export-mlkem' else 'ECDH-P384' if polyfill else 'ECDH-P256'
+            slot=selected_slot(algorithm) if polyfill else os.environ.get('PKCS11_KEM_SLOT' if algorithm.startswith('ML-KEM-') else 'PKCS11_ECDH_SLOT','')
             sys.stdout.buffer.write(export_public(*values,slot,algorithm));return 0
         if len(sys.argv)!=1 or os.environ.get('HYBRID_MAIL_PIN_STDIN')!='1':raise AdapterError('Use the app PIN dialog for token decryption')
         algorithm,public,data=read_request(sys.stdin.buffer)

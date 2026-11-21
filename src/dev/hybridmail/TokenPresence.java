@@ -12,15 +12,21 @@ public final class TokenPresence {
         while(true){int code=probe.check();if(code==0)return;if(code!=2)throw new IOException("Cannot check YubiKey presence. Check the PKCS#11 module and serial in YubiKey configuration.");if(!prompt.retry())throw new IOException("YubiKey connection cancelled");}
     }
     public static void require(String adapter)throws Exception{
+        require(adapter,DesktopState.activeTokenSerial(),java.util.Map.of());
+    }
+    /** A companion binds its own serial before a credential is activated in
+     * the catalog. Do not accidentally probe an unrelated global selection. */
+    static void require(String adapter,String serial,java.util.Map<String,String> overrides)throws Exception{
         String name=Path.of(adapter).getFileName().toString();if(!name.equals("pkcs11-mu.py")&&!name.equals("pkcs11-kem.py"))return;
         Path probe=Path.of(adapter).resolveSibling("pkcs11-presence.py");
         if(!java.nio.file.Files.isRegularFile(probe))throw new IOException("YubiKey presence-check helper is missing. Repair or reinstall the app; reconnecting the key will not fix this.");
         require(()->{
-            Process process=DesktopState.process(probe.toString()).redirectInput(ProcessBuilder.Redirect.from(new java.io.File(DesktopState.windows()?"NUL":"/dev/null"))).redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.DISCARD).start();
+            ProcessBuilder builder=DesktopState.process(probe.toString()).redirectInput(ProcessBuilder.Redirect.from(new java.io.File(DesktopState.windows()?"NUL":"/dev/null"))).redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.DISCARD);
+            builder.environment().putAll(overrides);builder.environment().put("PKCS11_SERIAL",serial);Process process=builder.start();
             try{if(!process.waitFor(15,TimeUnit.SECONDS))throw new IOException("YubiKey presence check timed out");return process.exitValue();}finally{if(process.isAlive())process.destroyForcibly();}
         },()->{
             if(GraphicsEnvironment.isHeadless())throw new IOException("Connect the configured YubiKey, then run the operation again");
-            boolean[] retry={false};Runnable show=()->{Object[] options={"Retry","Cancel"};retry[0]=JOptionPane.showOptionDialog(null,"This identity requires YubiKey serial "+DesktopState.activeTokenSerial()+".\nConnect that YubiKey, then choose Retry. Another key will not be used.\nNo PIN or private-key operation has been sent.","Connect your YubiKey",JOptionPane.DEFAULT_OPTION,JOptionPane.INFORMATION_MESSAGE,null,options,options[0])==0;};
+            boolean[] retry={false};Runnable show=()->{Object[] options={"Retry","Cancel"};retry[0]=JOptionPane.showOptionDialog(null,"This identity requires YubiKey serial "+serial+".\nConnect that YubiKey, then choose Retry. Another key will not be used.\nNo PIN or private-key operation has been sent.","Connect your YubiKey",JOptionPane.DEFAULT_OPTION,JOptionPane.INFORMATION_MESSAGE,null,options,options[0])==0;};
             if(SwingUtilities.isEventDispatchThread())show.run();else SwingUtilities.invokeAndWait(show);return retry[0];
         });
     }
